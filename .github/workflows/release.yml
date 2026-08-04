@@ -42,9 +42,9 @@ jobs:
           for arch in amd64 arm64; do
             CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
               go build -trimpath -ldflags "-s -w -X main.version=${version}" \
-              -o "dist/ozymandis" ./cmd/ozymandis
-            tar -czf "dist/ozymandis_${num}_linux_${arch}.tar.gz" -C dist ozymandis
-            rm dist/ozymandis
+              -o "dist/yacht" ./cmd/yacht
+            tar -czf "dist/yacht_${num}_linux_${arch}.tar.gz" -C dist yacht
+            rm dist/yacht
           done
           cd dist && sha256sum ./*.tar.gz | sed 's| \./| |' > checksums.txt
           cat checksums.txt
