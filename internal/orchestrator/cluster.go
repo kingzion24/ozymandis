@@ -13,7 +13,7 @@ type NodeInfo struct {
 	Name    string
 	Ready   bool
 	Roles   []string
-	Pool    string // scheduling pool, from the yacht/pool label
+	Pool    string // scheduling pool, from the ozymandis/pool label
 	Address string
 
 	Version      string // kubelet version

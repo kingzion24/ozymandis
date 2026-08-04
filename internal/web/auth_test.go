@@ -22,17 +22,17 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/codeblocktz/yacht/internal/account"
-	"github.com/codeblocktz/yacht/internal/app"
-	"github.com/codeblocktz/yacht/internal/identity"
-	"github.com/codeblocktz/yacht/internal/notify"
-	"github.com/codeblocktz/yacht/internal/orchestrator"
-	"github.com/codeblocktz/yacht/internal/store"
+	"github.com/kingzion24/ozymandis/internal/account"
+	"github.com/kingzion24/ozymandis/internal/app"
+	"github.com/kingzion24/ozymandis/internal/identity"
+	"github.com/kingzion24/ozymandis/internal/notify"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/store"
 )
 
 func TestSessionCookieFlags(t *testing.T) {
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "http://yacht.test/", nil)
+	r := httptest.NewRequest(http.MethodGet, "http://ozymandis.test/", nil)
 
 	setSessionCookie(w, r, "token-value", time.Hour)
 
@@ -63,7 +63,7 @@ func TestSessionCookieFlags(t *testing.T) {
 
 func TestSessionCookieIsSecureOverTLS(t *testing.T) {
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "https://yacht.test/", nil)
+	r := httptest.NewRequest(http.MethodGet, "https://ozymandis.test/", nil)
 	r.TLS = &tls.ConnectionState{}
 
 	setSessionCookie(w, r, "token-value", time.Hour)
@@ -77,7 +77,7 @@ func TestSessionCookieIsSecureOverTLS(t *testing.T) {
 // the header, every proxied install loses the Secure flag.
 func TestSessionCookieHonoursForwardedProto(t *testing.T) {
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "http://yacht.test/", nil)
+	r := httptest.NewRequest(http.MethodGet, "http://ozymandis.test/", nil)
 	r.Header.Set("X-Forwarded-Proto", "https")
 
 	setSessionCookie(w, r, "token-value", time.Hour)
@@ -89,7 +89,7 @@ func TestSessionCookieHonoursForwardedProto(t *testing.T) {
 
 func TestClearSessionCookieExpiresIt(t *testing.T) {
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "http://yacht.test/", nil)
+	r := httptest.NewRequest(http.MethodGet, "http://ozymandis.test/", nil)
 
 	clearSessionCookie(w, r)
 
@@ -104,7 +104,7 @@ func TestClearSessionCookieExpiresIt(t *testing.T) {
 // stays signed in after clicking sign out.
 func TestClearSessionCookieKeepsTheOtherFlags(t *testing.T) {
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "http://yacht.test/", nil)
+	r := httptest.NewRequest(http.MethodGet, "http://ozymandis.test/", nil)
 	r.Header.Set("X-Forwarded-Proto", "https")
 
 	clearSessionCookie(w, r)
@@ -291,7 +291,7 @@ func signInServer(t *testing.T, accounts Accounts, mailer notify.Mailer) http.Ha
 	return testServer(t, Options{
 		Accounts:        accounts,
 		Mailer:          mailer,
-		BaseURL:         "https://yacht.test",
+		BaseURL:         "https://ozymandis.test",
 		BootstrapTeamID: "web-signin",
 		// Nobody reaching the sign-in page has a session, so the provider that
 		// would resolve one refuses everything.
@@ -442,7 +442,7 @@ func TestSignInWithNoMailTransportStillSucceeds(t *testing.T) {
 	var logged bytes.Buffer
 	h := testServer(t, Options{
 		Accounts:        &fakeAccounts{},
-		BaseURL:         "https://yacht.test",
+		BaseURL:         "https://ozymandis.test",
 		BootstrapTeamID: "web-signin",
 		Logger:          slog.New(slog.NewTextHandler(&logged, nil)),
 	})
@@ -454,7 +454,7 @@ func TestSignInWithNoMailTransportStillSucceeds(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "Check your mail") {
 		t.Fatalf("body = %q, want the check-your-mail page", rec.Body.String())
 	}
-	if !strings.Contains(logged.String(), "https://yacht.test/auth/raw-token-for-known@example.test") {
+	if !strings.Contains(logged.String(), "https://ozymandis.test/auth/raw-token-for-known@example.test") {
 		t.Fatalf("the sign-in link never reached the log, so there is no way in:\n%s",
 			logged.String())
 	}
@@ -468,7 +468,7 @@ func TestSignInSurvivesAMailFailure(t *testing.T) {
 	h := testServer(t, Options{
 		Accounts:        &fakeAccounts{},
 		Mailer:          &fakeMailer{err: errors.New("relay refused")},
-		BaseURL:         "https://yacht.test",
+		BaseURL:         "https://ozymandis.test",
 		BootstrapTeamID: "web-signin",
 		Logger:          slog.New(slog.NewTextHandler(&logged, nil)),
 	})
@@ -559,7 +559,7 @@ func TestSignInIsRateLimited(t *testing.T) {
 
 // Magic links are built from the configured base URL and never from the Host
 // header: a link built from a header is a link an attacker can point at their
-// own server and have Yacht mail to a real person.
+// own server and have Ozymandis mail to a real person.
 func TestAccountsRequireAConfiguredBaseURL(t *testing.T) {
 	_, err := New(Options{
 		Orchestrator:    newFailingOrchestrator(),
@@ -580,7 +580,7 @@ func TestAccountsRequireABootstrapTeam(t *testing.T) {
 		Orchestrator: newFailingOrchestrator(),
 		Identity:     identity.NewSingleOwner(identity.Owner{ID: "x"}),
 		Accounts:     &fakeAccounts{},
-		BaseURL:      "https://yacht.test",
+		BaseURL:      "https://ozymandis.test",
 	})
 	if err == nil {
 		t.Fatal("expected accounts without a bootstrap team to be refused")
@@ -606,7 +606,7 @@ type liveHarness struct {
 }
 
 // newLiveHarness wires the engine against the test database, with teamID
-// standing in for YACHT_OWNER_ID.
+// standing in for OZYMANDIS_OWNER_ID.
 //
 // Addresses end in @web.test and team ids begin with web-, because `go test
 // ./...` runs the account, app and store packages against this same database at
@@ -620,9 +620,9 @@ func newLiveHarness(t *testing.T, teamID string) *liveHarness {
 // owner — the one person a fresh install will admit before anybody exists.
 func newLiveHarnessOwnedBy(t *testing.T, teamID, ownerEmail string) *liveHarness {
 	t.Helper()
-	dsn := os.Getenv("YACHT_TEST_DATABASE_URL")
+	dsn := os.Getenv("OZYMANDIS_TEST_DATABASE_URL")
 	if dsn == "" {
-		t.Skip("set YACHT_TEST_DATABASE_URL to run the sign-in callback tests")
+		t.Skip("set OZYMANDIS_TEST_DATABASE_URL to run the sign-in callback tests")
 	}
 	ctx := context.Background()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -667,7 +667,7 @@ func newLiveHarnessOwnedBy(t *testing.T, teamID, ownerEmail string) *liveHarness
 		// the cookie the dashboard resolves an owner from.
 		Identity:          accounts.Provider(SessionCookie),
 		Mailer:            mailer,
-		BaseURL:           "https://yacht.test",
+		BaseURL:           "https://ozymandis.test",
 		BootstrapTeamID:   teamID,
 		BootstrapTeamName: "Local",
 		BootstrapEmail:    ownerEmail,
@@ -768,7 +768,7 @@ func (h *liveHarness) owners(t *testing.T, teamID string) int {
 // linkIn pulls the sign-in URL out of the mail body.
 func linkIn(t *testing.T, body string) string {
 	t.Helper()
-	const prefix = "https://yacht.test/auth/"
+	const prefix = "https://ozymandis.test/auth/"
 	i := strings.Index(body, prefix)
 	if i < 0 {
 		t.Fatalf("no sign-in link in the mail:\n%s", body)
@@ -848,7 +848,7 @@ func TestCallbackSetsTheSessionCookie(t *testing.T) {
 	if err != nil || !existed {
 		t.Fatalf("IssueMagicLink: %v (existed=%v)", err, existed)
 	}
-	plain := sessionCookie(h.follow(t, "http://yacht.test/auth/"+raw))
+	plain := sessionCookie(h.follow(t, "http://ozymandis.test/auth/"+raw))
 	if plain == nil {
 		t.Fatal("the callback set no session cookie over plain HTTP")
 	}
@@ -900,7 +900,7 @@ func TestExpiredTokenIsRejected(t *testing.T) {
 		t.Fatalf("IssueMagicLink: %v (existed=%v)", err, existed)
 	}
 
-	rec := h.follow(t, "https://yacht.test/auth/"+raw)
+	rec := h.follow(t, "https://ozymandis.test/auth/"+raw)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("following an expired link = %d, want 401", rec.Code)
 	}
@@ -911,7 +911,7 @@ func TestExpiredTokenIsRejected(t *testing.T) {
 
 // The spec's third lockout guard, dropped between spec and plan in sub-project
 // B. Without it an existing single-owner install switches accounts on and the
-// apps already deployed under YACHT_OWNER_ID belong to a team nobody can sign
+// apps already deployed under OZYMANDIS_OWNER_ID belong to a team nobody can sign
 // in to.
 func TestFirstSignInInheritsTheConfiguredOwner(t *testing.T) {
 	h := newLiveHarness(t, "web-inherit")
@@ -1165,7 +1165,7 @@ func TestUnauthenticatedRequestRedirectsToSignIn(t *testing.T) {
 	}
 
 	// And it must not carry anything about what was behind it.
-	if body := rec.Body.String(); strings.Contains(body, "yacht-") {
+	if body := rec.Body.String(); strings.Contains(body, "ozymandis-") {
 		t.Errorf("the redirect body mentions internal names: %s", body)
 	}
 }
@@ -1213,7 +1213,7 @@ func TestSettingsShowsAccountsPosture(t *testing.T) {
 // it was written and is not any more. An operator reading "this build serves
 // no sign-in page" while looking at one has no reason to trust the rest.
 func TestNoStaleNoSignInPageWarning(t *testing.T) {
-	src, err := os.ReadFile("../../cmd/yacht/main.go")
+	src, err := os.ReadFile("../../cmd/ozymandis/main.go")
 	if err != nil {
 		t.Fatalf("read main.go: %v", err)
 	}
@@ -1274,7 +1274,7 @@ func deniedGET(t *testing.T, rec *httptest.ResponseRecorder, mustNotContain stri
 // left nobody able to sign in at all: no user, so no link, so no user. Every
 // existing test missed it because they all seed a person first.
 //
-// YACHT_OWNER_EMAIL names the one address allowed to create itself.
+// OZYMANDIS_OWNER_EMAIL names the one address allowed to create itself.
 func TestFreshInstallCanBeEnteredByItsOwner(t *testing.T) {
 	h := newLiveHarnessOwnedBy(t, "web-fresh", "founder-fresh@web.test")
 

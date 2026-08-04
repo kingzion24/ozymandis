@@ -13,7 +13,7 @@ import (
 
 func TestLayoutProvidesSkipNavigationAndDrawerSemantics(t *testing.T) {
 	html := renderToString(t, Layout(
-		Slots{Title: "Yacht", BrandName: "Yacht", BrandHref: "/"},
+		Slots{Title: "Ozymandis", BrandName: "Ozymandis", BrandHref: "/"},
 		templ.ComponentFunc(func(context.Context, io.Writer) error { return nil }),
 	))
 

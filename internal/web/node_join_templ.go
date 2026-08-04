@@ -101,7 +101,7 @@ func AddNode(d AddNodeData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "<div class=\"panel mb-5\"><div class=\"panel-header\"><span class=\"panel-title\">Set the join settings</span></div><div class=\"panel-body\"><p class=\"mb-4 text-[12.5px] text-muted-foreground\">Yacht needs the address agents connect back to and this cluster's join token. On a K3s server the token is in <code class=\"mono\">/var/lib/rancher/k3s/server/node-token</code>. It is sealed before it is stored.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "<div class=\"panel mb-5\"><div class=\"panel-header\"><span class=\"panel-title\">Set the join settings</span></div><div class=\"panel-body\"><p class=\"mb-4 text-[12.5px] text-muted-foreground\">Ozymandis needs the address agents connect back to and this cluster's join token. On a K3s server the token is in <code class=\"mono\">/var/lib/rancher/k3s/server/node-token</code>. It is sealed before it is stored.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

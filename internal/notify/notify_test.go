@@ -14,8 +14,8 @@ func TestLogMailerWritesTheMessage(t *testing.T) {
 
 	err := m.Send(context.Background(), Message{
 		To:       "someone@example.test",
-		Subject:  "Sign in to Yacht",
-		TextBody: "https://yacht.example.test/auth/abc123",
+		Subject:  "Sign in to Ozymandis",
+		TextBody: "https://ozymandis.example.test/auth/abc123",
 	})
 	if err != nil {
 		t.Fatalf("Send: %v", err)
@@ -25,8 +25,8 @@ func TestLogMailerWritesTheMessage(t *testing.T) {
 	// The body has to be logged in full. This is the break-glass path when no
 	// mail transport is configured — a truncated link is no way back in.
 	for _, want := range []string{
-		"someone@example.test", "Sign in to Yacht",
-		"https://yacht.example.test/auth/abc123",
+		"someone@example.test", "Sign in to Ozymandis",
+		"https://ozymandis.example.test/auth/abc123",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("log output missing %q\ngot: %s", want, out)

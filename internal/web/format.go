@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/codeblocktz/yacht/internal/account"
-	"github.com/codeblocktz/yacht/internal/app"
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/account"
+	"github.com/kingzion24/ozymandis/internal/app"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 // Presentation helpers.

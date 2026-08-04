@@ -8,7 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 // The three steps of a build, named so their logs can be told apart.
@@ -21,10 +21,10 @@ const (
 // commitMarker prefixes the one line of the clone's output that is data rather
 // than log. Reading it out of the stream avoids a second call into the cluster
 // to ask what was checked out.
-const commitMarker = "yacht-commit:"
+const commitMarker = "ozymandis-commit:"
 
 // uidMarker prefixes the resolved numeric uid, the same way.
-const uidMarker = "yacht-uid:"
+const uidMarker = "ozymandis-uid:"
 
 // dockerfileMarker is written by the Dockerfile step when it has pushed an
 // image, and read by the buildpack step as its instruction to do nothing.
@@ -120,20 +120,20 @@ fi`
 // Three init containers rather than one container doing everything. Each step
 // gets its own image — clone, BuildKit, buildpacks — so none of them has to be
 // a custom image this project builds and publishes, which would make running
-// Yacht depend on Yacht having somewhere to push.
+// Ozymandis depend on Ozymandis having somewhere to push.
 func buildJob(name string, req orchestrator.BuildRequest, pullSecret string) *batchv1.Job {
 	// Never retried. A build that failed will fail the same way, and a second
 	// attempt would double the log, double the wait, and end where it started.
 	// Kubernetes' own default is six.
 	var backoff int32
-	// Cleaned up by the caller, but this is the backstop for a Yacht that
+	// Cleaned up by the caller, but this is the backstop for a Ozymandis that
 	// stopped between creating the Job and deleting it.
 	ttl := int32(3600)
 
 	labels := map[string]string{
 		orchestrator.LabelManagedBy: orchestrator.ManagedByValue,
 		orchestrator.LabelOwner:     sanitiseLabel(string(req.Owner)),
-		"yacht/build":               "true",
+		"ozymandis/build":               "true",
 	}
 
 	return &batchv1.Job{

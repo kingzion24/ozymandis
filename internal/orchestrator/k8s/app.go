@@ -19,7 +19,7 @@ import (
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 // servicePort is the stable port the in-cluster Service listens on, regardless
@@ -189,6 +189,7 @@ func (o *Orchestrator) container(
 		WithName(spec.Name).
 		WithImage(spec.Image).
 		WithImagePullPolicy(corev1.PullIfNotPresent).
+		WithCommand(spec.Command...).
 		WithSecurityContext(restrictedContainerSecurityContext(spec.WritableRootFilesystem)).
 		WithVolumeMounts(append(
 			[]*corev1ac.VolumeMountApplyConfiguration{
@@ -379,6 +380,11 @@ func specHash(spec orchestrator.AppSpec) string {
 	h := sha256.New()
 	fmt.Fprintf(h, "image=%s\n", spec.Image)
 	fmt.Fprintf(h, "port=%d\n", spec.Port)
+	// Each argument length-prefixed, so that ["a b"] and ["a", "b"] do not hash
+	// alike — they are different command lines and one of them does not run.
+	for _, arg := range spec.Command {
+		fmt.Fprintf(h, "cmd=%d:%s\n", len(arg), arg)
+	}
 	fmt.Fprintf(h, "cpu=%s/%s\n", spec.CPURequest, spec.CPULimit)
 	fmt.Fprintf(h, "mem=%s/%s\n", spec.MemoryRequest, spec.MemoryLimit)
 	fmt.Fprintf(h, "rootfs-writable=%s\n", strconv.FormatBool(spec.WritableRootFilesystem))

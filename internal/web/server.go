@@ -16,11 +16,11 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
-	"github.com/codeblocktz/yacht/internal/account"
-	"github.com/codeblocktz/yacht/internal/app"
-	"github.com/codeblocktz/yacht/internal/identity"
-	"github.com/codeblocktz/yacht/internal/notify"
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/account"
+	"github.com/kingzion24/ozymandis/internal/app"
+	"github.com/kingzion24/ozymandis/internal/identity"
+	"github.com/kingzion24/ozymandis/internal/notify"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 // Apps is the workload lifecycle this server drives.
@@ -56,6 +56,7 @@ type Apps interface {
 	// SetHealth points the readiness probe at a path, and optionally lets the
 	// same path restart the container.
 	SetHealth(ctx context.Context, ownerID, name, healthPath string, liveness bool) error
+	SetCommand(ctx context.Context, ownerID, name, command string) error
 
 	// Links are the dependencies between apps, recorded when a variable naming
 	// another app is written — the only moment a sealed value is readable.
@@ -221,7 +222,7 @@ type Options struct {
 
 	// BaseURL is the public URL links are built from. Required with Accounts,
 	// and deliberately not derived from the request: a link built from the Host
-	// header is one an attacker can point at their own server and have Yacht
+	// header is one an attacker can point at their own server and have Ozymandis
 	// mail to a real person.
 	BaseURL string
 
@@ -247,7 +248,7 @@ type Options struct {
 	BootstrapEmail string
 
 	// BootstrapTeamID and BootstrapTeamName are the install's configured owner
-	// — YACHT_OWNER_ID and YACHT_OWNER_NAME. The first person to sign in
+	// — OZYMANDIS_OWNER_ID and OZYMANDIS_OWNER_NAME. The first person to sign in
 	// inherits that team, so the apps an install already deployed under it stay
 	// reachable once accounts are switched on. Required with Accounts.
 	BootstrapTeamID   string
@@ -568,6 +569,7 @@ func (s *Server) Handler() http.Handler {
 			// credential the app runs as, and setting one is not undone by a
 			// redeploy.
 			r.Post("/apps/{name}/health", s.healthSet)
+			r.Post("/apps/{name}/command", s.commandSet)
 			r.Post("/apps/{name}/variables", s.variableSet)
 			r.Post("/apps/{name}/variables/{key}/delete", s.variableDelete)
 
@@ -815,6 +817,7 @@ func (s *Server) appCreate(w http.ResponseWriter, r *http.Request) {
 		Port:       r.FormValue("port"),
 		Replicas:   r.FormValue("replicas"),
 		Env:        r.FormValue("env"),
+		Command:    strings.TrimSpace(r.FormValue("command")),
 		RepoURL:    strings.TrimSpace(r.FormValue("repo_url")),
 		RepoBranch: strings.TrimSpace(r.FormValue("repo_branch")),
 		RepoSubdir: strings.TrimSpace(r.FormValue("repo_subdir")),
@@ -843,6 +846,7 @@ func (s *Server) appCreate(w http.ResponseWriter, r *http.Request) {
 		Port:     int32(port),
 		Replicas: int32(replicas),
 		Env:      env,
+		Command:  form.Command,
 		Repo: app.Repo{
 			URL: form.RepoURL, Branch: form.RepoBranch, Subdir: form.RepoSubdir,
 		},

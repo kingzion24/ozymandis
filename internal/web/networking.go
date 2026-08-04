@@ -9,10 +9,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/codeblocktz/yacht/internal/app"
-	"github.com/codeblocktz/yacht/internal/cluster"
-	"github.com/codeblocktz/yacht/internal/domain"
-	"github.com/codeblocktz/yacht/internal/identity"
+	"github.com/kingzion24/ozymandis/internal/app"
+	"github.com/kingzion24/ozymandis/internal/cluster"
+	"github.com/kingzion24/ozymandis/internal/domain"
+	"github.com/kingzion24/ozymandis/internal/identity"
 )
 
 // Nets is the dashboard's view of an app's routing.

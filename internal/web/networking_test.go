@@ -10,11 +10,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/codeblocktz/yacht/internal/account"
-	"github.com/codeblocktz/yacht/internal/app"
-	"github.com/codeblocktz/yacht/internal/domain"
-	"github.com/codeblocktz/yacht/internal/identity"
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/account"
+	"github.com/kingzion24/ozymandis/internal/app"
+	"github.com/kingzion24/ozymandis/internal/domain"
+	"github.com/kingzion24/ozymandis/internal/identity"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 type fakeNets struct {
@@ -57,7 +57,7 @@ func netServer(t *testing.T, n Nets) http.Handler {
 		Identity:        identity.NewSingleOwner(identity.Owner{ID: team}),
 		Accounts:        &roledAccounts{fakeAccounts: &fakeAccounts{}, team: team, role: account.RoleAdmin},
 		Mailer:          &fakeMailer{},
-		BaseURL:         "https://yacht.test",
+		BaseURL:         "https://ozymandis.test",
 		BootstrapTeamID: team,
 		Nets:            n,
 		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -75,9 +75,9 @@ func netServer(t *testing.T, n Nets) http.Handler {
 // the check that a route existing is not the same as a way in.
 func TestTheSettingsTabOffersDomainControls(t *testing.T) {
 	h := netServer(t, &fakeNets{net: app.Networking{
-		Managed: "web.apps.test", Target: "edge.yacht.test",
+		Managed: "web.apps.test", Target: "edge.ozymandis.test",
 		HTTPSOnly: true, CNAMEOnly: true,
-		Custom: []domain.Custom{{ID: uuid.New(), Host: "shop.example.com", Target: "edge.yacht.test"}},
+		Custom: []domain.Custom{{ID: uuid.New(), Host: "shop.example.com", Target: "edge.ozymandis.test"}},
 	}})
 
 	body := do(h, signedIn(http.MethodGet, "/apps/web/settings")).Body.String()
@@ -89,7 +89,7 @@ func TestTheSettingsTabOffersDomainControls(t *testing.T) {
 		`action="/apps/web/networking"`, // the toggles
 		"web.apps.test",                 // the platform hostname
 		"shop.example.com",              // the claim itself
-		"edge.yacht.test",               // what to point it at
+		"edge.ozymandis.test",               // what to point it at
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the Settings tab does not offer %q", want)
@@ -116,7 +116,7 @@ func TestWithNoTargetTheDomainFormIsNotOffered(t *testing.T) {
 func TestARefusedDomainStillShowsThePanel(t *testing.T) {
 	h := netServer(t, &fakeNets{
 		err: domain.ErrHostTaken,
-		net: app.Networking{Managed: "web.apps.test", Target: "edge.yacht.test"},
+		net: app.Networking{Managed: "web.apps.test", Target: "edge.ozymandis.test"},
 	})
 
 	rec := do(h, signedInForm(http.MethodPost, "/apps/web/domains", "host=taken.example.com"))

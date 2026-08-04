@@ -74,7 +74,7 @@ func RegistryPage(d RegistryData) templ.Component {
 			}
 		}
 		if !d.HasKey {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "   <div class=\"callout callout-err mb-5\"><div class=\"min-w-0\"><div class=\"font-medium\">No encryption key is configured</div><p class=\"mt-0.5 text-muted-foreground\">A registry password is sealed with <code class=\"mono\">YACHT_SECRET_KEY</code> before it is stored. Without one it would sit readable in the database, so it is refused rather than kept that way.</p></div></div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "   <div class=\"callout callout-err mb-5\"><div class=\"min-w-0\"><div class=\"font-medium\">No encryption key is configured</div><p class=\"mt-0.5 text-muted-foreground\">A registry password is sealed with <code class=\"mono\">OZYMANDIS_SECRET_KEY</code> before it is stored. Without one it would sit readable in the database, so it is refused rather than kept that way.</p></div></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -202,7 +202,7 @@ func RegistryPage(d RegistryData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "> <span class=\"min-w-0\"><span class=\"block font-medium\">This registry is served over plain HTTP</span> <span class=\"block text-[12.5px] text-muted-foreground\">Normal for a registry on an internal network. Yacht can only act on half of it: builds will push over HTTP, but the cluster's container runtime has to be configured to pull that way too, and that is node configuration Yacht does not touch. Without it the build succeeds and the deploy fails to pull.</span></span></label><div class=\"flex items-center gap-2\"><button class=\"btn btn-primary\" type=\"submit\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "> <span class=\"min-w-0\"><span class=\"block font-medium\">This registry is served over plain HTTP</span> <span class=\"block text-[12.5px] text-muted-foreground\">Normal for a registry on an internal network. Ozymandis can only act on half of it: builds will push over HTTP, but the cluster's container runtime has to be configured to pull that way too, and that is node configuration Ozymandis does not touch. Without it the build succeeds and the deploy fails to pull.</span></span></label><div class=\"flex items-center gap-2\"><button class=\"btn btn-primary\" type=\"submit\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

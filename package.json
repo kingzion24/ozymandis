@@ -1,9 +1,9 @@
 {
-  "name": "yacht-assets",
+  "name": "ozymandis-assets",
   "private": true,
-  "description": "Authoring-time tooling for the dashboard's TypeScript. The built output is committed, so building Yacht and running it need neither Node nor this file.",
+  "description": "Authoring-time tooling for the dashboard's TypeScript. The built output is committed, so building Ozymandis and running it need neither Node nor this file.",
   "scripts": {
-    "build": "esbuild assets/ts/charts.ts --bundle --format=iife --global-name=YachtCharts --minify --target=es2020 --outfile=internal/web/assets/js/charts.js",
+    "build": "esbuild assets/ts/charts.ts --bundle --format=iife --global-name=OzymandisCharts --minify --target=es2020 --outfile=internal/web/assets/js/charts.js",
     "check": "tsc --noEmit"
   },
   "devDependencies": {

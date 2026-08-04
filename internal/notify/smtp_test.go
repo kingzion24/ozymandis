@@ -4,11 +4,11 @@ import "testing"
 
 func TestNewSMTPRejectsIncompleteConfig(t *testing.T) {
 	cases := map[string]SMTPConfig{
-		"no address": {From: "yacht@example.test"},
+		"no address": {From: "ozymandis@example.test"},
 		"no from":    {Addr: "smtp.example.test:587"},
-		"host only":  {Addr: "smtp.example.test", From: "yacht@example.test"},
+		"host only":  {Addr: "smtp.example.test", From: "ozymandis@example.test"},
 		"password only": {
-			Addr: "smtp.example.test:587", From: "yacht@example.test",
+			Addr: "smtp.example.test:587", From: "ozymandis@example.test",
 			Password: "secret",
 		},
 	}
@@ -24,9 +24,9 @@ func TestNewSMTPRejectsIncompleteConfig(t *testing.T) {
 
 func TestNewSMTPAcceptsCompleteConfig(t *testing.T) {
 	for name, cfg := range map[string]SMTPConfig{
-		"anonymous": {Addr: "smtp.example.test:587", From: "yacht@example.test"},
+		"anonymous": {Addr: "smtp.example.test:587", From: "ozymandis@example.test"},
 		"authenticated": {
-			Addr: "smtp.example.test:587", From: "yacht@example.test",
+			Addr: "smtp.example.test:587", From: "ozymandis@example.test",
 			Username: "user", Password: "secret",
 		},
 	} {

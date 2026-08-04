@@ -1,4 +1,4 @@
-// Package orchestrator defines the contract between Yacht's control plane and
+// Package orchestrator defines the contract between Ozymandis's control plane and
 // whatever actually runs workloads.
 //
 // SEAM 1 of 4. This interface is the primary extension point of the engine.
@@ -158,6 +158,22 @@ type AppSpec struct {
 	Image    string
 	Replicas int32
 
+	// Command replaces the image's entrypoint and its arguments together.
+	//
+	// One field rather than the entrypoint/cmd pair a container image carries,
+	// because that split only means something to whoever wrote the Dockerfile.
+	// Once a caller is replacing the command line at all it is replacing the
+	// whole of it, and Kubernetes agrees: a container that sets command and
+	// leaves args empty drops the image's CMD rather than appending it.
+	//
+	// This is what lets one image run as several workloads — a web process and
+	// the queue consumer that shares its code, deployed separately and scaled
+	// separately. Empty runs whatever the image already says to.
+	//
+	// Already argv: no shell runs between this and the process, so the caller
+	// has done the splitting and nothing here expands a variable or a glob.
+	Command []string
+
 	// Port the container listens on. Zero means the workload takes no traffic.
 	Port int32
 
@@ -296,6 +312,12 @@ func (s AppSpec) Validate() error {
 	}
 	if s.Port < 0 || s.Port > 65535 {
 		return fmt.Errorf("app spec: port must be within 0-65535, got %d", s.Port)
+	}
+	// Kubernetes accepts an empty first element and the kubelet then fails the
+	// container with a message about an executable named "", which reads as a
+	// platform fault rather than as the argument nobody filled in.
+	if len(s.Command) > 0 && s.Command[0] == "" {
+		return errors.New("app spec: command must not start with an empty argument")
 	}
 	if len(s.Hosts) > 0 && s.Port == 0 {
 		return errors.New("app spec: hosts require a port to route to")
@@ -526,7 +548,7 @@ var ErrNotStarted = errors.New("orchestrator: the container has not started")
 // PullSecretName is the Secret an app's namespace holds its pull credential
 // in. Named here rather than in the Kubernetes layer because the app service
 // decides when to supply one.
-const PullSecretName = "yacht-registry"
+const PullSecretName = "ozymandis-registry"
 
 // BuildRequest is one build of a repository into an image.
 type BuildRequest struct {
@@ -658,17 +680,17 @@ type HTTPLogLine struct {
 // ErrNotSupported means this cluster cannot be asked to do something.
 //
 // A configuration answer rather than a failure: an ingress controller somebody
-// else installed is not broken, it is simply not Yacht's to reconfigure.
+// else installed is not broken, it is simply not Ozymandis's to reconfigure.
 var ErrNotSupported = errors.New("orchestrator: not supported on this cluster")
 
 type HTTPLogger interface {
 	HTTPLogs(ctx context.Context, opts HTTPLogOptions) (HTTPLogs, error)
 
 	// HTTPLogHint is the configuration that switches the access log on, for
-	// the page to show when Yacht cannot apply it.
+	// the page to show when Ozymandis cannot apply it.
 	HTTPLogHint() string
 
-	// EnableHTTPLogs applies it, where this cluster's controller is one Yacht
+	// EnableHTTPLogs applies it, where this cluster's controller is one Ozymandis
 	// can reconfigure. An action somebody takes rather than something done on
 	// their behalf: it restarts a controller every workload routes through.
 	EnableHTTPLogs(ctx context.Context) error

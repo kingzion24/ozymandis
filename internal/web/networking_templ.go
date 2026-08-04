@@ -8,7 +8,7 @@ package web
 import "github.com/a-h/templ"
 import templruntime "github.com/a-h/templ/runtime"
 
-import "github.com/codeblocktz/yacht/internal/app"
+import "github.com/kingzion24/ozymandis/internal/app"
 
 // NetworkingData is the app's routing panel.
 type NetworkingData struct {
@@ -364,7 +364,7 @@ func routingOptions(d NetworkingData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 38, "rather than publishing this cluster's node addresses as A records. Yacht does not run ExternalDNS; if none is installed this changes nothing.</span></span></label><div><button class=\"btn btn-primary\" type=\"submit\">Save</button></div></form></div></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 38, "rather than publishing this cluster's node addresses as A records. Ozymandis does not run ExternalDNS; if none is installed this changes nothing.</span></span></label><div><button class=\"btn btn-primary\" type=\"submit\">Save</button></div></form></div></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -444,7 +444,7 @@ func PlatformDNS(d PlatformDNSData) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 43, "\" placeholder=\"extdns-\"><p class=\"mt-1 text-[12.5px] text-muted-foreground\">Keeps the ownership record off the name it owns, which is what lets an apex domain work at all. It must match <code class=\"mono\">--txt-prefix</code> on your ExternalDNS controller.</p><p class=\"mt-1 text-[12.5px] text-muted-foreground\">Recorded here, not applied. Yacht does not deploy that controller and cannot set a flag on it — this is so the two can be kept in step, and so the value is written down somewhere other than a shell history.</p></div><div><button class=\"btn btn-primary\" type=\"submit\">Save</button></div></form></div></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 43, "\" placeholder=\"extdns-\"><p class=\"mt-1 text-[12.5px] text-muted-foreground\">Keeps the ownership record off the name it owns, which is what lets an apex domain work at all. It must match <code class=\"mono\">--txt-prefix</code> on your ExternalDNS controller.</p><p class=\"mt-1 text-[12.5px] text-muted-foreground\">Recorded here, not applied. Ozymandis does not deploy that controller and cannot set a flag on it — this is so the two can be kept in step, and so the value is written down somewhere other than a shell history.</p></div><div><button class=\"btn btn-primary\" type=\"submit\">Save</button></div></form></div></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

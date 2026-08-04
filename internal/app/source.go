@@ -15,7 +15,7 @@ import (
 type Source string
 
 const (
-	// SourceImage is a container image the person chose. Yacht knows nothing
+	// SourceImage is a container image the person chose. Ozymandis knows nothing
 	// about what is inside it, so it configures nothing on its behalf.
 	SourceImage Source = "image"
 
@@ -23,12 +23,12 @@ const (
 	// app row: the template page creates each app with that app's own source.
 	SourceTemplate Source = "template"
 
-	// SourceGit is a repository Yacht builds into an image and then deploys.
+	// SourceGit is a repository Ozymandis builds into an image and then deploys.
 	// The image on the app row is what the last build produced, so it is set
 	// by the build rather than chosen.
 	SourceGit Source = "git"
 
-	// SourcePostgres is a Postgres database. Yacht knows what the image is, so
+	// SourcePostgres is a Postgres database. Ozymandis knows what the image is, so
 	// it can mount the data directory, run as the right user, and generate the
 	// credentials — none of which a person should have to look up.
 	SourcePostgres Source = "postgres"
@@ -143,8 +143,8 @@ func BlueprintsFor(c Capabilities) []Blueprint {
 				SizeBytes: 1 << 30,
 			},
 			Env: map[string]string{
-				"POSTGRES_USER": "yacht",
-				"POSTGRES_DB":   "yacht",
+				"POSTGRES_USER": "ozymandis",
+				"POSTGRES_DB":   "ozymandis",
 				// A subdirectory of the mount, not the mount itself: the mount
 				// point is not empty on every storage class, and initdb
 				// refuses a directory that is not.
@@ -152,7 +152,7 @@ func BlueprintsFor(c Capabilities) []Blueprint {
 			},
 			GeneratedSecrets:   []string{"POSTGRES_PASSWORD"},
 			ConnectionKey:      "DATABASE_URL",
-			ConnectionTemplate: "postgres://yacht:%s@%s:5432/yacht?sslmode=disable",
+			ConnectionTemplate: "postgres://ozymandis:%s@%s:5432/ozymandis?sslmode=disable",
 		},
 		{
 			Source:      SourceGit,

@@ -21,7 +21,7 @@ import (
 
 	"github.com/a-h/templ"
 
-	"github.com/codeblocktz/yacht/internal/identity"
+	"github.com/kingzion24/ozymandis/internal/identity"
 )
 
 // NavItem is one entry in the sidebar.
@@ -155,7 +155,7 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 	}
 
 	return Slots{
-		Title: "Yacht",
+		Title: "Ozymandis",
 		// The canvas is a workspace rather than a document: a graph inside a
 		// 1240px column with the window's scrollbar beside it reads as a
 		// picture of a canvas rather than one.
@@ -339,4 +339,4 @@ func isCanvasPath(path string) bool {
 // Compared against rather than only assigned: the wordmark is this one word
 // drawn, so it is shown when the name is still this one and replaced by plain
 // text the moment a wrapping application sets its own.
-const DefaultBrandName = "Yacht"
+const DefaultBrandName = "Ozymandis"

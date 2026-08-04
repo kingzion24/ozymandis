@@ -189,6 +189,7 @@ type Querier interface {
 	// once it is proven. This is the query the Ingress is built from, so the gate
 	// lives here rather than in a caller that might forget it.
 	RoutableHostsForApp(ctx context.Context, appID uuid.UUID) ([]string, error)
+	SetAppCommand(ctx context.Context, arg SetAppCommandParams) (App, error)
 	SetAppHealth(ctx context.Context, arg SetAppHealthParams) (App, error)
 	// The image a build produced. Separate from UpdateApp because a build sets
 	// only this: the replicas and limits a person configured are not a build's to

@@ -113,7 +113,7 @@ func (k *Keeper) Open(sealed []byte) (string, error) {
 		// "authentication failed", and dressing it up as something more
 		// specific would be guessing at which of the causes it was.
 		return "", errors.New("secret: could not open the stored value — " +
-			"either it was altered, or YACHT_SECRET_KEY is not the key it was sealed with")
+			"either it was altered, or OZYMANDIS_SECRET_KEY is not the key it was sealed with")
 	}
 	return string(plain), nil
 }

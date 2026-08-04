@@ -9,8 +9,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
-	"github.com/codeblocktz/yacht/internal/store/dbgen"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/store/dbgen"
 )
 
 // PendingImage stands in until the first build produces one.
@@ -19,7 +19,7 @@ import (
 // not nullable and every read of it assumes something is there. This one is
 // chosen to be obviously not a thing to run: if it ever reaches a cluster, the
 // pull fails with the name on the screen rather than starting something.
-const PendingImage = "yacht.invalid/not-built-yet:pending"
+const PendingImage = "ozymandis.invalid/not-built-yet:pending"
 
 // Build statuses.
 const (

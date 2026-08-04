@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/kingzion24/ozymandis/internal/app"
 )
 
 // The storage tab is the only way to attach a volume without reaching for SQL.

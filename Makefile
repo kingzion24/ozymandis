@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 GO ?= go
-BIN := bin/yacht
+BIN := bin/ozymandis
 
 # The Tailwind standalone CLI is a single binary with no Node dependency.
 # `make tailwind` fetches it into ./bin so a contributor needs nothing
@@ -48,14 +48,14 @@ assets: generate css ## Regenerate templates and stylesheet
 
 .PHONY: gallery
 gallery: assets ## Render every visual state to HTML
-	YACHT_GALLERY_OUT=$(or $(OUT),/tmp/yacht-gallery) $(GO) test ./internal/web -run Gallery -count=1
+	OZYMANDIS_GALLERY_OUT=$(or $(OUT),/tmp/ozymandis-gallery) $(GO) test ./internal/web -run Gallery -count=1
 	@echo
 	@echo "  Serve it — the pages ask for /assets, so file:// renders unstyled:"
-	@echo "    cd $(or $(OUT),/tmp/yacht-gallery) && python3 -m http.server 8123"
+	@echo "    cd $(or $(OUT),/tmp/ozymandis-gallery) && python3 -m http.server 8123"
 
 .PHONY: build
-build: assets ## Build the yacht binary
-	CGO_ENABLED=0 $(GO) build -o $(BIN) ./cmd/yacht
+build: assets ## Build the ozymandis binary
+	CGO_ENABLED=0 $(GO) build -o $(BIN) ./cmd/ozymandis
 
 .PHONY: test
 test: ## Run tests
@@ -74,7 +74,7 @@ run: build ## Run locally
 
 .PHONY: dev
 dev: assets ## Rebuild and run
-	$(GO) run ./cmd/yacht
+	$(GO) run ./cmd/ozymandis
 
 .PHONY: tidy
 tidy: ## Tidy modules

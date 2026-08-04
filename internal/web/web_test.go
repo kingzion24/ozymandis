@@ -13,8 +13,8 @@ import (
 
 	"github.com/a-h/templ"
 
-	"github.com/codeblocktz/yacht/internal/identity"
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/identity"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 func testServer(t *testing.T, opts Options) http.Handler {
@@ -65,7 +65,7 @@ func TestOverviewRendersWithDefaultChrome(t *testing.T) {
 	}
 	body := rec.Body.String()
 
-	for _, want := range []string{"Overview", "Yacht", "Apps", "Settings", "Eric"} {
+	for _, want := range []string{"Overview", "Ozymandis", "Apps", "Settings", "Eric"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q", want)
 		}

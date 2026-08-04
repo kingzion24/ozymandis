@@ -10,7 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/codeblocktz/yacht/internal/store/dbgen"
+	"github.com/kingzion24/ozymandis/internal/store/dbgen"
 )
 
 // ErrNoSecretKey means a secret was asked for with no key configured to seal it.
@@ -18,7 +18,7 @@ import (
 // Refusing is the point. Storing it readable instead would give the person the
 // protection they asked for in name only, and they would have no way to tell.
 var ErrNoSecretKey = errors.New(
-	"app: no YACHT_SECRET_KEY is configured, so a secret cannot be stored safely")
+	"app: no OZYMANDIS_SECRET_KEY is configured, so a secret cannot be stored safely")
 
 // ErrVariableNotFound means the app has no variable with that key.
 var ErrVariableNotFound = errors.New("app: no such variable")

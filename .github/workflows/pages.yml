@@ -1,6 +1,6 @@
 name: pages
 
-# Publishes the install and upgrade scripts at codeblocktz.github.io/yacht/.
+# Publishes the install and upgrade scripts at kingzion24.github.io/ozymandis/.
 #
 # The scripts are served straight from the repository root rather than kept as a
 # second copy under site/, so what the URL hands to a shell is the file that was

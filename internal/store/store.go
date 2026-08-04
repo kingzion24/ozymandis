@@ -30,7 +30,7 @@ const migrationsDir = "migrations"
 // Two instances starting together both migrate at boot, and goose is not safe
 // to run twice at once: the second finds a table the first has just created and
 // fails with "already exists", which reads as a broken migration rather than as
-// a race. An arbitrary constant, shared by every Yacht that talks to this
+// a race. An arbitrary constant, shared by every Ozymandis that talks to this
 // database.
 const migrationLock int64 = 0x796163687421
 

@@ -1,4 +1,4 @@
-# Yacht
+# Ozymandis
 
 A self-hosted PaaS for Kubernetes. Deploy your app to your own server, with
 real Kubernetes underneath rather than a Docker wrapper, and an all-Go control
@@ -7,7 +7,7 @@ plane you can read in an afternoon.
 Runs on K3s, so a $5 VPS is enough to start.
 
 > [!WARNING]
-> **Not ready for production.** Yacht is under active development. Interfaces,
+> **Not ready for production.** Ozymandis is under active development. Interfaces,
 > the database schema, and behaviour all still change without notice, there has
 > been no tagged release yet, and none of it has run anywhere long enough to
 > have earned your trust.
@@ -27,7 +27,7 @@ works until you want health probes, rolling updates, or a second node — at
 which point you are fighting the abstraction instead of shipping.
 
 Kubernetes already solves those problems. K3s makes it small enough to run on a
-single cheap box. Yacht is a control plane over it that stays out of the way:
+single cheap box. Ozymandis is a control plane over it that stays out of the way:
 every workload is an ordinary Deployment, so `kubectl` keeps working and
 nothing you build here is locked in.
 
@@ -38,6 +38,7 @@ nothing you build here is locked in.
 | | |
 |---|---|
 | Deploy a container image, with env vars and replicas | ✅ |
+| Override the image's command, so one image runs as several apps | ✅ |
 | Build and deploy from a Git repository, using buildpacks | ✅ |
 | Builds run as an isolated Job, with the log kept | ✅ |
 | A built-in registry for the images those builds produce | ✅ |
@@ -91,17 +92,17 @@ everything else still works and those figures read `—` rather than zero.
 > scripts is needed. Until then, use [Quick start](#quick-start).
 
 ```bash
-curl -sSL https://codeblocktz.github.io/yacht/install.sh | sudo sh
+curl -sSL https://kingzion24.github.io/ozymandis/install.sh | sudo sh
 ```
 
-Debian or Ubuntu, amd64 or arm64. It installs K3s, Postgres, and Yacht as a
+Debian or Ubuntu, amd64 or arm64. It installs K3s, Postgres, and Ozymandis as a
 systemd service, then prints the dashboard URL and a token to sign in with.
 About ninety seconds on a fresh box.
 
 To upgrade later:
 
 ```bash
-curl -sSL https://codeblocktz.github.io/yacht/upgrade.sh | sudo sh
+curl -sSL https://kingzion24.github.io/ozymandis/upgrade.sh | sudo sh
 ```
 
 That one only swaps the binary and restarts. If the new version does not come
@@ -110,17 +111,17 @@ than an outage.
 
 | | |
 |---|---|
-| Binary | `/usr/local/bin/yacht` |
-| Config | `/etc/yacht/yacht.env` |
-| Service | `systemctl status yacht` |
-| Logs | `journalctl -u yacht -f` |
+| Binary | `/usr/local/bin/ozymandis` |
+| Config | `/etc/ozymandis/ozymandis.env` |
+| Service | `systemctl status ozymandis` |
+| Logs | `journalctl -u ozymandis -f` |
 
-**Back up `/etc/yacht/yacht.env`.** It holds `YACHT_SECRET_KEY`, which seals
+**Back up `/etc/ozymandis/ozymandis.env`.** It holds `OZYMANDIS_SECRET_KEY`, which seals
 your stored secrets and cannot be regenerated — losing it loses them. Re-running
 the installer preserves it, and every other generated value, on purpose.
 
 The installer serves the dashboard over plain HTTP, so the token crosses the
-network in the clear. Set `YACHT_BASE_URL` and `YACHT_APP_DOMAIN` in the config
+network in the clear. Set `OZYMANDIS_BASE_URL` and `OZYMANDIS_APP_DOMAIN` in the config
 and put it behind TLS before you rely on it; until then `ssh -L 8080:127.0.0.1:8080`
 is the safer way in.
 
@@ -131,10 +132,10 @@ URLs serve, published straight from this repository.
 To remove it all:
 
 ```bash
-sudo systemctl disable --now yacht
-sudo rm -rf /etc/yacht /etc/systemd/system/yacht.service /usr/local/bin/yacht
+sudo systemctl disable --now ozymandis
+sudo rm -rf /etc/ozymandis /etc/systemd/system/ozymandis.service /usr/local/bin/ozymandis
 sudo /usr/local/bin/k3s-uninstall.sh          # only if you want the cluster gone too
-sudo -u postgres dropdb yacht && sudo -u postgres dropuser yacht
+sudo -u postgres dropdb ozymandis && sudo -u postgres dropuser ozymandis
 ```
 
 ## Quick start
@@ -144,19 +145,19 @@ For development, or to run against a cluster you already have.
 Requirements: Go 1.26+, Postgres, and a kubeconfig pointing at a cluster.
 
 ```bash
-git clone https://github.com/codeblocktz/yacht.git
-cd yacht
+git clone https://github.com/kingzion24/ozymandis.git
+cd ozymandis
 
-export YACHT_DATABASE_URL="postgres://yacht:yacht@localhost:5432/yacht?sslmode=disable"
-export YACHT_KUBECONFIG="$HOME/.kube/config"
-export YACHT_AUTH_TOKEN="$(openssl rand -hex 24)"   # omit only on a trusted network
+export OZYMANDIS_DATABASE_URL="postgres://ozymandis:ozymandis@localhost:5432/ozymandis?sslmode=disable"
+export OZYMANDIS_KUBECONFIG="$HOME/.kube/config"
+export OZYMANDIS_AUTH_TOKEN="$(openssl rand -hex 24)"   # omit only on a trusted network
 
 make run
 ```
 
 Then open <http://localhost:8080>.
 
-Migrations run automatically at startup. If the cluster is unreachable Yacht
+Migrations run automatically at startup. If the cluster is unreachable Ozymandis
 still boots and says so on the overview page, so you can fix your kubeconfig
 without digging through logs.
 
@@ -164,18 +165,18 @@ without digging through logs.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `YACHT_DATABASE_URL` | — | **Required.** Postgres connection string |
-| `YACHT_ADDR` | `:8080` | Listen address |
-| `YACHT_KUBECONFIG` | `$KUBECONFIG` | Path to a kubeconfig |
-| `YACHT_KUBE_IN_CLUSTER` | `false` | Use the mounted service account instead |
-| `YACHT_AUTH_TOKEN` | — | Bearer token. Unset, and with no accounts, means **no authentication** |
-| `YACHT_OWNER_ID` | `owner-local` | The team every resource belongs to on a fresh install |
-| `YACHT_OWNER_EMAIL` | — | The one address that may sign in before anybody has an account |
-| `YACHT_APP_DOMAIN` | — | Apps get `<name>.<this>`. Point `*.<this>` at the cluster |
-| `YACHT_WILDCARD_TLS` | `false` | Serve those hostnames from the controller's default certificate |
-| `YACHT_BASE_URL` | — | Public URL. **Setting it switches sign-in on** |
-| `YACHT_SMTP_ADDR` / `YACHT_RESEND_API_KEY` | — | How sign-in links are delivered. Neither means they go to the log |
-| `YACHT_DEBUG` | `false` | Verbose logging |
+| `OZYMANDIS_DATABASE_URL` | — | **Required.** Postgres connection string |
+| `OZYMANDIS_ADDR` | `:8080` | Listen address |
+| `OZYMANDIS_KUBECONFIG` | `$KUBECONFIG` | Path to a kubeconfig |
+| `OZYMANDIS_KUBE_IN_CLUSTER` | `false` | Use the mounted service account instead |
+| `OZYMANDIS_AUTH_TOKEN` | — | Bearer token. Unset, and with no accounts, means **no authentication** |
+| `OZYMANDIS_OWNER_ID` | `owner-local` | The team every resource belongs to on a fresh install |
+| `OZYMANDIS_OWNER_EMAIL` | — | The one address that may sign in before anybody has an account |
+| `OZYMANDIS_APP_DOMAIN` | — | Apps get `<name>.<this>`. Point `*.<this>` at the cluster |
+| `OZYMANDIS_WILDCARD_TLS` | `false` | Serve those hostnames from the controller's default certificate |
+| `OZYMANDIS_BASE_URL` | — | Public URL. **Setting it switches sign-in on** |
+| `OZYMANDIS_SMTP_ADDR` / `OZYMANDIS_RESEND_API_KEY` | — | How sign-in links are delivered. Neither means they go to the log |
+| `OZYMANDIS_DEBUG` | `false` | Verbose logging |
 
 The full list, with the reasoning behind each, is in
 [`.env.example`](.env.example).
@@ -183,7 +184,7 @@ The full list, with the reasoning behind each, is in
 ## Security posture
 
 Workloads are hardened by construction, not by configuration. Every namespace
-Yacht creates is labelled for Pod Security Admission at `restricted` and gets a
+Ozymandis creates is labelled for Pod Security Admission at `restricted` and gets a
 default `LimitRange`; every pod runs with:
 
 - `runAsNonRoot`, `allowPrivilegeEscalation: false`, `privileged: false`
@@ -202,7 +203,7 @@ the intended behaviour. Most official images already ship a non-root user.
 
 ## Architecture
 
-Yacht is built to be wrapped. Anything that needs to differ for a hosted,
+Ozymandis is built to be wrapped. Anything that needs to differ for a hosted,
 multi-tenant deployment goes through one of three seams, so a larger
 application can build on this module rather than fork it:
 
@@ -222,7 +223,7 @@ Two rules keep the seams honest:
    check that gets written, a join is a check that gets skipped.
 
 ```
-cmd/yacht             entrypoint and wiring
+cmd/ozymandis             entrypoint and wiring
 internal/app          workload lifecycle — keeps database and cluster agreeing
 internal/account      people: users, teams, roles, invitations
 internal/cluster      how a machine joins this cluster
@@ -283,7 +284,7 @@ node at 98%, an unreachable cluster — renders from a gallery, without needing 
 cluster or a database:
 
 ```bash
-YACHT_GALLERY_OUT=/tmp/gallery go test ./internal/web -run Gallery
+OZYMANDIS_GALLERY_OUT=/tmp/gallery go test ./internal/web -run Gallery
 ```
 
 Those are the states that silently rot, because nobody sees them until a
@@ -302,7 +303,7 @@ licensed under MIT, the same as the project.
 [CONTRIBUTING.md](CONTRIBUTING.md) covers getting set up, what CI enforces, and
 the conventions this codebase holds to. One thing worth knowing before your
 first test run: **tests that need a database skip themselves when it is absent,
-and a skip reads as a pass** — set `YACHT_TEST_DATABASE_URL`.
+and a skip reads as a pass** — set `OZYMANDIS_TEST_DATABASE_URL`.
 
 Found a vulnerability? Please do not open an issue — see
 [SECURITY.md](SECURITY.md). Participation is covered by the

@@ -3,7 +3,7 @@
 Issues and pull requests are welcome. There is no CLA — contributions are MIT
 licensed, the same as the project.
 
-Yacht is early and moving. If you are about to spend real time on something,
+Ozymandis is early and moving. If you are about to spend real time on something,
 open an issue first and check the direction is one the project wants, so the
 work is not wasted.
 
@@ -14,17 +14,17 @@ Nothing else — `templ` and `sqlc` are Go tool dependencies, and `make css`
 downloads the Tailwind standalone binary, so there is no Node or npm.
 
 ```bash
-git clone https://github.com/codeblocktz/yacht.git
-cd yacht
+git clone https://github.com/kingzion24/ozymandis.git
+cd ozymandis
 
-export YACHT_DATABASE_URL="postgres://yacht:yacht@localhost:5432/yacht?sslmode=disable"
-export YACHT_KUBECONFIG="$HOME/.kube/config"
-export YACHT_AUTH_TOKEN="$(openssl rand -hex 24)"
+export OZYMANDIS_DATABASE_URL="postgres://ozymandis:ozymandis@localhost:5432/ozymandis?sslmode=disable"
+export OZYMANDIS_KUBECONFIG="$HOME/.kube/config"
+export OZYMANDIS_AUTH_TOKEN="$(openssl rand -hex 24)"
 
 make dev
 ```
 
-No cluster to hand? Yacht still boots and says so on the overview page, so most
+No cluster to hand? Ozymandis still boots and says so on the overview page, so most
 of the dashboard is workable without one.
 
 ### Run the tests properly
@@ -37,7 +37,7 @@ of the dashboard is workable without one.
 Set the DSN to a database you do not mind being written to:
 
 ```bash
-export YACHT_TEST_DATABASE_URL="postgres://yacht:yacht@localhost:5432/yacht_test?sslmode=disable"
+export OZYMANDIS_TEST_DATABASE_URL="postgres://ozymandis:ozymandis@localhost:5432/ozymandis_test?sslmode=disable"
 make check          # vet + tests
 ```
 
@@ -64,7 +64,7 @@ because the alternative is a bug nobody sees:
 2. **`go vet` and the tests pass**, with `-race`.
 3. **No commercial concepts in the engine.** A grep rejects a `type`, `func`,
    `var`, or `const` declaring a tenant, wallet, billing, invoice, or
-   subscription. Yacht must stay useful standalone at a single owner; those
+   subscription. Ozymandis must stay useful standalone at a single owner; those
    concepts belong to a wrapping layer. Vendored UI is excluded — a Lucide icon
    named `Wallet` is a picture, not a billing concept.
 4. **`shellcheck` on `install.sh` and `upgrade.sh`.** They get piped into a root

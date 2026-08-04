@@ -10,7 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 // helmChartConfig is how k3s lets a chart it installed be reconfigured.
@@ -26,14 +26,14 @@ var helmChartConfig = schema.GroupVersionResource{
 
 // EnableHTTPLogs switches the ingress controller's access log on.
 //
-// Yacht does not own the ingress controller, which is why this is an action
+// Ozymandis does not own the ingress controller, which is why this is an action
 // somebody takes rather than something that happens on their behalf: it
 // restarts a controller every workload in the cluster routes through, and a
 // platform that did that unannounced would be causing an outage to turn on a
 // log.
 //
 // Only where k3s installed Traefik. Elsewhere the controller was installed by
-// something Yacht knows nothing about — a Helm release, an operator, a
+// something Ozymandis knows nothing about — a Helm release, an operator, a
 // hand-written manifest — and writing a HelmChartConfig would create an object
 // nothing reads, which looks like it worked and changes nothing.
 func (o *Orchestrator) EnableHTTPLogs(ctx context.Context) error {
@@ -126,7 +126,7 @@ func (o *Orchestrator) HTTPLogsEnabled(ctx context.Context) bool {
 }
 
 // CanConfigureIngress reports whether this cluster's ingress controller is one
-// Yacht can reconfigure.
+// Ozymandis can reconfigure.
 //
 // The k3s Helm controller's CRD is the whole test: it is there when k3s
 // installed Traefik and absent when something else did, and writing a

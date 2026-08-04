@@ -15,7 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 // BuildNamespace is where builds run.
@@ -26,7 +26,7 @@ import (
 // weakening every tenant namespace or having no builds. One namespace with a
 // looser posture, holding only Jobs this code creates from images this code
 // names, is a much smaller claim than that.
-const BuildNamespace = "yacht-builds"
+const BuildNamespace = "ozymandis-builds"
 
 // BuildServiceAccount is what build pods run as.
 //
@@ -34,7 +34,7 @@ const BuildNamespace = "yacht-builds"
 // namespace's "default". A build executes whatever a repository's Dockerfile
 // says to execute, so the account it runs under is the blast radius — and the
 // default account is the one every admission-hardening guide names first.
-const BuildServiceAccount = "yacht-builder"
+const BuildServiceAccount = "ozymandis-builder"
 
 // The images a build runs. Pinned rather than floating: a build that silently
 // changes what compiled it is one nobody can reproduce, and ":latest" here
@@ -171,7 +171,7 @@ func (o *Orchestrator) ensureBuildNamespace(ctx context.Context) error {
 // buildRegistrySecret is the name of the push credential in the build
 // namespace. One secret rather than one per build: the credential is the
 // install's, and a copy per build would be a copy per build to clean up.
-const buildRegistrySecret = "yacht-registry"
+const buildRegistrySecret = "ozymandis-registry"
 
 // ensureBuildSecret puts the push credential where the builder can read it.
 func (o *Orchestrator) ensureBuildSecret(ctx context.Context, auth []byte) (string, error) {

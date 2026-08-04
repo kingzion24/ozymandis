@@ -11,11 +11,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 // limitRangeName is the default LimitRange created in every namespace.
-const limitRangeName = "yacht-defaults"
+const limitRangeName = "ozymandis-defaults"
 
 // EnsureNamespace creates or converges an owner's namespace.
 //

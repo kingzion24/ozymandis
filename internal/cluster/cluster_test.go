@@ -10,8 +10,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/codeblocktz/yacht/internal/secret"
-	"github.com/codeblocktz/yacht/internal/store"
+	"github.com/kingzion24/ozymandis/internal/secret"
+	"github.com/kingzion24/ozymandis/internal/store"
 )
 
 // A pool name ends up in a command somebody pastes into a root shell, so the
@@ -97,7 +97,7 @@ func TestTheCommandJoinsAnAgentAndLabelsIt(t *testing.T) {
 		"K3S_URL=https://10.0.0.1:6443",
 		"K3S_TOKEN=K10secret::server:pw",
 		"sh -s -",
-		"--node-label yacht/pool=web",
+		"--node-label ozymandis/pool=web",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("command is missing %q:\n%s", want, got)
@@ -121,9 +121,9 @@ func TestNoPoolMeansNoLabel(t *testing.T) {
 
 func testJoiner(t *testing.T, withKey bool) *Joiner {
 	t.Helper()
-	dsn := os.Getenv("YACHT_TEST_DATABASE_URL")
+	dsn := os.Getenv("OZYMANDIS_TEST_DATABASE_URL")
 	if dsn == "" {
-		t.Skip("set YACHT_TEST_DATABASE_URL to run cluster storage tests")
+		t.Skip("set OZYMANDIS_TEST_DATABASE_URL to run cluster storage tests")
 	}
 	ctx := context.Background()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))

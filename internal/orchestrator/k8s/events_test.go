@@ -10,7 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 func TestEventsHoistWarnings(t *testing.T) {
@@ -128,7 +128,7 @@ func TestVolumes(t *testing.T) {
 	class := "local-path"
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "data-web-0", Namespace: "yacht-a1b2",
+			Name: "data-web-0", Namespace: "ozymandis-a1b2",
 			Labels: map[string]string{
 				orchestrator.LabelManagedBy: orchestrator.ManagedByValue,
 				orchestrator.LabelApp:       "web",
@@ -151,7 +151,7 @@ func TestVolumes(t *testing.T) {
 			},
 		},
 	}
-	if _, err := client.CoreV1().PersistentVolumeClaims("yacht-a1b2").
+	if _, err := client.CoreV1().PersistentVolumeClaims("ozymandis-a1b2").
 		Create(ctx, pvc, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("seed pvc: %v", err)
 	}

@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/codeblocktz/yacht/internal/store/dbgen"
+	"github.com/kingzion24/ozymandis/internal/store/dbgen"
 )
 
 // ErrProjectNotFound means the team has no project with that slug.

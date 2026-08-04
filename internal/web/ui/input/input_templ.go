@@ -13,9 +13,9 @@ import "github.com/a-h/templ"
 import templruntime "github.com/a-h/templ/runtime"
 
 import (
-	"github.com/codeblocktz/yacht/internal/web/ui/button"
-	"github.com/codeblocktz/yacht/internal/web/ui/icon"
-	"github.com/codeblocktz/yacht/internal/web/ui/utils"
+	"github.com/kingzion24/ozymandis/internal/web/ui/button"
+	"github.com/kingzion24/ozymandis/internal/web/ui/icon"
+	"github.com/kingzion24/ozymandis/internal/web/ui/utils"
 )
 
 type Type string

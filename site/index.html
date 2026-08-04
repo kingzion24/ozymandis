@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Yacht — a self-hosted PaaS for Kubernetes</title>
+<title>Ozymandis — a self-hosted PaaS for Kubernetes</title>
 <meta name="description" content="Deploy your app to your own server, with real Kubernetes underneath. Runs on K3s, so a $5 VPS is enough to start.">
 <style>
   :root {
@@ -61,7 +61,7 @@
 </head>
 <body>
 <main>
-  <h1>Yacht</h1>
+  <h1>Ozymandis</h1>
   <p class="lede">
     A self-hosted PaaS for Kubernetes. Deploy your app to your own server, with
     real Kubernetes underneath rather than a Docker wrapper. Runs on K3s, so a
@@ -69,7 +69,7 @@
   </p>
 
   <p class="warn">
-    <strong>Not ready for production.</strong> Yacht is under active
+    <strong>Not ready for production.</strong> Ozymandis is under active
     development. Interfaces, the database schema, and behaviour all still change
     without notice, there has been no tagged release yet, and none of it has run
     anywhere long enough to have earned your trust. Run it on something you can
@@ -77,14 +77,14 @@
   </p>
 
   <h2>Install</h2>
-  <pre><code>curl -sSL https://codeblocktz.github.io/yacht/install.sh | sudo sh</code></pre>
+  <pre><code>curl -sSL https://kingzion24.github.io/ozymandis/install.sh | sudo sh</code></pre>
   <p class="note">
-    Debian or Ubuntu, amd64 or arm64. Installs K3s, Postgres, and Yacht as a
+    Debian or Ubuntu, amd64 or arm64. Installs K3s, Postgres, and Ozymandis as a
     systemd service, then prints your dashboard URL and token.
   </p>
 
   <h2>Upgrade</h2>
-  <pre><code>curl -sSL https://codeblocktz.github.io/yacht/upgrade.sh | sudo sh</code></pre>
+  <pre><code>curl -sSL https://kingzion24.github.io/ozymandis/upgrade.sh | sudo sh</code></pre>
   <p class="note">
     Swaps the binary and restarts. Rolls back automatically if the new version
     does not come up healthy.
@@ -93,14 +93,14 @@
   <h2>Read it first</h2>
   <p>
     Piping a script to a root shell deserves a look before you run it:
-    <a href="https://github.com/codeblocktz/yacht/blob/main/install.sh">install.sh</a>
+    <a href="https://github.com/kingzion24/ozymandis/blob/main/install.sh">install.sh</a>
     and
-    <a href="https://github.com/codeblocktz/yacht/blob/main/upgrade.sh">upgrade.sh</a>.
+    <a href="https://github.com/kingzion24/ozymandis/blob/main/upgrade.sh">upgrade.sh</a>.
     Both are served here straight from the repository.
   </p>
 
   <footer>
-    <a href="https://github.com/codeblocktz/yacht">github.com/codeblocktz/yacht</a> — MIT
+    <a href="https://github.com/kingzion24/ozymandis">github.com/kingzion24/ozymandis</a> — MIT
   </footer>
 </main>
 </body>

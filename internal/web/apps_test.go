@@ -13,9 +13,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/codeblocktz/yacht/internal/app"
-	"github.com/codeblocktz/yacht/internal/identity"
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/app"
+	"github.com/kingzion24/ozymandis/internal/identity"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 // fakeApps is an in-memory Apps implementation.
@@ -29,10 +29,19 @@ type fakeApps struct {
 	scaled   map[string]int32
 	activity app.DeployActivity
 	err      error
+
+	// commands records what SetCommand was asked for, keyed by app name, so a
+	// handler test can assert the form reached the service rather than only
+	// that it answered 303.
+	commands map[string]string
 }
 
 func newFakeApps(apps ...app.App) *fakeApps {
-	f := &fakeApps{byOwner: map[string][]app.App{}, scaled: map[string]int32{}}
+	f := &fakeApps{
+		byOwner:  map[string][]app.App{},
+		scaled:   map[string]int32{},
+		commands: map[string]string{},
+	}
 	for _, a := range apps {
 		f.byOwner[a.OwnerID] = append(f.byOwner[a.OwnerID], a)
 	}
@@ -334,7 +343,7 @@ func TestSettingsShowsTheAppDomain(t *testing.T) {
 
 	h = testServer(t, Options{})
 	body = get(t, h, "/settings").Body.String()
-	if !strings.Contains(body, "YACHT_APP_DOMAIN") {
+	if !strings.Contains(body, "OZYMANDIS_APP_DOMAIN") {
 		t.Error("settings should name the variable that turns per-app hostnames on")
 	}
 }
@@ -397,7 +406,7 @@ func TestThemeIsResolvedInline(t *testing.T) {
 	if i := strings.Index(body, "</head>"); i > 0 {
 		head = body[:i]
 	}
-	if !strings.Contains(head, "yacht-theme") {
+	if !strings.Contains(head, "ozymandis-theme") {
 		t.Error("theme script must be inline in <head>, before first paint")
 	}
 	if !strings.Contains(head, "prefers-color-scheme") {
@@ -519,7 +528,7 @@ func TestClusterPageRendersEmptyState(t *testing.T) {
 	if !strings.Contains(body, "No nodes") {
 		t.Error("expected an explanatory empty state when no cluster is connected")
 	}
-	if !strings.Contains(body, "YACHT_KUBECONFIG") {
+	if !strings.Contains(body, "OZYMANDIS_KUBECONFIG") {
 		t.Error("empty state should tell the operator what to check")
 	}
 }
@@ -527,13 +536,13 @@ func TestClusterPageRendersEmptyState(t *testing.T) {
 func TestClusterPodsTab(t *testing.T) {
 	orch := orchestrator.NewNoop()
 	_ = orch.ApplyApp(context.Background(), orchestrator.AppSpec{
-		Ref:   orchestrator.Ref{Owner: "owner-1", Namespace: "yacht-demo", Name: "web"},
+		Ref:   orchestrator.Ref{Owner: "owner-1", Namespace: "ozymandis-demo", Name: "web"},
 		Image: "nginx:alpine", Replicas: 2,
 	})
 	h := testServer(t, Options{Orchestrator: orch})
 
 	body := get(t, h, "/cluster/pods").Body.String()
-	for _, want := range []string{"web-0", "web-1", "yacht-demo"} {
+	for _, want := range []string{"web-0", "web-1", "ozymandis-demo"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("pods tab missing %q", want)
 		}
@@ -543,7 +552,7 @@ func TestClusterPodsTab(t *testing.T) {
 func TestSettingsWarnsWhenUnauthenticated(t *testing.T) {
 	h := testServer(t, Options{Authenticated: false})
 	body := get(t, h, "/settings").Body.String()
-	if !strings.Contains(body, "YACHT_AUTH_TOKEN") {
+	if !strings.Contains(body, "OZYMANDIS_AUTH_TOKEN") {
 		t.Error("settings should warn when no credential is required")
 	}
 
@@ -603,6 +612,19 @@ func (f *fakeApps) DeleteVariable(context.Context, string, string, string) error
 
 func (f *fakeApps) SetHealth(context.Context, string, string, string, bool) error {
 	return errors.New("fakeApps has no health probe")
+}
+
+// Parses for the same reason the service does, so a handler test sees the
+// refusal a person typing an unclosed quote would see.
+func (f *fakeApps) SetCommand(_ context.Context, _, name, command string) error {
+	if f.err != nil {
+		return f.err
+	}
+	if _, err := app.ParseCommand(command); err != nil {
+		return err
+	}
+	f.commands[name] = command
+	return nil
 }
 
 func (f *fakeApps) Links(context.Context, string) ([]app.Link, error) { return nil, nil }

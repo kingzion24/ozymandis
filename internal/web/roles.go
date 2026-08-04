@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/codeblocktz/yacht/internal/account"
-	"github.com/codeblocktz/yacht/internal/identity"
+	"github.com/kingzion24/ozymandis/internal/account"
+	"github.com/kingzion24/ozymandis/internal/identity"
 )
 
 // requireRole refuses a request whose session does not carry at least min.

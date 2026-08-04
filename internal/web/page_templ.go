@@ -11,7 +11,7 @@ import templruntime "github.com/a-h/templ/runtime"
 import (
 	"strconv"
 
-	"github.com/codeblocktz/yacht/internal/web/ui/selectbox"
+	"github.com/kingzion24/ozymandis/internal/web/ui/selectbox"
 )
 
 // searchBox is the filter above a list.

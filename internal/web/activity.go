@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/kingzion24/ozymandis/internal/app"
 )
 
 // The deploy activity chart is drawn from ordinary elements rather than a

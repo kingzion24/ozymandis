@@ -11,9 +11,9 @@ import templruntime "github.com/a-h/templ/runtime"
 import (
 	"strconv"
 
-	"github.com/codeblocktz/yacht/internal/app"
-	"github.com/codeblocktz/yacht/internal/web/ui/selectbox"
-	"github.com/codeblocktz/yacht/internal/web/ui/sheet"
+	"github.com/kingzion24/ozymandis/internal/app"
+	"github.com/kingzion24/ozymandis/internal/web/ui/selectbox"
+	"github.com/kingzion24/ozymandis/internal/web/ui/sheet"
 )
 
 // AppLogs is the log pane for one app.
@@ -952,7 +952,7 @@ func deployLogView(d DeployLogsData) templ.Component {
 
 // buildLogView shows what the build wrote, or says why there is nothing.
 //
-// This is the one log Yacht keeps. A build is bounded and there is exactly one
+// This is the one log Ozymandis keeps. A build is bounded and there is exactly one
 // per deploy, so it is stored — which is why this tab still answers for a
 // deployment replaced weeks ago, and the deploy log cannot.
 func buildLogView(d DeployLogsData) templ.Component {
@@ -1308,7 +1308,7 @@ func httpLogView(d DeployLogsData) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			} else if d.HTTP.Hint != "" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 110, "<p class=\"mt-4 text-[12.5px] text-muted-foreground\">This cluster's ingress controller was installed by something other than k3s, so Yacht cannot reconfigure it. Apply this wherever it was installed from:</p><div class=\"logs mt-2 rounded-md border border-border\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 110, "<p class=\"mt-4 text-[12.5px] text-muted-foreground\">This cluster's ingress controller was installed by something other than k3s, so Ozymandis cannot reconfigure it. Apply this wherever it was installed from:</p><div class=\"logs mt-2 rounded-md border border-border\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}

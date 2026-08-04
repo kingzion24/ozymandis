@@ -8,7 +8,7 @@ package web
 import "github.com/a-h/templ"
 import templruntime "github.com/a-h/templ/runtime"
 
-import "github.com/codeblocktz/yacht/internal/app"
+import "github.com/kingzion24/ozymandis/internal/app"
 
 // TemplateList offers the stacks that can be deployed in one action.
 func TemplateList(d TemplateListData) templ.Component {

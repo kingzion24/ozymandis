@@ -1,9 +1,9 @@
 package web
 
 import (
-	"github.com/codeblocktz/yacht/internal/identity"
-	"github.com/codeblocktz/yacht/internal/web/ui/selectbox"
-	"github.com/codeblocktz/yacht/internal/web/ui/sheet"
+	"github.com/kingzion24/ozymandis/internal/identity"
+	"github.com/kingzion24/ozymandis/internal/web/ui/selectbox"
+	"github.com/kingzion24/ozymandis/internal/web/ui/sheet"
 )
 
 // Layout renders the chrome around a page.
@@ -49,7 +49,7 @@ templ Layout(s Slots, page templ.Component) {
 		<body class="h-full">
 			<a class="skip-link" href="#main-content">Skip to content</a>
 			<div class="flex h-full">
-				<button type="button" tabindex="-1" class="nav-backdrop" data-nav-backdrop onclick="yachtSidebarToggle()" aria-label="Close navigation"></button>
+				<button type="button" tabindex="-1" class="nav-backdrop" data-nav-backdrop onclick="ozymandisSidebarToggle()" aria-label="Close navigation"></button>
 				@sidebar(s)
 				<div class="flex min-w-0 flex-1 flex-col" data-app-shell>
 					@topbar(s)
@@ -313,7 +313,7 @@ templ themeScript() {
 	<script nonce="">
 		(function() {
 			try {
-				var stored = localStorage.getItem("yacht-theme");
+				var stored = localStorage.getItem("ozymandis-theme");
 				var dark = stored
 					? stored === "dark"
 					: window.matchMedia("(prefers-color-scheme: dark)").matches;
@@ -340,7 +340,7 @@ templ sidebarToggle() {
 		aria-controls="sidebar"
 		aria-expanded="true"
 		data-sidebar-toggle
-		onclick="yachtSidebarToggle()"
+		onclick="ozymandisSidebarToggle()"
 	>
 		@icon("panel-left")
 	</button>
@@ -382,7 +382,7 @@ templ sidebarScript() {
 				else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
 			}
 			try {
-				if (localStorage.getItem("yacht-sidebar") === "collapsed") {
+				if (localStorage.getItem("ozymandis-sidebar") === "collapsed") {
 					root.setAttribute("data-sidebar", "collapsed");
 				}
 			} catch (e) {
@@ -412,7 +412,7 @@ templ sidebarScript() {
 				return !window.matchMedia("(min-width: 768px)").matches;
 			}
 
-			window.yachtSidebarToggle = function() {
+			window.ozymandisSidebarToggle = function() {
 				if (onPhone()) {
 					var open = root.getAttribute("data-nav") === "open";
 					root.setAttribute("data-nav", open ? "closed" : "open");
@@ -430,7 +430,7 @@ templ sidebarScript() {
 				root.setAttribute("data-sidebar", collapsed ? "expanded" : "collapsed");
 				try {
 					localStorage.setItem(
-						"yacht-sidebar",
+						"ozymandis-sidebar",
 						collapsed ? "expanded" : "collapsed"
 					);
 				} catch (e) {}
@@ -515,7 +515,7 @@ templ themeToggle() {
 		type="button"
 		class="btn btn-ghost btn-icon"
 		aria-label="Toggle theme"
-		onclick="(function(){var d=document.documentElement.classList.toggle('dark');try{localStorage.setItem('yacht-theme',d?'dark':'light')}catch(e){}})()"
+		onclick="(function(){var d=document.documentElement.classList.toggle('dark');try{localStorage.setItem('ozymandis-theme',d?'dark':'light')}catch(e){}})()"
 	>
 		<svg class="size-4 dark:hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
 			<circle cx="12" cy="12" r="4"></circle>

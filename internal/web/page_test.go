@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 func rows(n int) []string {

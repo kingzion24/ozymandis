@@ -13,7 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 // claimName is the PersistentVolumeClaim for one of an app's volumes.

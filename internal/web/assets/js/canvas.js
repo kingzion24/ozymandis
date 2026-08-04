@@ -42,7 +42,7 @@
   // arrangement of it, so it stays in the browser — the same reasoning that
   // sends a dragged card to the server and keeps the zoom here.
   var view = { x: 0, y: 0, zoom: 1 };
-  var viewKey = "yacht.view." + (canvas.dataset.project || "");
+  var viewKey = "ozymandis.view." + (canvas.dataset.project || "");
 
   function clamp(n, lo, hi) {
     return Math.min(hi, Math.max(lo, n));

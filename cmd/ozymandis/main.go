@@ -1,4 +1,4 @@
-// Command yacht runs the Yacht engine: a self-hosted PaaS control plane for
+// Command ozymandis runs the Ozymandis engine: a self-hosted PaaS control plane for
 // Kubernetes.
 package main
 
@@ -13,29 +13,29 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/codeblocktz/yacht/internal/account"
-	"github.com/codeblocktz/yacht/internal/app"
-	"github.com/codeblocktz/yacht/internal/cluster"
-	"github.com/codeblocktz/yacht/internal/config"
-	"github.com/codeblocktz/yacht/internal/domain"
-	"github.com/codeblocktz/yacht/internal/identity"
-	"github.com/codeblocktz/yacht/internal/notify"
-	"github.com/codeblocktz/yacht/internal/orchestrator"
-	"github.com/codeblocktz/yacht/internal/orchestrator/k8s"
-	"github.com/codeblocktz/yacht/internal/registry"
-	"github.com/codeblocktz/yacht/internal/secret"
-	"github.com/codeblocktz/yacht/internal/store"
-	"github.com/codeblocktz/yacht/internal/web"
+	"github.com/kingzion24/ozymandis/internal/account"
+	"github.com/kingzion24/ozymandis/internal/app"
+	"github.com/kingzion24/ozymandis/internal/cluster"
+	"github.com/kingzion24/ozymandis/internal/config"
+	"github.com/kingzion24/ozymandis/internal/domain"
+	"github.com/kingzion24/ozymandis/internal/identity"
+	"github.com/kingzion24/ozymandis/internal/notify"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/orchestrator/k8s"
+	"github.com/kingzion24/ozymandis/internal/registry"
+	"github.com/kingzion24/ozymandis/internal/secret"
+	"github.com/kingzion24/ozymandis/internal/store"
+	"github.com/kingzion24/ozymandis/internal/web"
 )
 
 // version is overridden at build time:
 //
-//	go build -ldflags "-X main.version=v0.1.0" ./cmd/yacht
+//	go build -ldflags "-X main.version=v0.1.0" ./cmd/ozymandis
 var version = "dev"
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "yacht: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ozymandis: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -47,7 +47,7 @@ func run() error {
 	}
 
 	log := newLogger(cfg.Debug)
-	log.Info("starting yacht",
+	log.Info("starting ozymandis",
 		slog.String("version", version),
 		slog.String("config", cfg.String()),
 	)
@@ -104,7 +104,7 @@ func run() error {
 			return err
 		}
 	} else {
-		log.Warn("no YACHT_SECRET_KEY set — environment variables can be stored, " +
+		log.Warn("no OZYMANDIS_SECRET_KEY set — environment variables can be stored, " +
 			"but marking one secret will be refused rather than stored readable; " +
 			"generate a key with `openssl rand -base64 32`")
 	}
@@ -135,13 +135,13 @@ func run() error {
 		Resolver: domain.NetResolver{},
 	})
 
-	// Yacht cannot check that the ingress controller actually has a default
+	// Ozymandis cannot check that the ingress controller actually has a default
 	// certificate: there is no API for "what will you serve for an unknown
 	// host". Without one, apps are served the wrong certificate rather than
 	// failing, so the one thing available is to say so plainly at startup.
 	if cfg.WildcardTLS {
 		log.Info("wildcard TLS enabled — platform hostnames are served from the "+
-			"ingress controller's default certificate; Yacht cannot verify one is "+
+			"ingress controller's default certificate; Ozymandis cannot verify one is "+
 			"configured",
 			slog.String("app_domain", cfg.AppDomain))
 	}
@@ -189,7 +189,7 @@ func run() error {
 		opts.Registries = registry.New(pool, keeper, log)
 	} else {
 		log.Info("add-node and the image registry are off — " +
-			"set YACHT_SECRET_KEY to store a cluster join token or registry password")
+			"set OZYMANDIS_SECRET_KEY to store a cluster join token or registry password")
 	}
 
 	if cfg.AccountsEnabled() {
@@ -199,7 +199,7 @@ func run() error {
 		opts.MagicLinkTTL = cfg.MagicLinkTTL
 		opts.SessionTTL = cfg.SessionTTL
 		// The team the install has been running as. The first person to sign in
-		// inherits it, so the apps already deployed under YACHT_OWNER_ID stay
+		// inherits it, so the apps already deployed under OZYMANDIS_OWNER_ID stay
 		// reachable instead of belonging to an owner nobody can authenticate as.
 		opts.BootstrapTeamID = cfg.OwnerID
 		opts.BootstrapTeamName = cfg.OwnerName
@@ -267,8 +267,8 @@ func newIdentity(
 		// operator who does not know it will wait for mail that is never sent.
 		if cfg.MailTransport() == "log" {
 			log.Warn("no mail transport configured — sign-in links will be written " +
-				"to this log instead of being sent; set YACHT_SMTP_ADDR or " +
-				"YACHT_RESEND_API_KEY to deliver them")
+				"to this log instead of being sent; set OZYMANDIS_SMTP_ADDR or " +
+				"OZYMANDIS_RESEND_API_KEY to deliver them")
 		}
 		return accounts.Provider(web.SessionCookie), nil
 	}
@@ -276,7 +276,7 @@ func newIdentity(
 	owner := identity.Owner{ID: cfg.OwnerID, DisplayName: cfg.OwnerName}
 
 	if cfg.Unauthenticated() {
-		log.Warn("no YACHT_AUTH_TOKEN set — the dashboard is unauthenticated. " +
+		log.Warn("no OZYMANDIS_AUTH_TOKEN set — the dashboard is unauthenticated. " +
 			"Only run this way on a trusted network.")
 		return identity.NewSingleOwner(owner), nil
 	}

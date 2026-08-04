@@ -21,9 +21,9 @@ SELECT * FROM teams WHERE id = $1;
 INSERT INTO apps (
     owner_id, name, namespace, image, replicas, port, source, internal,
     cpu_request, cpu_limit, memory_request, memory_limit, project_id,
-    repo_url, repo_branch, repo_subdir
+    repo_url, repo_branch, repo_subdir, command
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 RETURNING *;
 
 -- name: GetApp :one
@@ -114,6 +114,13 @@ UPDATE apps
 SET health_path     = @health_path,
     health_liveness = @health_liveness,
     updated_at      = now()
+WHERE owner_id = @owner_id AND id = @id
+RETURNING *;
+
+-- name: SetAppCommand :one
+UPDATE apps
+SET command    = @command,
+    updated_at = now()
 WHERE owner_id = @owner_id AND id = @id
 RETURNING *;
 

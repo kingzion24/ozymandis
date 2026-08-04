@@ -12,9 +12,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/codeblocktz/yacht/internal/account"
-	"github.com/codeblocktz/yacht/internal/identity"
-	"github.com/codeblocktz/yacht/internal/notify"
+	"github.com/kingzion24/ozymandis/internal/account"
+	"github.com/kingzion24/ozymandis/internal/identity"
+	"github.com/kingzion24/ozymandis/internal/notify"
 )
 
 // TeamChoice is one team a person may act as, as the chrome needs it.
@@ -264,7 +264,7 @@ func (s *Server) teamInvite(w http.ResponseWriter, r *http.Request) {
 	// invitation the page can offer to revoke rather than a token nobody holds.
 	msg := notify.Message{
 		To:      email,
-		Subject: "You have been invited to " + displayName(owner) + " on Yacht",
+		Subject: "You have been invited to " + displayName(owner) + " on Ozymandis",
 		TextBody: "You have been invited to join " + displayName(owner) +
 			" as " + string(role) + ".\n\n" +
 			s.baseURL + "/invitations/" + raw + "\n\n" +

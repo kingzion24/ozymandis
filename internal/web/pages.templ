@@ -2,11 +2,11 @@ package web
 
 import (
 	"fmt"
-	"github.com/codeblocktz/yacht/internal/web/ui/sheet"
+	"github.com/kingzion24/ozymandis/internal/web/ui/sheet"
 	"strconv"
 
-	"github.com/codeblocktz/yacht/internal/app"
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/app"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 // ---------------------------------------------------------------- shared
@@ -625,7 +625,7 @@ templ appVariables(d AppDetailData) {
 				Secret, so it appears neither in a database dump nor in
 				<code class="mono">kubectl get deploy -o yaml</code>. It cannot be shown
 				again afterwards — replace it instead. Setting one requires
-				<code class="mono">YACHT_SECRET_KEY</code>.
+				<code class="mono">OZYMANDIS_SECRET_KEY</code>.
 			</p>
 		</div>
 	</div>
@@ -713,6 +713,28 @@ templ appSettings(d AppDetailData) {
 				container, so a check that is a little too impatient turns a slow start
 				into a restart loop — which looks like the app being broken rather than
 				the check being wrong.
+			</p>
+		</div>
+	</div>
+	<div class="panel mb-5">
+		<div class="panel-header"><span class="panel-title">Command</span></div>
+		<div class="panel-body">
+			<form method="post" action={ templ.SafeURL("/apps/" + a.Name + "/command") } class="flex flex-wrap items-end gap-4">
+				<div class="field grow">
+					<label class="label" for="command">Command</label>
+					<input class="control mono" id="command" name="command" value={ a.Command } placeholder="python log_consumer.py"/>
+					<span class="hint">
+						Replaces the image's entrypoint. Empty runs whatever the image says to.
+					</span>
+				</div>
+				<button class="btn btn-primary mb-6" type="submit">Save</button>
+			</form>
+			<p class="text-[12px] text-muted-foreground">
+				This is what lets one image run as several apps — a web process and the
+				worker that shares its code, deployed and scaled separately. No shell runs
+				between this and the process, so a <code class="mono">$VAR</code> or a pipe
+				arrives as literal text. Quote an argument to keep the spaces inside it,
+				and ask for a shell explicitly when you want one: <code class="mono">sh -c "…"</code>.
 			</p>
 		</div>
 	</div>
@@ -808,6 +830,7 @@ type NewAppForm struct {
 	Port     string
 	Replicas string
 	Env      string
+	Command  string
 
 	// The repository, for a source that is built rather than pulled.
 	RepoURL    string
@@ -976,6 +999,14 @@ templ newAppForm(d NewAppData) {
 					</div>
 				</div>
 				<div class="field">
+					<label class="label" for="command">Command</label>
+					<input class="control mono" id="command" name="command" value={ d.Form.Command } placeholder="python log_consumer.py"/>
+					<span class="hint">
+						Optional. Replaces the image's entrypoint, so one image can run as
+						several apps. Empty runs whatever the image says to.
+					</span>
+				</div>
+				<div class="field">
 					<label class="label" for="env">Environment</label>
 					<textarea class="control" id="env" name="env" rows="5" placeholder="LOG_LEVEL=info">{ d.Form.Env }</textarea>
 					<span class="hint">One KEY=value per line. Blank lines and # comments are ignored.</span>
@@ -1049,7 +1080,7 @@ templ Cluster(d ClusterData) {
 					<p class="font-medium text-foreground">No nodes</p>
 					<p>
 						The orchestrator is not connected to a cluster. Check
-						<code class="mono">YACHT_KUBECONFIG</code> and restart.
+						<code class="mono">OZYMANDIS_KUBECONFIG</code> and restart.
 					</p>
 				</div>
 			</div>
@@ -1405,7 +1436,7 @@ templ Settings(d SettingsData) {
 			<div>
 				<div class="font-medium">No authentication configured</div>
 				<p class="mt-0.5 text-muted-foreground">
-					Set <code class="mono">YACHT_AUTH_TOKEN</code> before exposing this
+					Set <code class="mono">OZYMANDIS_AUTH_TOKEN</code> before exposing this
 					dashboard beyond a trusted network.
 				</p>
 			</div>
@@ -1443,7 +1474,7 @@ templ Settings(d SettingsData) {
 					if d.AppDomain == "" {
 						<span class="text-muted-foreground">
 							Not configured — apps are reachable only inside the cluster. Set
-							<code class="mono">YACHT_APP_DOMAIN</code> to give each app a URL.
+							<code class="mono">OZYMANDIS_APP_DOMAIN</code> to give each app a URL.
 						</span>
 					} else {
 						<span class="mono">*.{ d.AppDomain }</span>
@@ -1471,7 +1502,7 @@ templ Settings(d SettingsData) {
 					} else {
 						@statusDot("Off", "status-neutral")
 						<span class="ml-1 text-muted-foreground">
-							single owner. Set <code class="mono">YACHT_BASE_URL</code> to add people.
+							single owner. Set <code class="mono">OZYMANDIS_BASE_URL</code> to add people.
 						</span>
 					}
 				</dd>
@@ -1481,8 +1512,8 @@ templ Settings(d SettingsData) {
 						@statusDot("Written to the log", "status-warn")
 						<span class="ml-1 text-muted-foreground">
 							nothing is sent. This is the way back in if delivery breaks, but
-							set <code class="mono">YACHT_SMTP_ADDR</code> or
-							<code class="mono">YACHT_RESEND_API_KEY</code> before inviting anyone.
+							set <code class="mono">OZYMANDIS_SMTP_ADDR</code> or
+							<code class="mono">OZYMANDIS_RESEND_API_KEY</code> before inviting anyone.
 						</span>
 					</dd>
 				}

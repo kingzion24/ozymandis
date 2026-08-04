@@ -11,10 +11,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/codeblocktz/yacht/internal/account"
-	"github.com/codeblocktz/yacht/internal/cluster"
-	"github.com/codeblocktz/yacht/internal/identity"
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/account"
+	"github.com/kingzion24/ozymandis/internal/cluster"
+	"github.com/kingzion24/ozymandis/internal/identity"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 const probeToken = "K10probe::server:hunter2"
@@ -45,7 +45,7 @@ func (f *fakeJoiner) SetJoin(_ context.Context, serverURL, token string, _ uuid.
 }
 
 func (f *fakeJoiner) DNS(context.Context) (cluster.DNS, error) {
-	return cluster.DNS{CNAMETarget: "edge.yacht.test", TXTPrefix: "extdns-"}, nil
+	return cluster.DNS{CNAMETarget: "edge.ozymandis.test", TXTPrefix: "extdns-"}, nil
 }
 
 func (f *fakeJoiner) SetDNS(_ context.Context, target, prefix string) error {
@@ -70,7 +70,7 @@ func joinServer(t *testing.T, j Joiner, role account.Role) http.Handler {
 		Identity:        identity.NewSingleOwner(identity.Owner{ID: team}),
 		Accounts:        &roledAccounts{fakeAccounts: &fakeAccounts{}, team: team, role: role},
 		Mailer:          &fakeMailer{},
-		BaseURL:         "https://yacht.test",
+		BaseURL:         "https://ozymandis.test",
 		BootstrapTeamID: team,
 		Joiner:          j,
 		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -166,7 +166,7 @@ func TestAnUnreachableClusterStillYieldsACommand(t *testing.T) {
 		Identity:        identity.NewSingleOwner(identity.Owner{ID: team}),
 		Accounts:        &roledAccounts{fakeAccounts: &fakeAccounts{}, team: team, role: account.RoleOwner},
 		Mailer:          &fakeMailer{},
-		BaseURL:         "https://yacht.test",
+		BaseURL:         "https://ozymandis.test",
 		BootstrapTeamID: team,
 		Joiner:          &fakeJoiner{configured: true},
 		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -193,7 +193,7 @@ func TestThePoolRidesInTheCommandAndIsChecked(t *testing.T) {
 	h := joinServer(t, &fakeJoiner{configured: true}, account.RoleOwner)
 
 	body := do(h, signedIn(http.MethodGet, "/cluster/nodes/add?pool=gpu")).Body.String()
-	if !strings.Contains(body, "--node-label yacht/pool=gpu") {
+	if !strings.Contains(body, "--node-label ozymandis/pool=gpu") {
 		t.Error("the chosen pool is not in the command")
 	}
 

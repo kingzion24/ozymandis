@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/codeblocktz/yacht/internal/store/dbgen"
+	"github.com/kingzion24/ozymandis/internal/store/dbgen"
 )
 
 // ErrNotVerified means the domain's DNS does not point at the platform yet.

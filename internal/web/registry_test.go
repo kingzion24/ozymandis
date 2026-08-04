@@ -10,7 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/codeblocktz/yacht/internal/registry"
+	"github.com/kingzion24/ozymandis/internal/registry"
 )
 
 type fakeRegistries struct {
@@ -179,7 +179,7 @@ func TestWithNoKeyTheFormSaysWhyRatherThanFailingLater(t *testing.T) {
 	h := testServer(t, Options{Registries: &fakeRegistries{canStore: false}})
 	body := get(t, h, "/cluster/registry").Body.String()
 
-	if !strings.Contains(body, "YACHT_SECRET_KEY") {
+	if !strings.Contains(body, "OZYMANDIS_SECRET_KEY") {
 		t.Error("nothing names the missing key")
 	}
 	if !strings.Contains(body, "disabled") {

@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
-	"github.com/codeblocktz/yacht/internal/store/dbgen"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/store/dbgen"
 )
 
 // ErrVolumeShrink means a resize asked for less than the volume already has.

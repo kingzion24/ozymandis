@@ -2,7 +2,7 @@
  * The request timeline above an app's HTTP log.
  *
  * TypeScript, bundled by esbuild into a file that is committed. Building and
- * running Yacht need neither Node nor this source — which is the same bargain
+ * running Ozymandis need neither Node nor this source — which is the same bargain
  * the stylesheet strikes, and it is what keeps a self-hoster able to run the
  * binary without a toolchain.
  */

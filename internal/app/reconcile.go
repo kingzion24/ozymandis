@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
-	"github.com/codeblocktz/yacht/internal/store/dbgen"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/store/dbgen"
 )
 
 // ReconcileInterval is how often builds are settled against the cluster.
@@ -102,7 +102,7 @@ func (s *Service) settleBuild(
 			"deploy again to use it"
 	default:
 		message = "the build stopped without finishing, and the job that was " +
-			"running it is gone — this usually means Yacht was restarted mid-build"
+			"running it is gone — this usually means Ozymandis was restarted mid-build"
 	}
 
 	if _, err := s.q.FinishBuild(ctx, dbgen.FinishBuildParams{

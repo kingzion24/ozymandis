@@ -10,7 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 // ingressSelectors finds the controller writing the access log.
@@ -183,7 +183,7 @@ func parseAccessLine(raw []byte) (orchestrator.HTTPLogLine, bool) {
 
 // HTTPLogHint is the configuration that makes this work.
 //
-// Returned as text for the page to show rather than applied. Yacht does not
+// Returned as text for the page to show rather than applied. Ozymandis does not
 // own the ingress controller: it is installed by whoever built the cluster,
 // its access log is their setting, and a platform that quietly rewrote it
 // would be changing something every other workload depends on.

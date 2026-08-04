@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/codeblocktz/yacht/internal/store/dbgen"
+	"github.com/kingzion24/ozymandis/internal/store/dbgen"
 )
 
 // ErrInvitationNotFound is returned when there is no such invitation to revoke

@@ -16,7 +16,7 @@ import (
 
 	"github.com/a-h/templ"
 
-	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/kingzion24/ozymandis/internal/app"
 )
 
 // TestTemplatesOnlyUseClassesThatExist.

@@ -17,7 +17,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	metricsv "k8s.io/metrics/pkg/client/clientset/versioned"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 // Config selects how to reach the cluster.

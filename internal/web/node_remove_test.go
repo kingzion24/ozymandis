@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/codeblocktz/yacht/internal/account"
-	"github.com/codeblocktz/yacht/internal/identity"
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/account"
+	"github.com/kingzion24/ozymandis/internal/identity"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 // managingOrchestrator is a Noop that can also take a node out of service.
@@ -75,7 +75,7 @@ func nodeServer(t *testing.T, orch orchestrator.Orchestrator, role account.Role)
 		Identity:        identity.NewSingleOwner(identity.Owner{ID: team}),
 		Accounts:        &roledAccounts{fakeAccounts: &fakeAccounts{}, team: team, role: role},
 		Mailer:          &fakeMailer{},
-		BaseURL:         "https://yacht.test",
+		BaseURL:         "https://ozymandis.test",
 		BootstrapTeamID: team,
 		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
@@ -87,7 +87,7 @@ func nodeServer(t *testing.T, orch orchestrator.Orchestrator, role account.Role)
 
 func busyPod() orchestrator.PodInfo {
 	return orchestrator.PodInfo{
-		Name: "api-1", Namespace: "yacht-x", Node: "agent-0", Phase: "Running",
+		Name: "api-1", Namespace: "ozymandis-x", Node: "agent-0", Phase: "Running",
 		Ready: 1, Total: 1, DrainMoves: true,
 	}
 }

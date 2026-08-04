@@ -4,7 +4,7 @@ import "testing"
 
 func validSpec() AppSpec {
 	return AppSpec{
-		Ref:      Ref{Owner: "owner-1", Namespace: "yacht-demo", Name: "web"},
+		Ref:      Ref{Owner: "owner-1", Namespace: "ozymandis-demo", Name: "web"},
 		Image:    "nginx:alpine",
 		Replicas: 1,
 		Port:     8080,

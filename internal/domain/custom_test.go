@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/codeblocktz/yacht/internal/store/dbgen"
+	"github.com/kingzion24/ozymandis/internal/store/dbgen"
 )
 
 // fakeResolver answers from a map, so verification is tested without a network

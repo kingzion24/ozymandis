@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/codeblocktz/yacht/internal/app"
-	"github.com/codeblocktz/yacht/internal/identity"
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/app"
+	"github.com/kingzion24/ozymandis/internal/identity"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 type fakeStacks struct {
@@ -38,7 +38,7 @@ func stackServer(t *testing.T, st Stacks) http.Handler {
 		Identity:        identity.NewSingleOwner(identity.Owner{ID: team}),
 		Accounts:        &roledAccounts{fakeAccounts: &fakeAccounts{}, team: team, role: "owner"},
 		Mailer:          &fakeMailer{},
-		BaseURL:         "https://yacht.test",
+		BaseURL:         "https://ozymandis.test",
 		BootstrapTeamID: team,
 		Stacks:          st,
 		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),

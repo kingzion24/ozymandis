@@ -23,10 +23,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/codeblocktz/yacht/internal/domain"
-	"github.com/codeblocktz/yacht/internal/orchestrator"
-	"github.com/codeblocktz/yacht/internal/secret"
-	"github.com/codeblocktz/yacht/internal/store/dbgen"
+	"github.com/kingzion24/ozymandis/internal/domain"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/secret"
+	"github.com/kingzion24/ozymandis/internal/store/dbgen"
 )
 
 // ErrNotFound is returned when an app does not exist for the given owner.
@@ -50,6 +50,13 @@ type App struct {
 	// public internet.
 	Source   Source
 	Internal bool
+
+	// Command replaces the image's entrypoint, as a person typed it. Empty
+	// runs whatever the image already says to.
+	//
+	// Held as the raw line rather than the parsed argv so the form shows back
+	// what was written. ParseCommand turns it into argv on every apply.
+	Command string
 
 	// Repo is where the source comes from, for an app built rather than
 	// pulled. Zero on an image-sourced app.
@@ -272,6 +279,10 @@ type CreateInput struct {
 	Port     int32
 	Env      map[string]string
 
+	// Command replaces the image's entrypoint. Empty runs the image's own,
+	// which is what an app deployed from a purpose-built image wants.
+	Command string
+
 	CPURequest    string
 	CPULimit      string
 	MemoryRequest string
@@ -295,6 +306,13 @@ func (in CreateInput) Validate() error {
 		return errors.New("replicas must be between 0 and 50")
 	case in.Port < 0 || in.Port > 65535:
 		return errors.New("port must be between 0 and 65535")
+	}
+	// Parsed for its error rather than its result: a command that cannot be
+	// split is refused at the form, where the person who typed the quote is
+	// still looking at it, rather than at the apply that happens after the row
+	// is written.
+	if _, err := ParseCommand(in.Command); err != nil {
+		return err
 	}
 	return nil
 }
@@ -387,6 +405,7 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 		RepoUrl:       in.Repo.URL,
 		RepoBranch:    in.Repo.Branch,
 		RepoSubdir:    in.Repo.Subdir,
+		Command:       strings.TrimSpace(in.Command),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -564,9 +583,18 @@ func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
 		return err
 	}
 
+	// Validated on the way in, so this only fails for a row edited outside the
+	// engine. Refusing the apply is still right: the alternative is deploying
+	// the image's own entrypoint, which is a working app doing the wrong job.
+	command, err := ParseCommand(a.Command)
+	if err != nil {
+		return fmt.Errorf("app: %s: %w", a.Name, err)
+	}
+
 	return s.orch.ApplyApp(ctx, orchestrator.AppSpec{
 		Ref:           a.Ref(),
 		Image:         a.Image,
+		Command:       command,
 		RegistryAuth:  s.pullAuth(ctx, a),
 		Replicas:      a.Replicas,
 		Port:          a.Port,
@@ -1069,7 +1097,7 @@ func (s *Service) Delete(ctx context.Context, ownerID, name string) error {
 // the readable name lives in a label instead.
 func Namespace(ownerID, name string) string {
 	sum := sha256.Sum256([]byte(ownerID + "/" + name))
-	return "yacht-" + hex.EncodeToString(sum[:])[:16]
+	return "ozymandis-" + hex.EncodeToString(sum[:])[:16]
 }
 
 func toApp(row dbgen.App) App {
@@ -1083,6 +1111,7 @@ func toApp(row dbgen.App) App {
 		Port:          row.Port,
 		Source:        Source(row.Source),
 		RunAsUser:     row.RunAsUser,
+		Command:       row.Command,
 		Repo: Repo{
 			URL: row.RepoUrl, Branch: row.RepoBranch, Subdir: row.RepoSubdir,
 		},
@@ -1166,6 +1195,46 @@ func (s *Service) SetHealth(
 	s.log.Info("health probe set",
 		slog.String("app", name), slog.String("path", probe.HealthPath),
 		slog.Bool("liveness", probe.Liveness))
+	return nil
+}
+
+// SetCommand replaces the image's entrypoint, or restores it.
+//
+// Applied immediately rather than at the next deploy, because the command is
+// the app: changing it and leaving the old one running would show a workload
+// the dashboard describes as doing something it is not.
+func (s *Service) SetCommand(ctx context.Context, ownerID, name, command string) error {
+	a, err := s.Get(ctx, ownerID, name)
+	if err != nil {
+		return err
+	}
+
+	command = strings.TrimSpace(command)
+	argv, err := ParseCommand(command)
+	if err != nil {
+		return err
+	}
+	if err := (orchestrator.AppSpec{
+		Ref: a.Ref(), Image: a.Image, Replicas: a.Replicas,
+		Port: a.Port, Command: argv,
+	}).Validate(); err != nil {
+		return err
+	}
+
+	row, err := s.q.SetAppCommand(ctx, dbgen.SetAppCommandParams{
+		OwnerID: ownerID, ID: a.ID, Command: command,
+	})
+	if err != nil {
+		return fmt.Errorf("app: set command: %w", err)
+	}
+
+	updated := toApp(row)
+	if err := s.apply(ctx, s.q, updated); err != nil {
+		return err
+	}
+
+	s.log.Info("command set",
+		slog.String("app", name), slog.Int("args", len(argv)))
 	return nil
 }
 

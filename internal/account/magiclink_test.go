@@ -101,7 +101,7 @@ func TestUnknownMagicLinkIsRejected(t *testing.T) {
 // ------------------------------------------------------- first-user bootstrap
 
 // The spec's third lockout guard. An install that switches accounts on has apps
-// already deployed under YACHT_OWNER_ID; without this they belong to a team
+// already deployed under OZYMANDIS_OWNER_ID; without this they belong to a team
 // nobody can sign in to.
 func TestBootstrapOwnerClaimsTheConfiguredTeam(t *testing.T) {
 	s := testService(t)

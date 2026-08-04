@@ -11,7 +11,7 @@ func setEnv(t *testing.T, kv map[string]string) {
 	t.Helper()
 	// A database URL is required by validate(); supply one so these tests are
 	// about the new variables and nothing else.
-	t.Setenv("YACHT_DATABASE_URL", "postgres://localhost/yacht?sslmode=disable")
+	t.Setenv("OZYMANDIS_DATABASE_URL", "postgres://localhost/ozymandis?sslmode=disable")
 	for k, v := range kv {
 		t.Setenv(k, v)
 	}
@@ -33,9 +33,9 @@ func TestAppDomainDefaultsToOff(t *testing.T) {
 
 func TestAppDomainAndReservedDomainsLoad(t *testing.T) {
 	setEnv(t, map[string]string{
-		"YACHT_APP_DOMAIN":       "apps.example.com",
-		"YACHT_WILDCARD_TLS":     "true",
-		"YACHT_RESERVED_DOMAINS": "internal.example.com, admin.example.com",
+		"OZYMANDIS_APP_DOMAIN":       "apps.example.com",
+		"OZYMANDIS_WILDCARD_TLS":     "true",
+		"OZYMANDIS_RESERVED_DOMAINS": "internal.example.com, admin.example.com",
 	})
 	c, err := Load()
 	if err != nil {
@@ -58,20 +58,20 @@ func TestAppDomainAndReservedDomainsLoad(t *testing.T) {
 // useless: the operator believes apps are served over TLS and nothing says
 // otherwise. Fail at startup instead.
 func TestWildcardTLSWithoutAnAppDomainFails(t *testing.T) {
-	setEnv(t, map[string]string{"YACHT_WILDCARD_TLS": "true"})
+	setEnv(t, map[string]string{"OZYMANDIS_WILDCARD_TLS": "true"})
 	_, err := Load()
 	if err == nil {
-		t.Fatal("Load accepted YACHT_WILDCARD_TLS with no YACHT_APP_DOMAIN")
+		t.Fatal("Load accepted OZYMANDIS_WILDCARD_TLS with no OZYMANDIS_APP_DOMAIN")
 	}
-	if !strings.Contains(err.Error(), "YACHT_APP_DOMAIN") {
+	if !strings.Contains(err.Error(), "OZYMANDIS_APP_DOMAIN") {
 		t.Fatalf("error should name the missing variable, got: %v", err)
 	}
 }
 
 func TestMalformedAppDomainFails(t *testing.T) {
-	setEnv(t, map[string]string{"YACHT_APP_DOMAIN": "not a domain"})
+	setEnv(t, map[string]string{"OZYMANDIS_APP_DOMAIN": "not a domain"})
 	if _, err := Load(); err == nil {
-		t.Fatal("Load accepted a malformed YACHT_APP_DOMAIN")
+		t.Fatal("Load accepted a malformed OZYMANDIS_APP_DOMAIN")
 	}
 }
 
@@ -88,7 +88,7 @@ func TestEveryVariableIsDocumented(t *testing.T) {
 	}
 
 	for _, name := range []string{
-		"YACHT_APP_DOMAIN", "YACHT_WILDCARD_TLS", "YACHT_RESERVED_DOMAINS",
+		"OZYMANDIS_APP_DOMAIN", "OZYMANDIS_WILDCARD_TLS", "OZYMANDIS_RESERVED_DOMAINS",
 	} {
 		if !strings.Contains(string(src), name) {
 			t.Fatalf("%s is not read by config.go", name)
@@ -111,7 +111,7 @@ func TestOverlongAppDomainFailsAtStartup(t *testing.T) {
 
 	for name, domain := range cases {
 		t.Run(name, func(t *testing.T) {
-			setEnv(t, map[string]string{"YACHT_APP_DOMAIN": domain})
+			setEnv(t, map[string]string{"OZYMANDIS_APP_DOMAIN": domain})
 			if _, err := Load(); err == nil {
 				t.Fatalf("Load accepted an app domain that can never yield a hostname (len=%d)", len(domain))
 			}
@@ -120,7 +120,7 @@ func TestOverlongAppDomainFailsAtStartup(t *testing.T) {
 }
 
 func TestUsableAppDomainStillLoads(t *testing.T) {
-	setEnv(t, map[string]string{"YACHT_APP_DOMAIN": "apps.example.com"})
+	setEnv(t, map[string]string{"OZYMANDIS_APP_DOMAIN": "apps.example.com"})
 	if _, err := Load(); err != nil {
 		t.Fatalf("Load rejected a perfectly ordinary app domain: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestUsableAppDomainStillLoads(t *testing.T) {
 func TestReservedDomainsAreValidated(t *testing.T) {
 	for _, bad := range []string{"not a domain", "https://evil.test", "*", "evil.test/path"} {
 		t.Run(bad, func(t *testing.T) {
-			setEnv(t, map[string]string{"YACHT_RESERVED_DOMAINS": bad})
+			setEnv(t, map[string]string{"OZYMANDIS_RESERVED_DOMAINS": bad})
 			if _, err := Load(); err == nil {
 				t.Fatalf("Load accepted %q as a reserved domain", bad)
 			}
@@ -141,7 +141,7 @@ func TestReservedDomainsAreValidated(t *testing.T) {
 
 func TestValidReservedDomainsLoad(t *testing.T) {
 	setEnv(t, map[string]string{
-		"YACHT_RESERVED_DOMAINS": "internal.example.com, admin.example.com",
+		"OZYMANDIS_RESERVED_DOMAINS": "internal.example.com, admin.example.com",
 	})
 	c, err := Load()
 	if err != nil {
@@ -156,18 +156,18 @@ func TestValidReservedDomainsLoad(t *testing.T) {
 // their own dashboard permanently. Accounts stay off unless a link can be
 // delivered and a URL exists to put in it.
 func TestAccountsRequireABaseURL(t *testing.T) {
-	setEnv(t, map[string]string{"YACHT_SMTP_ADDR": "smtp.example.test:587"})
+	setEnv(t, map[string]string{"OZYMANDIS_SMTP_ADDR": "smtp.example.test:587"})
 	c, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	if c.AccountsEnabled() {
-		t.Fatal("accounts enabled with no YACHT_BASE_URL — the link would point nowhere")
+		t.Fatal("accounts enabled with no OZYMANDIS_BASE_URL — the link would point nowhere")
 	}
 }
 
 func TestAccountsEnabledWithBaseURL(t *testing.T) {
-	setEnv(t, map[string]string{"YACHT_BASE_URL": "https://yacht.example.test"})
+	setEnv(t, map[string]string{"OZYMANDIS_BASE_URL": "https://ozymandis.example.test"})
 	c, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -179,10 +179,10 @@ func TestAccountsEnabledWithBaseURL(t *testing.T) {
 
 func TestSMTPAndResendTogetherFail(t *testing.T) {
 	setEnv(t, map[string]string{
-		"YACHT_BASE_URL":       "https://yacht.example.test",
-		"YACHT_SMTP_ADDR":      "smtp.example.test:587",
-		"YACHT_SMTP_FROM":      "yacht@example.test",
-		"YACHT_RESEND_API_KEY": "re_123",
+		"OZYMANDIS_BASE_URL":       "https://ozymandis.example.test",
+		"OZYMANDIS_SMTP_ADDR":      "smtp.example.test:587",
+		"OZYMANDIS_SMTP_FROM":      "ozymandis@example.test",
+		"OZYMANDIS_RESEND_API_KEY": "re_123",
 	})
 	if _, err := Load(); err == nil {
 		t.Fatal("Load accepted two mail transports at once")
@@ -191,8 +191,8 @@ func TestSMTPAndResendTogetherFail(t *testing.T) {
 
 func TestSMTPWithoutFromFails(t *testing.T) {
 	setEnv(t, map[string]string{
-		"YACHT_BASE_URL":  "https://yacht.example.test",
-		"YACHT_SMTP_ADDR": "smtp.example.test:587",
+		"OZYMANDIS_BASE_URL":  "https://ozymandis.example.test",
+		"OZYMANDIS_SMTP_ADDR": "smtp.example.test:587",
 	})
 	if _, err := Load(); err == nil {
 		t.Fatal("Load accepted SMTP with no from address")
@@ -200,15 +200,15 @@ func TestSMTPWithoutFromFails(t *testing.T) {
 }
 
 func TestMalformedBaseURLFails(t *testing.T) {
-	setEnv(t, map[string]string{"YACHT_BASE_URL": "not a url"})
+	setEnv(t, map[string]string{"OZYMANDIS_BASE_URL": "not a url"})
 	if _, err := Load(); err == nil {
 		t.Fatal("Load accepted a malformed base URL")
 	}
 }
 
-// TestEveryVariableReadIsDocumented scans for every YACHT_* string config.go
+// TestEveryVariableReadIsDocumented scans for every OZYMANDIS_* string config.go
 // reads, rather than checking a list someone has to remember to extend. The
-// hardcoded version passed while YACHT_SHUTDOWN_TIMEOUT went undocumented.
+// hardcoded version passed while OZYMANDIS_SHUTDOWN_TIMEOUT went undocumented.
 func TestEveryVariableReadIsDocumented(t *testing.T) {
 	src, err := os.ReadFile("config.go")
 	if err != nil {
@@ -219,9 +219,9 @@ func TestEveryVariableReadIsDocumented(t *testing.T) {
 		t.Fatalf("read .env.example: %v", err)
 	}
 
-	found := regexp.MustCompile(`"(YACHT_[A-Z_]+)"`).FindAllStringSubmatch(string(src), -1)
+	found := regexp.MustCompile(`"(OZYMANDIS_[A-Z_]+)"`).FindAllStringSubmatch(string(src), -1)
 	if len(found) == 0 {
-		t.Fatal("no YACHT_* variables found in config.go — the scan is broken")
+		t.Fatal("no OZYMANDIS_* variables found in config.go — the scan is broken")
 	}
 
 	seen := map[string]bool{}

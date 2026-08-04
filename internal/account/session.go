@@ -10,8 +10,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/codeblocktz/yacht/internal/identity"
-	"github.com/codeblocktz/yacht/internal/store/dbgen"
+	"github.com/kingzion24/ozymandis/internal/identity"
+	"github.com/kingzion24/ozymandis/internal/store/dbgen"
 )
 
 // ErrSessionInvalid is returned for every session that cannot be used.
@@ -22,7 +22,7 @@ import (
 var ErrSessionInvalid = errors.New("account: session is not valid")
 
 // DefaultCookieName is the cookie the session provider reads.
-const DefaultCookieName = "yacht_session"
+const DefaultCookieName = "ozymandis_session"
 
 // Session is a signed-in browser.
 //

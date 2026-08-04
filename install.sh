@@ -1,10 +1,10 @@
 #!/bin/sh
 #
-# Yacht installer.
+# Ozymandis installer.
 #
-#   curl -sSL https://codeblocktz.github.io/yacht/install.sh | sudo sh
+#   curl -sSL https://kingzion24.github.io/ozymandis/install.sh | sudo sh
 #
-# Provisions K3s, Postgres, and Yacht itself as a systemd unit on a fresh
+# Provisions K3s, Postgres, and Ozymandis itself as a systemd unit on a fresh
 # Debian or Ubuntu box. Safe to re-run: it replaces the binary and the unit and
 # leaves every generated secret alone.
 #
@@ -18,14 +18,14 @@
 
 set -eu
 
-REPO="codeblocktz/yacht"
+REPO="codeblocktz/ozymandis"
 INSTALL_DIR="/usr/local/bin"
-CONF_DIR="/etc/yacht"
-ENV_FILE="${CONF_DIR}/yacht.env"
+CONF_DIR="/etc/ozymandis"
+ENV_FILE="${CONF_DIR}/ozymandis.env"
 K3S_KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
 KUBECONFIG_DST="${CONF_DIR}/kubeconfig"
-UNIT_FILE="/etc/systemd/system/yacht.service"
-SVC_USER="yacht"
+UNIT_FILE="/etc/systemd/system/ozymandis.service"
+SVC_USER="ozymandis"
 
 VERSION=""
 PORT="8080"
@@ -83,11 +83,11 @@ require_tools() {
 # arrives on stdin — the exact case --help most needs to work in.
 usage() {
 	cat <<-EOF
-		Yacht installer.
+		Ozymandis installer.
 
-		  curl -sSL https://codeblocktz.github.io/yacht/install.sh | sudo sh
+		  curl -sSL https://kingzion24.github.io/ozymandis/install.sh | sudo sh
 
-		Provisions K3s, Postgres, and Yacht as a systemd unit on Debian or
+		Provisions K3s, Postgres, and Ozymandis as a systemd unit on Debian or
 		Ubuntu. Safe to re-run: it replaces the binary and the unit and leaves
 		every generated secret alone.
 
@@ -122,7 +122,7 @@ parse_flags() {
 
 # env_get reads a value out of the existing environment file.
 #
-# Re-running the installer must never mint a new YACHT_SECRET_KEY: it seals
+# Re-running the installer must never mint a new OZYMANDIS_SECRET_KEY: it seals
 # every stored secret, and losing it loses them with no recovery path. Same for
 # the database password, which is the only copy anybody has.
 env_get() {
@@ -148,10 +148,10 @@ resolve_version() {
 }
 
 install_binary() {
-	step "Installing yacht ${VERSION} (${ARCH})"
+	step "Installing ozymandis ${VERSION} (${ARCH})"
 
 	num="${VERSION#v}"
-	tarball="yacht_${num}_linux_${ARCH}.tar.gz"
+	tarball="ozymandis_${num}_linux_${ARCH}.tar.gz"
 	base="https://github.com/${REPO}/releases/download/${VERSION}"
 
 	tmp=$(mktemp -d)
@@ -172,11 +172,11 @@ install_binary() {
 	say "checksum ok"
 
 	tar -xzf "${tmp}/${tarball}" -C "$tmp" || die "could not unpack ${tarball}"
-	[ -f "${tmp}/yacht" ] || die "${tarball} does not contain a yacht binary"
+	[ -f "${tmp}/ozymandis" ] || die "${tarball} does not contain a ozymandis binary"
 
-	install -m 0755 "${tmp}/yacht" "${INSTALL_DIR}/yacht.new"
-	mv -f "${INSTALL_DIR}/yacht.new" "${INSTALL_DIR}/yacht"
-	say "${INSTALL_DIR}/yacht"
+	install -m 0755 "${tmp}/ozymandis" "${INSTALL_DIR}/ozymandis.new"
+	mv -f "${INSTALL_DIR}/ozymandis.new" "${INSTALL_DIR}/ozymandis"
+	say "${INSTALL_DIR}/ozymandis"
 
 	rm -rf "$tmp"
 	trap - EXIT INT TERM
@@ -222,7 +222,7 @@ install_postgres() {
 
 	# An existing DSN is reused verbatim. The role's password lives nowhere
 	# else, so regenerating one would orphan the database the install is on.
-	if existing=$(env_get YACHT_DATABASE_URL); then
+	if existing=$(env_get OZYMANDIS_DATABASE_URL); then
 		step "Keeping the existing database"
 		DATABASE_URL="$existing"
 		return 0
@@ -240,22 +240,22 @@ install_postgres() {
 
 	pw=$(rand_hex 24)
 	role_exists=$(su - postgres -c \
-		"psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='yacht'\"" 2>/dev/null || true)
+		"psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='ozymandis'\"" 2>/dev/null || true)
 	if [ "$role_exists" = "1" ]; then
-		su - postgres -c "psql -qc \"ALTER ROLE yacht WITH LOGIN PASSWORD '${pw}'\"" >/dev/null \
-			|| die "could not reset the yacht role password"
+		su - postgres -c "psql -qc \"ALTER ROLE ozymandis WITH LOGIN PASSWORD '${pw}'\"" >/dev/null \
+			|| die "could not reset the ozymandis role password"
 	else
-		su - postgres -c "psql -qc \"CREATE ROLE yacht WITH LOGIN PASSWORD '${pw}'\"" >/dev/null \
-			|| die "could not create the yacht role"
+		su - postgres -c "psql -qc \"CREATE ROLE ozymandis WITH LOGIN PASSWORD '${pw}'\"" >/dev/null \
+			|| die "could not create the ozymandis role"
 	fi
 
 	db_exists=$(su - postgres -c \
-		"psql -tAc \"SELECT 1 FROM pg_database WHERE datname='yacht'\"" 2>/dev/null || true)
+		"psql -tAc \"SELECT 1 FROM pg_database WHERE datname='ozymandis'\"" 2>/dev/null || true)
 	if [ "$db_exists" != "1" ]; then
-		su - postgres -c "createdb -O yacht yacht" || die "could not create the yacht database"
+		su - postgres -c "createdb -O ozymandis ozymandis" || die "could not create the ozymandis database"
 	fi
 
-	DATABASE_URL="postgres://yacht:${pw}@127.0.0.1:5432/yacht?sslmode=disable"
+	DATABASE_URL="postgres://ozymandis:${pw}@127.0.0.1:5432/ozymandis?sslmode=disable"
 	say "database ready"
 }
 
@@ -276,32 +276,32 @@ configure() {
 	[ -r "$K3S_KUBECONFIG" ] || die "${K3S_KUBECONFIG} is not readable"
 	install -o "$SVC_USER" -g "$SVC_USER" -m 0600 "$K3S_KUBECONFIG" "$KUBECONFIG_DST"
 
-	secret_key=$(env_get YACHT_SECRET_KEY || rand_b64 32)
+	secret_key=$(env_get OZYMANDIS_SECRET_KEY || rand_b64 32)
 	if [ "$ROTATE_TOKEN" = "yes" ]; then
 		auth_token=$(rand_hex 24)
 	else
-		auth_token=$(env_get YACHT_AUTH_TOKEN || rand_hex 24)
+		auth_token=$(env_get OZYMANDIS_AUTH_TOKEN || rand_hex 24)
 	fi
-	owner_email=$(env_get YACHT_OWNER_EMAIL || printf '')
+	owner_email=$(env_get OZYMANDIS_OWNER_EMAIL || printf '')
 
 	umask 077
 	cat > "${ENV_FILE}.new" <<-EOF
-		# Written by the Yacht installer. Re-running preserves every value here
+		# Written by the Ozymandis installer. Re-running preserves every value here
 		# except the port and the binary; edit freely and restart the service.
 		#
-		# YACHT_SECRET_KEY seals stored secrets. There is no recovery path if it
+		# OZYMANDIS_SECRET_KEY seals stored secrets. There is no recovery path if it
 		# is lost, so back this file up before you need it.
-		YACHT_DATABASE_URL=${DATABASE_URL}
-		YACHT_KUBECONFIG=${KUBECONFIG_DST}
-		YACHT_ADDR=:${PORT}
-		YACHT_AUTH_TOKEN=${auth_token}
-		YACHT_SECRET_KEY=${secret_key}
-		YACHT_OWNER_EMAIL=${owner_email}
+		OZYMANDIS_DATABASE_URL=${DATABASE_URL}
+		OZYMANDIS_KUBECONFIG=${KUBECONFIG_DST}
+		OZYMANDIS_ADDR=:${PORT}
+		OZYMANDIS_AUTH_TOKEN=${auth_token}
+		OZYMANDIS_SECRET_KEY=${secret_key}
+		OZYMANDIS_OWNER_EMAIL=${owner_email}
 
-		# Set YACHT_BASE_URL to a public https URL to turn magic-link sign-in on,
-		# and YACHT_APP_DOMAIN to the domain apps get a hostname under.
-		#YACHT_BASE_URL=
-		#YACHT_APP_DOMAIN=
+		# Set OZYMANDIS_BASE_URL to a public https URL to turn magic-link sign-in on,
+		# and OZYMANDIS_APP_DOMAIN to the domain apps get a hostname under.
+		#OZYMANDIS_BASE_URL=
+		#OZYMANDIS_APP_DOMAIN=
 	EOF
 	chown root:"$SVC_USER" "${ENV_FILE}.new"
 	chmod 0640 "${ENV_FILE}.new"
@@ -315,7 +315,7 @@ install_unit() {
 	step "Installing the systemd unit"
 	cat > "$UNIT_FILE" <<-EOF
 		[Unit]
-		Description=Yacht — a self-hosted PaaS for Kubernetes
+		Description=Ozymandis — a self-hosted PaaS for Kubernetes
 		Documentation=https://github.com/${REPO}
 		After=network-online.target postgresql.service k3s.service
 		Wants=network-online.target
@@ -325,7 +325,7 @@ install_unit() {
 		User=${SVC_USER}
 		Group=${SVC_USER}
 		EnvironmentFile=${ENV_FILE}
-		ExecStart=${INSTALL_DIR}/yacht
+		ExecStart=${INSTALL_DIR}/ozymandis
 		Restart=always
 		RestartSec=5
 
@@ -341,9 +341,9 @@ install_unit() {
 		WantedBy=multi-user.target
 	EOF
 	systemctl daemon-reload
-	systemctl enable yacht >/dev/null 2>&1
-	systemctl restart yacht
-	say "yacht.service started"
+	systemctl enable ozymandis >/dev/null 2>&1
+	systemctl restart ozymandis
+	say "ozymandis.service started"
 }
 
 # ------------------------------------------------------------------ verify ---
@@ -360,16 +360,16 @@ wait_healthy() {
 		fi
 		# 503 is the documented answer when the process is up but the cluster is
 		# not reachable yet, so it is worth continuing to wait on.
-		if ! systemctl is-active --quiet yacht; then
+		if ! systemctl is-active --quiet ozymandis; then
 			printf '\n'
-			journalctl -u yacht -n 40 --no-pager >&2 || true
-			die "yacht exited — see the log above"
+			journalctl -u ozymandis -n 40 --no-pager >&2 || true
+			die "ozymandis exited — see the log above"
 		fi
 		i=$((i + 1))
 		sleep 2
 	done
 	printf '\n'
-	journalctl -u yacht -n 40 --no-pager >&2 || true
+	journalctl -u ozymandis -n 40 --no-pager >&2 || true
 	die "the dashboard did not become healthy within 2 minutes"
 }
 
@@ -384,7 +384,7 @@ summary() {
 	addr=$(public_addr)
 	cat <<-EOF
 
-		  Yacht ${VERSION} is running.
+		  Ozymandis ${VERSION} is running.
 
 		    URL     http://${addr}:${PORT}
 		    Token   ${AUTH_TOKEN}
@@ -392,8 +392,8 @@ summary() {
 		  Paste the token when the dashboard asks for it.
 
 		    Config    ${ENV_FILE}
-		    Service   systemctl status yacht
-		    Logs      journalctl -u yacht -f
+		    Service   systemctl status ozymandis
+		    Logs      journalctl -u ozymandis -f
 
 		  This dashboard is served over plain HTTP, so the token crosses the
 		  network in the clear. Put it behind a domain and TLS before you rely
@@ -401,7 +401,7 @@ summary() {
 
 		    ssh -L ${PORT}:127.0.0.1:${PORT} root@${addr}
 
-		  Back up ${ENV_FILE}. YACHT_SECRET_KEY seals your stored secrets and
+		  Back up ${ENV_FILE}. OZYMANDIS_SECRET_KEY seals your stored secrets and
 		  cannot be regenerated.
 
 	EOF
@@ -415,7 +415,7 @@ main() {
 	require_platform
 	require_tools
 
-	printf '\n\033[1mYacht installer\033[0m — %s/%s\n' "$(uname -s)" "$ARCH"
+	printf '\n\033[1mOzymandis installer\033[0m — %s/%s\n' "$(uname -s)" "$ARCH"
 
 	resolve_version
 	install_binary

@@ -13,7 +13,7 @@ Small, obviously-correct fixes need none of this — a sentence is fine.
 ## Checks
 
 - [ ] `make check` passes — and I looked for `SKIP`, since database tests skip
-      themselves without `YACHT_TEST_DATABASE_URL` and a skip reads as a pass
+      themselves without `OZYMANDIS_TEST_DATABASE_URL` and a skip reads as a pass
 - [ ] `make assets` run and the regenerated `*_templ.go` / `app.css` committed,
       if I touched a template or the CSS
 - [ ] Behaviour changes come with a test; bug fixes come with one that failed

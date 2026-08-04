@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/codeblocktz/yacht/internal/account"
-	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/kingzion24/ozymandis/internal/account"
+	"github.com/kingzion24/ozymandis/internal/app"
 )
 
 // ------------------------------------------------------------ the switcher
@@ -233,7 +233,7 @@ func (h *liveHarness) invite(
 // place it exists — the same position the invited person is in.
 func invitationToken(t *testing.T, body string) string {
 	t.Helper()
-	const prefix = "https://yacht.test/invitations/"
+	const prefix = "https://ozymandis.test/invitations/"
 	i := strings.Index(body, prefix)
 	if i < 0 {
 		t.Fatalf("no invitation link in the mail:\n%s", body)
@@ -341,8 +341,8 @@ func TestInviteSendsMailAndShowsPending(t *testing.T) {
 	}
 	// Built from the configured base URL, never from the Host header: a link
 	// built from a header is one an attacker can point at their own server and
-	// have Yacht mail to a real person.
-	if !strings.Contains(msg.TextBody, "https://yacht.test/invitations/") {
+	// have Ozymandis mail to a real person.
+	if !strings.Contains(msg.TextBody, "https://ozymandis.test/invitations/") {
 		t.Errorf("no invitation link in the mail:\n%s", msg.TextBody)
 	}
 

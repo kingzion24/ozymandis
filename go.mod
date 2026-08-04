@@ -1,4 +1,4 @@
-module github.com/codeblocktz/yacht
+module github.com/kingzion24/ozymandis
 
 go 1.26.0
 

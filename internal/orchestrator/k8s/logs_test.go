@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 // erroringReader serves some lines and then fails, standing in for a log stream

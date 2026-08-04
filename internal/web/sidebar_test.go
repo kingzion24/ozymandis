@@ -10,7 +10,7 @@ import (
 
 	"github.com/a-h/templ"
 
-	"github.com/codeblocktz/yacht/internal/identity"
+	"github.com/kingzion24/ozymandis/internal/identity"
 )
 
 // render returns the HTML a slot component produces.
@@ -138,7 +138,7 @@ func TestOwnerLabelFallsBackToEmail(t *testing.T) {
 // of. Both are asserted here because hiding either one alone recreates it.
 func TestOnAPhoneThereIsStillAWayOut(t *testing.T) {
 	page := renderToString(t, Layout(
-		Slots{Title: "t", BrandName: "Yacht", BrandHref: "/", Nav: []NavGroup{{
+		Slots{Title: "t", BrandName: "Ozymandis", BrandHref: "/", Nav: []NavGroup{{
 			Items: []NavItem{{Label: "Projects", Href: "/projects"}},
 		}}},
 		templ.ComponentFunc(func(context.Context, io.Writer) error { return nil }),
@@ -176,7 +176,7 @@ func TestTheDrawerIsNotPersisted(t *testing.T) {
 	script := regexp.MustCompile(`(?s)<script nonce="">.*?</script>`).FindAllString(page, -1)
 	var sidebar string
 	for _, s := range script {
-		if strings.Contains(s, "yachtSidebarToggle") {
+		if strings.Contains(s, "ozymandisSidebarToggle") {
 			sidebar = s
 		}
 	}
@@ -186,10 +186,10 @@ func TestTheDrawerIsNotPersisted(t *testing.T) {
 	// The rail's collapsed state is stored; the drawer's is not. If data-nav
 	// ever reaches localStorage, that distinction has been lost.
 	if regexp.MustCompile(`setItem\([^)]*data-nav`).MatchString(sidebar) ||
-		strings.Contains(sidebar, `"yacht-nav"`) {
+		strings.Contains(sidebar, `"ozymandis-nav"`) {
 		t.Error("the drawer state is being stored, so it will reopen over the next page")
 	}
-	if !strings.Contains(sidebar, "yacht-sidebar") {
+	if !strings.Contains(sidebar, "ozymandis-sidebar") {
 		t.Error("the desktop rail no longer remembers being collapsed")
 	}
 }
@@ -206,7 +206,7 @@ func TestTheDrawerIsNotPersisted(t *testing.T) {
 // counted as a name it would say everything twice.
 func TestEveryNavLinkIsNamedInBothStates(t *testing.T) {
 	page := renderToString(t, Layout(
-		Slots{Title: "t", BrandName: "Yacht", BrandHref: "/", Nav: []NavGroup{{
+		Slots{Title: "t", BrandName: "Ozymandis", BrandHref: "/", Nav: []NavGroup{{
 			Items: []NavItem{
 				{Label: "Projects", Href: "/projects", Icon: "grid"},
 				{Label: "Nodes", Href: "/cluster/nodes", Icon: "server"},

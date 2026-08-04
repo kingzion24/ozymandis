@@ -51,7 +51,7 @@ func TestApplyAppCreatesNoIngressWithoutHosts(t *testing.T) {
 		t.Fatalf("ApplyApp: %v", err)
 	}
 
-	_, err := client.NetworkingV1().Ingresses("yacht-demo").
+	_, err := client.NetworkingV1().Ingresses("ozymandis-demo").
 		Get(ctx, "web", metav1.GetOptions{})
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("want NotFound, got %v", err)

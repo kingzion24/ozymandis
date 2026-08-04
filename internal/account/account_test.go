@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/codeblocktz/yacht/internal/store"
+	"github.com/kingzion24/ozymandis/internal/store"
 )
 
 // testService migrates, connects and returns a Service against the test
@@ -21,9 +21,9 @@ import (
 // the purge has to happen while the pool is still open.
 func testService(t *testing.T) *Service {
 	t.Helper()
-	dsn := os.Getenv("YACHT_TEST_DATABASE_URL")
+	dsn := os.Getenv("OZYMANDIS_TEST_DATABASE_URL")
 	if dsn == "" {
-		t.Skip("set YACHT_TEST_DATABASE_URL to run account tests")
+		t.Skip("set OZYMANDIS_TEST_DATABASE_URL to run account tests")
 	}
 	ctx := context.Background()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))

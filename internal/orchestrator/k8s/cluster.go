@@ -9,11 +9,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 // poolLabel marks a node as belonging to a scheduling pool.
-const poolLabel = "yacht/pool"
+const poolLabel = "ozymandis/pool"
 
 // ClusterSummary returns headline capacity and utilisation.
 func (o *Orchestrator) ClusterSummary(ctx context.Context) (orchestrator.ClusterSummary, error) {

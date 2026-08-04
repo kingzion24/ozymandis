@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/codeblocktz/yacht/internal/cluster"
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/cluster"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 // Joiner is the dashboard's view of how a machine joins this cluster.

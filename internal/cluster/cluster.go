@@ -22,8 +22,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/codeblocktz/yacht/internal/secret"
-	"github.com/codeblocktz/yacht/internal/store/dbgen"
+	"github.com/kingzion24/ozymandis/internal/secret"
+	"github.com/kingzion24/ozymandis/internal/store/dbgen"
 )
 
 // ErrNotConfigured means nobody has stored a server address and join token.
@@ -35,10 +35,10 @@ var ErrNotConfigured = errors.New("cluster: no join settings are stored")
 // variable: storing it readable would give the protection in name only, and
 // there would be no way to tell from the outside.
 var ErrNoSecretKey = errors.New(
-	"cluster: no YACHT_SECRET_KEY is configured, so a join token cannot be stored safely")
+	"cluster: no OZYMANDIS_SECRET_KEY is configured, so a join token cannot be stored safely")
 
 // PoolLabel is the node label a pool is carried in.
-const PoolLabel = "yacht/pool"
+const PoolLabel = "ozymandis/pool"
 
 // A Kubernetes label value, which is also the shape that makes a pool safe to
 // interpolate into a command somebody pastes into a root shell. Every

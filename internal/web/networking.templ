@@ -1,6 +1,6 @@
 package web
 
-import "github.com/codeblocktz/yacht/internal/app"
+import "github.com/kingzion24/ozymandis/internal/app"
 
 // NetworkingData is the app's routing panel.
 type NetworkingData struct {
@@ -183,7 +183,7 @@ templ routingOptions(d NetworkingData) {
 								the platform
 							}
 							rather than publishing this cluster's node addresses as A records.
-							Yacht does not run ExternalDNS; if none is installed this changes
+							Ozymandis does not run ExternalDNS; if none is installed this changes
 							nothing.
 						</span>
 					</span>
@@ -243,7 +243,7 @@ templ PlatformDNS(d PlatformDNSData) {
 						controller.
 					</p>
 					<p class="mt-1 text-[12.5px] text-muted-foreground">
-						Recorded here, not applied. Yacht does not deploy that controller and
+						Recorded here, not applied. Ozymandis does not deploy that controller and
 						cannot set a flag on it — this is so the two can be kept in step, and
 						so the value is written down somewhere other than a shell history.
 					</p>

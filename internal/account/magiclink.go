@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/codeblocktz/yacht/internal/store/dbgen"
+	"github.com/kingzion24/ozymandis/internal/store/dbgen"
 )
 
 // ErrTokenInvalid is returned for every magic link and invitation that cannot
@@ -74,7 +74,7 @@ func (s *Service) IssueMagicLink(
 // them the team the install was already running as.
 //
 // This is the spec's third lockout guard. An install that switches accounts on
-// has apps already deployed under YACHT_OWNER_ID; without this the first person
+// has apps already deployed under OZYMANDIS_OWNER_ID; without this the first person
 // to sign in lands in a fresh empty team and those apps belong to an owner
 // nobody can authenticate as — visible only as a dashboard that has lost
 // everything.

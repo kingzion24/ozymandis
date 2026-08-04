@@ -23,8 +23,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/codeblocktz/yacht/internal/secret"
-	"github.com/codeblocktz/yacht/internal/store/dbgen"
+	"github.com/kingzion24/ozymandis/internal/secret"
+	"github.com/kingzion24/ozymandis/internal/store/dbgen"
 )
 
 // ErrNotConfigured means nobody has stored a registry.
@@ -40,7 +40,7 @@ var ErrNotConfigured = errors.New("registry: no image registry is configured")
 // credential protected in name only is worse than one nobody stored, because
 // nothing about it looks wrong.
 var ErrNoSecretKey = errors.New(
-	"registry: no YACHT_SECRET_KEY is configured, so a registry password cannot be stored safely")
+	"registry: no OZYMANDIS_SECRET_KEY is configured, so a registry password cannot be stored safely")
 
 // Settings is where images go, without the password.
 //
@@ -54,9 +54,9 @@ type Settings struct {
 
 	// Insecure means the registry is served over plain HTTP.
 	//
-	// Yacht can only act on half of this. It can tell the builder to push over
+	// Ozymandis can only act on half of this. It can tell the builder to push over
 	// HTTP; it cannot tell the cluster's container runtime to pull that way,
-	// because that is node configuration and Yacht does not touch nodes. The
+	// because that is node configuration and Ozymandis does not touch nodes. The
 	// page says so rather than leaving somebody to discover it as
 	// ImagePullBackOff.
 	Insecure bool

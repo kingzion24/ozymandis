@@ -5,7 +5,7 @@
 **Please do not open a public issue.**
 
 Report privately through GitHub:
-[**Report a vulnerability**](https://github.com/codeblocktz/yacht/security/advisories/new).
+[**Report a vulnerability**](https://github.com/kingzion24/ozymandis/security/advisories/new).
 That opens a draft advisory only you and the maintainers can see.
 
 If you cannot use GitHub, email the maintainer address on the commits in this
@@ -39,9 +39,9 @@ When releases begin, this section will say which ones get fixes.
 In scope — anything that lets somebody:
 
 - read or change another team's apps, logs, secrets, or database rows
-- escape the security context Yacht applies to workloads (see
+- escape the security context Ozymandis applies to workloads (see
   [Security posture](README.md#security-posture))
-- reach the cluster's credentials, the join token, or `YACHT_SECRET_KEY`
+- reach the cluster's credentials, the join token, or `OZYMANDIS_SECRET_KEY`
 - bypass authentication or session handling
 
 Out of scope, because they are documented behaviour rather than undiscovered
@@ -50,13 +50,13 @@ weaknesses:
 - **The installer serves the dashboard over plain HTTP.** The bearer token
   crosses the network in the clear until an operator puts it behind TLS. The
   README and the installer's own output both say so.
-- **No `YACHT_AUTH_TOKEN` and no accounts means an unauthenticated dashboard.**
+- **No `OZYMANDIS_AUTH_TOKEN` and no accounts means an unauthenticated dashboard.**
   That is what the configuration table says that combination does.
 - Anything that needs an attacker who already has root on the host or
   cluster-admin on the cluster.
 
 ## A standing caveat
 
-Yacht has not been audited, and has not run anywhere long enough to have earned
+Ozymandis has not been audited, and has not run anywhere long enough to have earned
 your trust. It is not ready for production. Treat an install as you would any
 young piece of infrastructure holding credentials.

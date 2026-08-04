@@ -10,8 +10,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/codeblocktz/yacht/internal/app"
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/app"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 // testDeployID is the deployment recordingLogs answers for.
@@ -288,7 +288,7 @@ func TestAnUnrecordedIngressHandsOverTheConfiguration(t *testing.T) {
 	}
 }
 
-// The panel offers to turn logging on where Yacht can do it.
+// The panel offers to turn logging on where Ozymandis can do it.
 func TestTheHTTPTabOffersToTurnLoggingOn(t *testing.T) {
 	logs := &recordingLogs{http: &app.HTTPLogs{
 		Hosts:     []string{"web.apps.example.com"},
@@ -314,7 +314,7 @@ func TestTheHTTPTabOffersToTurnLoggingOn(t *testing.T) {
 }
 
 // Where it cannot, it hands over the configuration instead.
-func TestWhereYachtCannotConfigureItSaysSo(t *testing.T) {
+func TestWhereOzymandisCannotConfigureItSaysSo(t *testing.T) {
 	h := testServer(t, Options{Logs: &recordingLogs{http: &app.HTTPLogs{
 		Hosts: []string{"web.apps.example.com"},
 		Note:  "not writing an access log",

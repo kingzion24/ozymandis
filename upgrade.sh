@@ -1,8 +1,8 @@
 #!/bin/sh
 #
-# Yacht upgrader.
+# Ozymandis upgrader.
 #
-#   curl -sSL https://codeblocktz.github.io/yacht/upgrade.sh | sudo sh
+#   curl -sSL https://kingzion24.github.io/ozymandis/upgrade.sh | sudo sh
 #
 # Replaces the binary and restarts the service. It does not touch K3s, Postgres,
 # the environment file, or the unit — an upgrade that re-provisions the machine
@@ -18,11 +18,11 @@
 
 set -eu
 
-REPO="codeblocktz/yacht"
+REPO="codeblocktz/ozymandis"
 INSTALL_DIR="/usr/local/bin"
-BIN="${INSTALL_DIR}/yacht"
-PREV="${INSTALL_DIR}/yacht.prev"
-ENV_FILE="/etc/yacht/yacht.env"
+BIN="${INSTALL_DIR}/ozymandis"
+PREV="${INSTALL_DIR}/ozymandis.prev"
+ENV_FILE="/etc/ozymandis/ozymandis.env"
 
 VERSION=""
 
@@ -36,9 +36,9 @@ need_cmd() { command -v "$1" >/dev/null 2>&1; }
 # arrives on stdin — the exact case --help most needs to work in.
 usage() {
 	cat <<-EOF
-		Yacht upgrader.
+		Ozymandis upgrader.
 
-		  curl -sSL https://codeblocktz.github.io/yacht/upgrade.sh | sudo sh
+		  curl -sSL https://kingzion24.github.io/ozymandis/upgrade.sh | sudo sh
 
 		Replaces the binary and restarts the service. It does not touch K3s,
 		Postgres, the environment file, or the unit. If the new version does not
@@ -63,10 +63,10 @@ parse_flags() {
 
 require_installed() {
 	[ "$(id -u)" = "0" ] || die "must run as root — pipe to \`sudo sh\` rather than \`sh\`"
-	[ -x "$BIN" ] || die "no yacht binary at ${BIN} — run the installer first"
+	[ -x "$BIN" ] || die "no ozymandis binary at ${BIN} — run the installer first"
 	[ -f "$ENV_FILE" ] || die "no config at ${ENV_FILE} — run the installer first"
-	systemctl list-unit-files yacht.service >/dev/null 2>&1 \
-		|| die "yacht.service is not installed — run the installer first"
+	systemctl list-unit-files ozymandis.service >/dev/null 2>&1 \
+		|| die "ozymandis.service is not installed — run the installer first"
 	for c in curl tar sha256sum systemctl; do
 		need_cmd "$c" || die "$c is required"
 	done
@@ -81,7 +81,7 @@ require_installed() {
 # port reads the listen port out of the config rather than assuming 8080, so an
 # install that moved it is still health-checked on the port it actually serves.
 port() {
-	p=$(sed -n 's/^YACHT_ADDR=.*:\([0-9]\{1,\}\)$/\1/p' "$ENV_FILE" | head -n1)
+	p=$(sed -n 's/^OZYMANDIS_ADDR=.*:\([0-9]\{1,\}\)$/\1/p' "$ENV_FILE" | head -n1)
 	[ -n "$p" ] || p="8080"
 	printf '%s' "$p"
 }
@@ -109,7 +109,7 @@ resolve_version() {
 
 fetch() {
 	num="${VERSION#v}"
-	tarball="yacht_${num}_linux_${ARCH}.tar.gz"
+	tarball="ozymandis_${num}_linux_${ARCH}.tar.gz"
 	base="https://github.com/${REPO}/releases/download/${VERSION}"
 
 	tmp=$(mktemp -d)
@@ -127,8 +127,8 @@ fetch() {
 	[ "$want" = "$got" ] || die "checksum mismatch for ${tarball}: expected ${want}, got ${got}"
 
 	tar -xzf "${tmp}/${tarball}" -C "$tmp" || die "could not unpack ${tarball}"
-	[ -f "${tmp}/yacht" ] || die "${tarball} does not contain a yacht binary"
-	STAGED="${tmp}/yacht"
+	[ -f "${tmp}/ozymandis" ] || die "${tarball} does not contain a ozymandis binary"
+	STAGED="${tmp}/ozymandis"
 	TMPDIR_USED="$tmp"
 	say "checksum ok"
 }
@@ -140,7 +140,7 @@ healthy() {
 		code=$(curl -fsS -o /dev/null -w '%{http_code}' \
 			"http://127.0.0.1:${p}/healthz" 2>/dev/null || printf '000')
 		[ "$code" = "200" ] && return 0
-		systemctl is-active --quiet yacht || return 1
+		systemctl is-active --quiet ozymandis || return 1
 		i=$((i + 1))
 		sleep 2
 	done
@@ -150,11 +150,11 @@ healthy() {
 rollback() {
 	printf '\033[33m==>\033[0m New version unhealthy — rolling back\n' >&2
 	mv -f "$PREV" "$BIN"
-	systemctl restart yacht
+	systemctl restart ozymandis
 	if healthy; then
 		printf '  restored %s\n' "$(current_version)" >&2
 	else
-		printf '  \033[31mrollback did not come up either\033[0m — check journalctl -u yacht\n' >&2
+		printf '  \033[31mrollback did not come up either\033[0m — check journalctl -u ozymandis\n' >&2
 	fi
 	exit 1
 }
@@ -182,13 +182,13 @@ main() {
 	trap - EXIT INT TERM
 
 	step "Restarting"
-	systemctl restart yacht
+	systemctl restart ozymandis
 
 	if healthy; then
 		rm -f "$PREV"
 		step "Done"
-		say "yacht is now ${VERSION}"
-		say "journalctl -u yacht -f"
+		say "ozymandis is now ${VERSION}"
+		say "journalctl -u ozymandis -f"
 		printf '\n'
 	else
 		rollback

@@ -90,7 +90,7 @@ type Config struct {
 	// WildcardTLS serves platform hostnames over TLS using the ingress
 	// controller's configured default certificate.
 	//
-	// Yacht cannot verify that default exists. An install without one serves
+	// Ozymandis cannot verify that default exists. An install without one serves
 	// the wrong certificate rather than failing, so this is logged at startup
 	// and shown on the settings page — a capability the engine cannot check is
 	// one it should be noisy about.
@@ -101,7 +101,7 @@ type Config struct {
 	ReservedDomains []string
 
 	// BaseURL is the public URL the dashboard is reached at, such as
-	// https://yacht.example.com. It is what a sign-in link is built from, and
+	// https://ozymandis.example.com. It is what a sign-in link is built from, and
 	// setting it is what switches accounts on: without it there is no address
 	// to put in the link, so there is no way to sign in.
 	BaseURL string
@@ -134,29 +134,29 @@ type Config struct {
 // Load reads configuration from the environment and validates it.
 func Load() (Config, error) {
 	c := Config{
-		Addr:            env("YACHT_ADDR", ":8080"),
-		DatabaseURL:     env("YACHT_DATABASE_URL", ""),
-		Kubeconfig:      env("YACHT_KUBECONFIG", os.Getenv("KUBECONFIG")),
-		KubeInCluster:   envBool("YACHT_KUBE_IN_CLUSTER", false),
-		AuthToken:       env("YACHT_AUTH_TOKEN", ""),
-		OwnerID:         env("YACHT_OWNER_ID", "owner-local"),
-		OwnerName:       env("YACHT_OWNER_NAME", "Local"),
-		OwnerEmail:      strings.TrimSpace(env("YACHT_OWNER_EMAIL", "")),
-		SecretKey:       strings.TrimSpace(env("YACHT_SECRET_KEY", "")),
-		AppDomain:       env("YACHT_APP_DOMAIN", ""),
-		WildcardTLS:     envBool("YACHT_WILDCARD_TLS", false),
-		ReservedDomains: envList("YACHT_RESERVED_DOMAINS"),
-		BaseURL:         strings.TrimRight(env("YACHT_BASE_URL", ""), "/"),
-		SMTPAddr:        env("YACHT_SMTP_ADDR", ""),
-		SMTPUsername:    env("YACHT_SMTP_USER", ""),
-		SMTPPassword:    env("YACHT_SMTP_PASSWORD", ""),
-		SMTPFrom:        env("YACHT_SMTP_FROM", ""),
-		ResendAPIKey:    env("YACHT_RESEND_API_KEY", ""),
-		ResendFrom:      env("YACHT_RESEND_FROM", ""),
-		SessionTTL:      envDuration("YACHT_SESSION_TTL", 720*time.Hour),
-		MagicLinkTTL:    envDuration("YACHT_MAGIC_LINK_TTL", 15*time.Minute),
-		ShutdownTimeout: envDuration("YACHT_SHUTDOWN_TIMEOUT", 15*time.Second),
-		Debug:           envBool("YACHT_DEBUG", false),
+		Addr:            env("OZYMANDIS_ADDR", ":8080"),
+		DatabaseURL:     env("OZYMANDIS_DATABASE_URL", ""),
+		Kubeconfig:      env("OZYMANDIS_KUBECONFIG", os.Getenv("KUBECONFIG")),
+		KubeInCluster:   envBool("OZYMANDIS_KUBE_IN_CLUSTER", false),
+		AuthToken:       env("OZYMANDIS_AUTH_TOKEN", ""),
+		OwnerID:         env("OZYMANDIS_OWNER_ID", "owner-local"),
+		OwnerName:       env("OZYMANDIS_OWNER_NAME", "Local"),
+		OwnerEmail:      strings.TrimSpace(env("OZYMANDIS_OWNER_EMAIL", "")),
+		SecretKey:       strings.TrimSpace(env("OZYMANDIS_SECRET_KEY", "")),
+		AppDomain:       env("OZYMANDIS_APP_DOMAIN", ""),
+		WildcardTLS:     envBool("OZYMANDIS_WILDCARD_TLS", false),
+		ReservedDomains: envList("OZYMANDIS_RESERVED_DOMAINS"),
+		BaseURL:         strings.TrimRight(env("OZYMANDIS_BASE_URL", ""), "/"),
+		SMTPAddr:        env("OZYMANDIS_SMTP_ADDR", ""),
+		SMTPUsername:    env("OZYMANDIS_SMTP_USER", ""),
+		SMTPPassword:    env("OZYMANDIS_SMTP_PASSWORD", ""),
+		SMTPFrom:        env("OZYMANDIS_SMTP_FROM", ""),
+		ResendAPIKey:    env("OZYMANDIS_RESEND_API_KEY", ""),
+		ResendFrom:      env("OZYMANDIS_RESEND_FROM", ""),
+		SessionTTL:      envDuration("OZYMANDIS_SESSION_TTL", 720*time.Hour),
+		MagicLinkTTL:    envDuration("OZYMANDIS_MAGIC_LINK_TTL", 15*time.Minute),
+		ShutdownTimeout: envDuration("OZYMANDIS_SHUTDOWN_TIMEOUT", 15*time.Second),
+		Debug:           envBool("OZYMANDIS_DEBUG", false),
 	}
 
 	if err := c.validate(); err != nil {
@@ -169,29 +169,29 @@ func (c Config) validate() error {
 	var errs []error
 
 	if c.DatabaseURL == "" {
-		errs = append(errs, errors.New("YACHT_DATABASE_URL is required"))
+		errs = append(errs, errors.New("OZYMANDIS_DATABASE_URL is required"))
 	}
 	if c.Addr == "" {
-		errs = append(errs, errors.New("YACHT_ADDR must not be empty"))
+		errs = append(errs, errors.New("OZYMANDIS_ADDR must not be empty"))
 	}
 	if c.OwnerID == "" {
-		errs = append(errs, errors.New("YACHT_OWNER_ID must not be empty"))
+		errs = append(errs, errors.New("OZYMANDIS_OWNER_ID must not be empty"))
 	}
 	// A short shared secret is worse than none, because it invites exposing
 	// the dashboard while providing no real protection.
 	if c.AuthToken != "" && len(c.AuthToken) < 16 {
-		errs = append(errs, errors.New("YACHT_AUTH_TOKEN must be at least 16 characters"))
+		errs = append(errs, errors.New("OZYMANDIS_AUTH_TOKEN must be at least 16 characters"))
 	}
 	if c.AppDomain != "" {
 		if fault := domainFault(c.AppDomain); fault != "" {
-			errs = append(errs, fmt.Errorf("YACHT_APP_DOMAIN %s", fault))
+			errs = append(errs, fmt.Errorf("OZYMANDIS_APP_DOMAIN %s", fault))
 		} else if n := len(c.AppDomain) + 1 + maxAppName; n > maxHostname {
 			// An app domain long enough that the longest legal app name
 			// overflows the DNS limit is a startup misconfiguration. Left
 			// unchecked the operator meets it one failed create at a time,
 			// with nothing connecting the failure to the setting.
 			errs = append(errs, fmt.Errorf(
-				"YACHT_APP_DOMAIN is too long: an app name of %d characters would "+
+				"OZYMANDIS_APP_DOMAIN is too long: an app name of %d characters would "+
 					"produce a %d-character hostname, over the %d-character limit",
 				maxAppName, n, maxHostname))
 		}
@@ -200,18 +200,18 @@ func (c Config) validate() error {
 	// while providing none.
 	for _, d := range c.ReservedDomains {
 		if fault := domainFault(d); fault != "" {
-			errs = append(errs, fmt.Errorf("YACHT_RESERVED_DOMAINS entry %q %s", d, fault))
+			errs = append(errs, fmt.Errorf("OZYMANDIS_RESERVED_DOMAINS entry %q %s", d, fault))
 		}
 	}
 	// TLS with nothing to apply it to leaves the operator believing apps are
 	// served over TLS while nothing says otherwise.
 	if c.WildcardTLS && c.AppDomain == "" {
 		errs = append(errs, errors.New(
-			"YACHT_WILDCARD_TLS requires YACHT_APP_DOMAIN — there would be no hostnames to serve"))
+			"OZYMANDIS_WILDCARD_TLS requires OZYMANDIS_APP_DOMAIN — there would be no hostnames to serve"))
 	}
 	if c.OwnerEmail != "" {
 		if _, err := mail.ParseAddress(c.OwnerEmail); err != nil {
-			errs = append(errs, errors.New("YACHT_OWNER_EMAIL must be an email address"))
+			errs = append(errs, errors.New("OZYMANDIS_OWNER_EMAIL must be an email address"))
 		}
 	}
 	errs = append(errs, c.accountFaults()...)
@@ -234,31 +234,31 @@ func (c Config) accountFaults() []error {
 
 	var errs []error
 	if u, err := url.Parse(c.BaseURL); err != nil {
-		errs = append(errs, fmt.Errorf("YACHT_BASE_URL is not a URL: %w", err))
+		errs = append(errs, fmt.Errorf("OZYMANDIS_BASE_URL is not a URL: %w", err))
 	} else if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		errs = append(errs, errors.New(
-			"YACHT_BASE_URL must be an absolute http or https URL, such as https://yacht.example.com"))
+			"OZYMANDIS_BASE_URL must be an absolute http or https URL, such as https://ozymandis.example.com"))
 	}
 
 	// Two transports is not a fallback chain, it is an unanswered question
 	// about which one sends. Say so rather than picking.
 	if c.SMTPAddr != "" && c.ResendAPIKey != "" {
 		errs = append(errs, errors.New(
-			"YACHT_SMTP_ADDR and YACHT_RESEND_API_KEY are both set — configure one mail transport"))
+			"OZYMANDIS_SMTP_ADDR and OZYMANDIS_RESEND_API_KEY are both set — configure one mail transport"))
 	}
 	if c.SMTPAddr != "" && c.SMTPFrom == "" {
-		errs = append(errs, errors.New("YACHT_SMTP_FROM is required with YACHT_SMTP_ADDR"))
+		errs = append(errs, errors.New("OZYMANDIS_SMTP_FROM is required with OZYMANDIS_SMTP_ADDR"))
 	}
 	if c.ResendAPIKey != "" && c.ResendFrom == "" {
-		errs = append(errs, errors.New("YACHT_RESEND_FROM is required with YACHT_RESEND_API_KEY"))
+		errs = append(errs, errors.New("OZYMANDIS_RESEND_FROM is required with OZYMANDIS_RESEND_API_KEY"))
 	}
 	// A zero or negative lifetime issues credentials that are already expired,
 	// which presents as sign-in silently never working.
 	if c.SessionTTL <= 0 {
-		errs = append(errs, errors.New("YACHT_SESSION_TTL must be positive"))
+		errs = append(errs, errors.New("OZYMANDIS_SESSION_TTL must be positive"))
 	}
 	if c.MagicLinkTTL <= 0 {
-		errs = append(errs, errors.New("YACHT_MAGIC_LINK_TTL must be positive"))
+		errs = append(errs, errors.New("OZYMANDIS_MAGIC_LINK_TTL must be positive"))
 	}
 	return errs
 }

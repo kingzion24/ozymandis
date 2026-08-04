@@ -10,7 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 // The cluster views were written for a single-owner engine, where everything in
@@ -23,13 +23,13 @@ func seedForeign(t *testing.T, o *Orchestrator) {
 	ctx := context.Background()
 
 	mine := orchestrator.AppSpec{
-		Ref:      orchestrator.Ref{Owner: "team-a", Namespace: "yacht-a", Name: "mine"},
+		Ref:      orchestrator.Ref{Owner: "team-a", Namespace: "ozymandis-a", Name: "mine"},
 		Image:    "nginx:alpine",
 		Replicas: 1,
 		Port:     8080,
 	}
 	theirs := orchestrator.AppSpec{
-		Ref:      orchestrator.Ref{Owner: "team-b", Namespace: "yacht-b", Name: "theirs"},
+		Ref:      orchestrator.Ref{Owner: "team-b", Namespace: "ozymandis-b", Name: "theirs"},
 		Image:    "nginx:alpine",
 		Replicas: 1,
 		Port:     8080,
@@ -54,8 +54,8 @@ func TestPodsAreScopedToTheirOwner(t *testing.T) {
 	// Pods are created by the Deployment in a real cluster; the fake makes none,
 	// so stand them up with the labels the pod template carries.
 	for _, p := range []struct{ ns, name, owner, app string }{
-		{"yacht-a", "mine-abc", "team-a", "mine"},
-		{"yacht-b", "theirs-xyz", "team-b", "theirs"},
+		{"ozymandis-a", "mine-abc", "team-a", "mine"},
+		{"ozymandis-b", "theirs-xyz", "team-b", "theirs"},
 	} {
 		if _, err := client.CoreV1().Pods(p.ns).Create(ctx, &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
@@ -76,7 +76,7 @@ func TestPodsAreScopedToTheirOwner(t *testing.T) {
 		t.Fatalf("Pods: %v", err)
 	}
 	for _, p := range pods {
-		if p.Namespace == "yacht-b" || p.Name == "theirs-xyz" {
+		if p.Namespace == "ozymandis-b" || p.Name == "theirs-xyz" {
 			t.Fatalf("team-a was shown team-b's pod %s/%s", p.Namespace, p.Name)
 		}
 	}
@@ -90,8 +90,8 @@ func TestVolumesAreScopedToTheirOwner(t *testing.T) {
 	o, client := testOrchestrator(t)
 
 	for _, v := range []struct{ ns, name, owner string }{
-		{"yacht-a", "data-a", "team-a"},
-		{"yacht-b", "data-b", "team-b"},
+		{"ozymandis-a", "data-a", "team-a"},
+		{"ozymandis-b", "data-b", "team-b"},
 	} {
 		if _, err := client.CoreV1().PersistentVolumeClaims(v.ns).Create(ctx,
 			&corev1.PersistentVolumeClaim{
@@ -198,7 +198,7 @@ func TestVolumesForceRecreateStrategy(t *testing.T) {
 	if err := o.ApplyApp(ctx, specWithVolume()); err != nil {
 		t.Fatalf("ApplyApp: %v", err)
 	}
-	dep, err := client.AppsV1().Deployments("yacht-demo").Get(ctx, "web", metav1.GetOptions{})
+	dep, err := client.AppsV1().Deployments("ozymandis-demo").Get(ctx, "web", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get deployment: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestNoVolumesLeavesTheStrategyRolling(t *testing.T) {
 	if err := o.ApplyApp(ctx, testSpec()); err != nil {
 		t.Fatalf("ApplyApp: %v", err)
 	}
-	dep, err := client.AppsV1().Deployments("yacht-demo").Get(ctx, "web", metav1.GetOptions{})
+	dep, err := client.AppsV1().Deployments("ozymandis-demo").Get(ctx, "web", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get deployment: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestRemovingTheLastVolumeRestoresRollingUpdates(t *testing.T) {
 		t.Fatalf("ApplyApp without: %v", err)
 	}
 
-	dep, err := client.AppsV1().Deployments("yacht-demo").Get(ctx, "web", metav1.GetOptions{})
+	dep, err := client.AppsV1().Deployments("ozymandis-demo").Get(ctx, "web", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get deployment: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestDetachingAVolumeDoesNotDeleteTheClaim(t *testing.T) {
 		t.Fatalf("ApplyApp without: %v", err)
 	}
 
-	if _, err := client.CoreV1().PersistentVolumeClaims("yacht-demo").
+	if _, err := client.CoreV1().PersistentVolumeClaims("ozymandis-demo").
 		Get(ctx, "web-data", metav1.GetOptions{}); err != nil {
 		t.Fatalf("the claim was destroyed by an edit that merely detached it: %v", err)
 	}
@@ -280,7 +280,7 @@ func TestAttachingAVolumeToAnExistingWorkload(t *testing.T) {
 		t.Fatalf("ApplyApp with volume: %v", err)
 	}
 
-	dep, err := client.AppsV1().Deployments("yacht-demo").Get(ctx, "web", metav1.GetOptions{})
+	dep, err := client.AppsV1().Deployments("ozymandis-demo").Get(ctx, "web", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get deployment: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestHealthPathBecomesAReadinessProbe(t *testing.T) {
 	if err := o.ApplyApp(ctx, specWithHealth()); err != nil {
 		t.Fatalf("ApplyApp: %v", err)
 	}
-	c := containerOf(t, client, "yacht-demo", "web")
+	c := containerOf(t, client, "ozymandis-demo", "web")
 
 	if c.ReadinessProbe == nil {
 		t.Fatal("no readiness probe")
@@ -335,7 +335,7 @@ func TestLivenessIsOptIn(t *testing.T) {
 	if err := o.ApplyApp(ctx, spec); err != nil {
 		t.Fatalf("ApplyApp: %v", err)
 	}
-	c := containerOf(t, client, "yacht-demo", "web")
+	c := containerOf(t, client, "ozymandis-demo", "web")
 
 	if c.LivenessProbe == nil {
 		t.Fatal("liveness was asked for and not applied")
@@ -356,7 +356,7 @@ func TestNoHealthPathMeansNoProbes(t *testing.T) {
 	if err := o.ApplyApp(ctx, testSpec()); err != nil {
 		t.Fatalf("ApplyApp: %v", err)
 	}
-	c := containerOf(t, client, "yacht-demo", "web")
+	c := containerOf(t, client, "ozymandis-demo", "web")
 
 	if c.ReadinessProbe != nil || c.LivenessProbe != nil {
 		t.Fatal("probes were added to a workload that asked for none")
@@ -411,7 +411,7 @@ func TestPublicServiceKeepsTheFixedPort(t *testing.T) {
 	if err := o.ApplyApp(ctx, testSpec()); err != nil {
 		t.Fatalf("ApplyApp: %v", err)
 	}
-	svc, err := client.CoreV1().Services("yacht-demo").Get(ctx, "web", metav1.GetOptions{})
+	svc, err := client.CoreV1().Services("ozymandis-demo").Get(ctx, "web", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get service: %v", err)
 	}

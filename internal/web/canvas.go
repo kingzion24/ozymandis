@@ -3,7 +3,7 @@ package web
 import (
 	"sort"
 
-	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/kingzion24/ozymandis/internal/app"
 )
 
 // Canvas geometry. Fixed rather than fluid: the layout is computed on the

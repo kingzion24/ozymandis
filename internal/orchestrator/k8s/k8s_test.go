@@ -11,7 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 func testOrchestrator(t *testing.T) (*Orchestrator, *fake.Clientset) {
@@ -25,7 +25,7 @@ func testSpec() orchestrator.AppSpec {
 	return orchestrator.AppSpec{
 		Ref: orchestrator.Ref{
 			Owner:     "owner-1",
-			Namespace: "yacht-demo",
+			Namespace: "ozymandis-demo",
 			Name:      "web",
 		},
 		Image:    "ghcr.io/example/web:v1",
@@ -42,12 +42,12 @@ func TestEnsureNamespace(t *testing.T) {
 	ctx := context.Background()
 	o, client := testOrchestrator(t)
 
-	spec := orchestrator.NamespaceSpec{Owner: "owner-1", Name: "yacht-demo"}
+	spec := orchestrator.NamespaceSpec{Owner: "owner-1", Name: "ozymandis-demo"}
 	if err := o.EnsureNamespace(ctx, spec); err != nil {
 		t.Fatalf("EnsureNamespace: %v", err)
 	}
 
-	ns, err := client.CoreV1().Namespaces().Get(ctx, "yacht-demo", metav1.GetOptions{})
+	ns, err := client.CoreV1().Namespaces().Get(ctx, "ozymandis-demo", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get namespace: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestEnsureNamespace(t *testing.T) {
 
 	// A LimitRange must always exist, so a workload that requests nothing
 	// still cannot run unbounded.
-	lr, err := client.CoreV1().LimitRanges("yacht-demo").
+	lr, err := client.CoreV1().LimitRanges("ozymandis-demo").
 		Get(ctx, limitRangeName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get limitrange: %v", err)
@@ -91,7 +91,7 @@ func TestEnsureNamespace(t *testing.T) {
 func TestEnsureNamespaceIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	o, client := testOrchestrator(t)
-	spec := orchestrator.NamespaceSpec{Owner: "owner-1", Name: "yacht-demo"}
+	spec := orchestrator.NamespaceSpec{Owner: "owner-1", Name: "ozymandis-demo"}
 
 	for i := range 3 {
 		if err := o.EnsureNamespace(ctx, spec); err != nil {
@@ -120,7 +120,7 @@ func TestApplyApp(t *testing.T) {
 		t.Fatalf("ApplyApp: %v", err)
 	}
 
-	dep, err := client.AppsV1().Deployments("yacht-demo").
+	dep, err := client.AppsV1().Deployments("ozymandis-demo").
 		Get(ctx, "web", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get deployment: %v", err)
@@ -212,7 +212,7 @@ func TestApplyAppCreatesServiceOnlyWhenPortSet(t *testing.T) {
 		if err := o.ApplyApp(ctx, testSpec()); err != nil {
 			t.Fatalf("ApplyApp: %v", err)
 		}
-		svc, err := client.CoreV1().Services("yacht-demo").
+		svc, err := client.CoreV1().Services("ozymandis-demo").
 			Get(ctx, "web", metav1.GetOptions{})
 		if err != nil {
 			t.Fatalf("get service: %v", err)
@@ -232,7 +232,7 @@ func TestApplyAppCreatesServiceOnlyWhenPortSet(t *testing.T) {
 		if err := o.ApplyApp(ctx, spec); err != nil {
 			t.Fatalf("ApplyApp: %v", err)
 		}
-		list, err := client.CoreV1().Services("yacht-demo").List(ctx, metav1.ListOptions{})
+		list, err := client.CoreV1().Services("ozymandis-demo").List(ctx, metav1.ListOptions{})
 		if err != nil {
 			t.Fatalf("list services: %v", err)
 		}
@@ -252,7 +252,7 @@ func TestApplyAppIsStable(t *testing.T) {
 	if err := o.ApplyApp(ctx, spec); err != nil {
 		t.Fatalf("first apply: %v", err)
 	}
-	first, err := client.AppsV1().Deployments("yacht-demo").Get(ctx, "web", metav1.GetOptions{})
+	first, err := client.AppsV1().Deployments("ozymandis-demo").Get(ctx, "web", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestApplyAppIsStable(t *testing.T) {
 	if err := o.ApplyApp(ctx, spec); err != nil {
 		t.Fatalf("second apply: %v", err)
 	}
-	second, err := client.AppsV1().Deployments("yacht-demo").Get(ctx, "web", metav1.GetOptions{})
+	second, err := client.AppsV1().Deployments("ozymandis-demo").Get(ctx, "web", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestSpecHash(t *testing.T) {
 
 func TestAppStatus(t *testing.T) {
 	ctx := context.Background()
-	ref := orchestrator.Ref{Owner: "owner-1", Namespace: "yacht-demo", Name: "web"}
+	ref := orchestrator.Ref{Owner: "owner-1", Namespace: "ozymandis-demo", Name: "web"}
 
 	t.Run("missing workload", func(t *testing.T) {
 		o, _ := testOrchestrator(t)
@@ -332,14 +332,14 @@ func TestAppStatus(t *testing.T) {
 			o, client := testOrchestrator(t)
 			replicas := tc.desired
 			dep := &appsv1.Deployment{
-				ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "yacht-demo"},
+				ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "ozymandis-demo"},
 				Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
 				Status: appsv1.DeploymentStatus{
 					ReadyReplicas:     tc.ready,
 					AvailableReplicas: tc.ready,
 				},
 			}
-			if _, err := client.AppsV1().Deployments("yacht-demo").
+			if _, err := client.AppsV1().Deployments("ozymandis-demo").
 				Create(ctx, dep, metav1.CreateOptions{}); err != nil {
 				t.Fatalf("seed deployment: %v", err)
 			}

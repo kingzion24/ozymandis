@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/codeblocktz/yacht/internal/registry"
+	"github.com/kingzion24/ozymandis/internal/registry"
 )
 
 // Registries is the dashboard's view of where images go.

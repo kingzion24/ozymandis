@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/codeblocktz/yacht/internal/store/dbgen"
+	"github.com/kingzion24/ozymandis/internal/store/dbgen"
 )
 
 // DeployDay is one day's deploys, split by how they ended.

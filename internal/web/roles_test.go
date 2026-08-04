@@ -16,10 +16,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/codeblocktz/yacht/internal/account"
-	"github.com/codeblocktz/yacht/internal/app"
-	"github.com/codeblocktz/yacht/internal/identity"
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/account"
+	"github.com/kingzion24/ozymandis/internal/app"
+	"github.com/kingzion24/ozymandis/internal/identity"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 // rolelessAccounts resolves any cookie to a session that is signed in and holds
@@ -51,7 +51,7 @@ func gatedServer(t *testing.T, accounts Accounts, team string) http.Handler {
 		Identity:        identity.NewSingleOwner(identity.Owner{ID: team}),
 		Accounts:        accounts,
 		Mailer:          &fakeMailer{},
-		BaseURL:         "https://yacht.test",
+		BaseURL:         "https://ozymandis.test",
 		BootstrapTeamID: team,
 		// Present so the join routes are on the table the walk below covers.
 		// A route only reachable in some configurations is exactly the one
@@ -344,13 +344,13 @@ func TestRoleCannotBeAssertedByTheClient(t *testing.T) {
 	}
 	headers := map[string]string{
 		"X-Role":             "owner",
-		"X-Yacht-Role":       "owner",
+		"X-Ozymandis-Role":       "owner",
 		"X-Forwarded-Role":   "owner",
-		"X-Yacht-Owner":      rt.teamID,
-		"X-Yacht-User":       rt.ownerID.String(),
+		"X-Ozymandis-Owner":      rt.teamID,
+		"X-Ozymandis-User":       rt.ownerID.String(),
 		"Authorization":      "Bearer owner",
 		"X-Forwarded-Proto":  "https",
-		"X-Yacht-Session-Id": rt.owner.Value,
+		"X-Ozymandis-Session-Id": rt.owner.Value,
 	}
 
 	rec := rt.postClaiming(t, del+"?role=owner&admin=true", rt.member, claims, headers)

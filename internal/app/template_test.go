@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/codeblocktz/yacht/internal/secret"
+	"github.com/kingzion24/ozymandis/internal/secret"
 )
 
 func TestAStackNameHasToLeaveRoomForTheAppNames(t *testing.T) {

@@ -14,8 +14,8 @@ import templruntime "github.com/a-h/templ/runtime"
 
 import (
 	"context"
-	"github.com/codeblocktz/yacht/internal/web/ui/icon"
-	"github.com/codeblocktz/yacht/internal/web/ui/utils"
+	"github.com/kingzion24/ozymandis/internal/web/ui/icon"
+	"github.com/kingzion24/ozymandis/internal/web/ui/utils"
 )
 
 type contextKey string

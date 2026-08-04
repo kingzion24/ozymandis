@@ -90,14 +90,14 @@ func TestTheFaviconIsTheMark(t *testing.T) {
 // took the name with it — the mark and the wordmark are both marked decorative,
 // which is correct for images of a name and useless for the link around them.
 func TestTheBrandLinkIsStillNamed(t *testing.T) {
-	page := renderToString(t, Layout(Slots{Title: "t", BrandName: "Yacht", BrandHref: "/"},
+	page := renderToString(t, Layout(Slots{Title: "t", BrandName: "Ozymandis", BrandHref: "/"},
 		templ.ComponentFunc(func(context.Context, io.Writer) error { return nil })))
 
 	brand := regexp.MustCompile(`<a[^>]*class="brand[^"]*"[^>]*>`).FindString(page)
 	if brand == "" {
 		t.Fatal("no brand link in the layout")
 	}
-	if !strings.Contains(brand, `aria-label="Yacht"`) {
+	if !strings.Contains(brand, `aria-label="Ozymandis"`) {
 		t.Errorf("the brand link has no accessible name: %s", brand)
 	}
 }

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 func TestClampPercent(t *testing.T) {

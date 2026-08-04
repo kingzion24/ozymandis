@@ -16,8 +16,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/codeblocktz/yacht/internal/store"
-	"github.com/codeblocktz/yacht/internal/store/dbgen"
+	"github.com/kingzion24/ozymandis/internal/store"
+	"github.com/kingzion24/ozymandis/internal/store/dbgen"
 )
 
 // testPool migrates and returns a pool, skipping when no database is
@@ -28,9 +28,9 @@ import (
 // while the pool is still open.
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("YACHT_TEST_DATABASE_URL")
+	dsn := os.Getenv("OZYMANDIS_TEST_DATABASE_URL")
 	if dsn == "" {
-		t.Skip("set YACHT_TEST_DATABASE_URL to run store tests")
+		t.Skip("set OZYMANDIS_TEST_DATABASE_URL to run store tests")
 	}
 	ctx := context.Background()
 

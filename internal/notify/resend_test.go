@@ -11,7 +11,7 @@ import (
 )
 
 func TestNewResendRejectsIncompleteConfig(t *testing.T) {
-	if _, err := NewResend("", "yacht@example.test"); err == nil {
+	if _, err := NewResend("", "ozymandis@example.test"); err == nil {
 		t.Error("NewResend accepted an empty API key")
 	}
 	if _, err := NewResend("re_123", ""); err == nil {
@@ -32,7 +32,7 @@ func TestResendPostsTheMessage(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m, err := NewResend("re_123", "yacht@example.test")
+	m, err := NewResend("re_123", "ozymandis@example.test")
 	if err != nil {
 		t.Fatalf("NewResend: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestResendReportsAnAPIError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m, _ := NewResend("re_123", "yacht@example.test")
+	m, _ := NewResend("re_123", "ozymandis@example.test")
 	m.(*resendMailer).endpoint = srv.URL
 
 	err := m.Send(context.Background(), Message{

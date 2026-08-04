@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
-	"github.com/codeblocktz/yacht/internal/store/dbgen"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/store/dbgen"
 )
 
 // stubBuilder answers for a build without running one.

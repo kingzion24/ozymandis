@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/codeblocktz/yacht/internal/web/ui/utils"
+	"github.com/kingzion24/ozymandis/internal/web/ui/utils"
 )
 
 // Compiled CSS is embedded rather than served from disk, so the binary is the

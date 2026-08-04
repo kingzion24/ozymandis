@@ -9,7 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/codeblocktz/yacht/internal/store/dbgen"
+	"github.com/kingzion24/ozymandis/internal/store/dbgen"
 )
 
 // DefaultTXTPrefix is what ExternalDNS is usually deployed with.
@@ -28,7 +28,7 @@ type DNS struct {
 
 	// TXTPrefix must match --txt-prefix on the ExternalDNS controller.
 	//
-	// Recorded rather than applied. Yacht does not deploy that controller and
+	// Recorded rather than applied. Ozymandis does not deploy that controller and
 	// cannot set a flag on it; keeping the value here is so the two can be kept
 	// in step and so the page can say what it should be. Nothing in an Ingress
 	// carries it.

@@ -10,9 +10,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/codeblocktz/yacht/internal/domain"
-	"github.com/codeblocktz/yacht/internal/orchestrator"
-	"github.com/codeblocktz/yacht/internal/store/dbgen"
+	"github.com/kingzion24/ozymandis/internal/domain"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/store/dbgen"
 )
 
 // LogRequest asks for one app's container output.
@@ -252,7 +252,7 @@ type HTTPLogs struct {
 	Note string
 	Hint string
 
-	// CanEnable means Yacht can apply that configuration itself.
+	// CanEnable means Ozymandis can apply that configuration itself.
 	CanEnable bool
 }
 
@@ -312,7 +312,7 @@ func (s *Service) DeploymentHTTPLogs(
 		out.Note = "The ingress controller is running but is not writing an access " +
 			"log, so no requests are being recorded — for this app or any other."
 		out.Hint = logger.HTTPLogHint()
-		// Whether Yacht can do it, rather than only describe it. False on a
+		// Whether Ozymandis can do it, rather than only describe it. False on a
 		// cluster whose controller somebody else installed, where the page
 		// falls back to handing over the configuration.
 		out.CanEnable = s.canApplyHTTPLogs(ctx, logger)

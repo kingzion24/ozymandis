@@ -21,8 +21,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codeblocktz/yacht/internal/account"
-	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/kingzion24/ozymandis/internal/account"
+	"github.com/kingzion24/ozymandis/internal/app"
 )
 
 // cross-team IDOR. Admin of team A, acting on team B's objects by id.

@@ -9,8 +9,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/codeblocktz/yacht/internal/app"
-	"github.com/codeblocktz/yacht/internal/identity"
+	"github.com/kingzion24/ozymandis/internal/app"
+	"github.com/kingzion24/ozymandis/internal/identity"
 )
 
 // gib is the unit the form works in. Bytes are what the engine stores, because
@@ -199,6 +199,19 @@ func (s *Server) healthSet(w http.ResponseWriter, r *http.Request) {
 	err := s.apps.SetHealth(ctx, owner.ID, name,
 		r.FormValue("health_path"), r.FormValue("liveness") != "")
 	if err != nil {
+		s.appActionFailed(w, r, name, "settings", err)
+		return
+	}
+	http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
+}
+
+// commandSet replaces the image's entrypoint, or restores it.
+func (s *Server) commandSet(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name := chi.URLParam(r, "name")
+
+	if err := s.apps.SetCommand(ctx, owner.ID, name, r.FormValue("command")); err != nil {
 		s.appActionFailed(w, r, name, "settings", err)
 		return
 	}

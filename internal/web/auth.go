@@ -13,8 +13,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/codeblocktz/yacht/internal/account"
-	"github.com/codeblocktz/yacht/internal/notify"
+	"github.com/kingzion24/ozymandis/internal/account"
+	"github.com/kingzion24/ozymandis/internal/notify"
 )
 
 // SessionCookie is the name of the cookie carrying a session token.
@@ -22,7 +22,7 @@ import (
 // It matches account.DefaultCookieName because the session provider resolves
 // requests by reading a cookie of that name: a mismatch would write a cookie
 // nothing reads.
-const SessionCookie = "yacht_session"
+const SessionCookie = "ozymandis_session"
 
 // requestIsTLS reports whether the request reached us over TLS.
 //
@@ -171,12 +171,12 @@ func (s *Server) mailSignInLink(ctx context.Context, email string) {
 
 	// Built from the configured base URL, never from the Host header: a link
 	// built from a header is a link an attacker can point at their own server
-	// and have Yacht mail to a real person.
+	// and have Ozymandis mail to a real person.
 	link := s.baseURL + "/auth/" + raw
 
 	if err := s.mailer.Send(ctx, notify.Message{
 		To:       user.Email,
-		Subject:  "Your Yacht sign-in link",
+		Subject:  "Your Ozymandis sign-in link",
 		TextBody: signInBody(link, s.magicTTL),
 	}); err != nil {
 		s.log.Error("send sign-in link",
@@ -349,7 +349,7 @@ func (s *Server) activeTeam(ctx context.Context, user account.User) (string, err
 }
 
 func signInBody(link string, ttl time.Duration) string {
-	return "Someone asked to sign in to Yacht with this address.\n\n" +
+	return "Someone asked to sign in to Ozymandis with this address.\n\n" +
 		"Follow this link to sign in:\n\n" +
 		link + "\n\n" +
 		"The link works once and expires in " + ttl.String() + ".\n" +
@@ -504,7 +504,7 @@ func (s *Server) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 	if existed || raw != "" {
 		msg := notify.Message{
 			To:      inv.Email,
-			Subject: "Sign in to Yacht to accept your invitation",
+			Subject: "Sign in to Ozymandis to accept your invitation",
 			TextBody: "Sign in to accept your invitation:\n\n" +
 				s.baseURL + "/auth/" + raw + "\n\n" +
 				"Then open the invitation link again.\n" +

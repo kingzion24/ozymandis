@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codeblocktz/yacht/internal/identity"
+	"github.com/kingzion24/ozymandis/internal/identity"
 )
 
 func TestSessionRoundTrip(t *testing.T) {
@@ -172,10 +172,10 @@ func TestSessionsImplementsIdentityProvider(t *testing.T) {
 	_, _ = s.CreateTeam(ctx, "team-provider", "Team", u.ID)
 	raw, _ := s.CreateSession(ctx, u.ID, "team-provider", "", "", time.Hour)
 
-	var p identity.Provider = s.Provider("yacht_session")
+	var p identity.Provider = s.Provider("ozymandis_session")
 
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	r.AddCookie(&http.Cookie{Name: "yacht_session", Value: raw})
+	r.AddCookie(&http.Cookie{Name: "ozymandis_session", Value: raw})
 
 	owner, err := p.Resolve(ctx, r)
 	if err != nil {

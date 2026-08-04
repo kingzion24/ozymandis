@@ -3,7 +3,7 @@ package k8s
 import (
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 )
 

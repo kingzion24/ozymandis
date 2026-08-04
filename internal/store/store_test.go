@@ -10,7 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/codeblocktz/yacht/internal/store/dbgen"
+	"github.com/kingzion24/ozymandis/internal/store/dbgen"
 )
 
 // testDSN returns the connection string for the test database, or skips.
@@ -19,9 +19,9 @@ import (
 // no Postgres, while CI sets the variable and runs the real thing.
 func testDSN(t *testing.T) string {
 	t.Helper()
-	dsn := os.Getenv("YACHT_TEST_DATABASE_URL")
+	dsn := os.Getenv("OZYMANDIS_TEST_DATABASE_URL")
 	if dsn == "" {
-		t.Skip("set YACHT_TEST_DATABASE_URL to run store tests")
+		t.Skip("set OZYMANDIS_TEST_DATABASE_URL to run store tests")
 	}
 	return dsn
 }
@@ -527,15 +527,15 @@ func TestSecretVariablesCannotBeStoredReadable(t *testing.T) {
 
 // Migrations must survive being run twice at once.
 //
-// Two Yacht instances starting together both migrate at boot, and the test
+// Two Ozymandis instances starting together both migrate at boot, and the test
 // suite does the same thing harder: `go test ./...` runs packages in parallel
 // and several of them migrate the same database. Without a lock the second one
 // finds a table the first has just created and fails with "already exists" —
 // which reads as a broken migration rather than as a race.
 func TestConcurrentMigrationsAllSucceed(t *testing.T) {
-	dsn := os.Getenv("YACHT_TEST_DATABASE_URL")
+	dsn := os.Getenv("OZYMANDIS_TEST_DATABASE_URL")
 	if dsn == "" {
-		t.Skip("set YACHT_TEST_DATABASE_URL to run store tests")
+		t.Skip("set OZYMANDIS_TEST_DATABASE_URL to run store tests")
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 

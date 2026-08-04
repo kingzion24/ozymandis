@@ -17,28 +17,28 @@ const (
 
 	// LabelApp is the engine's own stable handle on a workload. This is the
 	// selector key.
-	LabelApp = "yacht/app"
+	LabelApp = "ozymandis/app"
 
 	// LabelOwner records the owning principal. Deliberately NOT part of the
 	// selector: selectors are immutable, and keeping ownership out of them
 	// leaves room to reassign a workload without recreating it.
-	LabelOwner = "yacht/owner-id"
+	LabelOwner = "ozymandis/owner-id"
 
 	// ManagedByValue is the value of LabelManagedBy.
-	ManagedByValue = "yacht"
+	ManagedByValue = "ozymandis"
 )
 
 // Annotation keys.
 const (
 	// AnnotationRevision changes on every apply, which is what triggers a
 	// rollout when the pod template is otherwise unchanged.
-	AnnotationRevision = "yacht/revision"
+	AnnotationRevision = "ozymandis/revision"
 )
 
 // FieldManager identifies the engine to Kubernetes server-side apply. Using a
 // stable field manager is what lets repeated applies converge instead of
 // fighting over fields.
-const FieldManager = "yacht-engine"
+const FieldManager = "ozymandis-engine"
 
 // SelectorLabels returns the minimal, stable label set used to match a
 // workload's pods.

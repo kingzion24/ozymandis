@@ -38,6 +38,7 @@ type App struct {
 	RepoBranch     string
 	RepoSubdir     string
 	RunAsUser      int64
+	Command        string
 }
 
 type AppLink struct {

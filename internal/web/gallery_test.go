@@ -14,8 +14,8 @@ import (
 	"github.com/a-h/templ"
 	"github.com/google/uuid"
 
-	"github.com/codeblocktz/yacht/internal/app"
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/app"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 // A gallery of every visual state the dashboard can be in.
@@ -26,14 +26,14 @@ import (
 // node at 95% — are exactly the ones that silently rot, because nobody sees
 // them until a customer does.
 //
-// Writes files only when YACHT_GALLERY_OUT is set, so the normal test run stays
+// Writes files only when OZYMANDIS_GALLERY_OUT is set, so the normal test run stays
 // a normal test run:
 //
-//	YACHT_GALLERY_OUT=/tmp/gallery go test ./internal/web -run Gallery
+//	OZYMANDIS_GALLERY_OUT=/tmp/gallery go test ./internal/web -run Gallery
 func TestGallery(t *testing.T) {
-	out := os.Getenv("YACHT_GALLERY_OUT")
+	out := os.Getenv("OZYMANDIS_GALLERY_OUT")
 	if out == "" {
-		t.Skip("set YACHT_GALLERY_OUT to write gallery HTML")
+		t.Skip("set OZYMANDIS_GALLERY_OUT to write gallery HTML")
 	}
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -167,33 +167,33 @@ func galleryPages() []galleryPage {
 	allApps := []app.App{running, degraded, pending, stopped, unknown, failing}
 
 	pods := []orchestrator.PodInfo{
-		{Name: "web-7d9f4b6c85-2xk9p", Namespace: "yacht-a1b2", Phase: "Running",
-			Node: "yacht-cp", Ready: 1, Total: 1, CreatedAt: now.Add(-4 * time.Hour)},
-		{Name: "api-5c8b7d94f6-hq2mz", Namespace: "yacht-c3d4", Phase: "Running",
-			Node: "yacht-w1", Ready: 1, Total: 2, Restarts: 4, CreatedAt: now.Add(-time.Hour)},
-		{Name: "worker-64b9c7f8d2-pl4vn", Namespace: "yacht-e5f6", Phase: "Pending",
+		{Name: "web-7d9f4b6c85-2xk9p", Namespace: "ozymandis-a1b2", Phase: "Running",
+			Node: "ozymandis-cp", Ready: 1, Total: 1, CreatedAt: now.Add(-4 * time.Hour)},
+		{Name: "api-5c8b7d94f6-hq2mz", Namespace: "ozymandis-c3d4", Phase: "Running",
+			Node: "ozymandis-w1", Ready: 1, Total: 2, Restarts: 4, CreatedAt: now.Add(-time.Hour)},
+		{Name: "worker-64b9c7f8d2-pl4vn", Namespace: "ozymandis-e5f6", Phase: "Pending",
 			Node: "", Ready: 0, Total: 1, CreatedAt: now.Add(-90 * time.Second)},
-		{Name: "mailer-8f7d6c5b4a-zz91k", Namespace: "yacht-0718", Phase: "Failed",
-			Node: "yacht-w1", Ready: 0, Total: 1, Restarts: 12, CreatedAt: now.Add(-20 * time.Minute)},
+		{Name: "mailer-8f7d6c5b4a-zz91k", Namespace: "ozymandis-0718", Phase: "Failed",
+			Node: "ozymandis-w1", Ready: 0, Total: 1, Restarts: 12, CreatedAt: now.Add(-20 * time.Minute)},
 	}
 
 	nodes := []orchestrator.NodeInfo{
 		{
-			Name: "yacht-cp", Ready: true, Roles: []string{"control-plane", "master"},
+			Name: "ozymandis-cp", Ready: true, Roles: []string{"control-plane", "master"},
 			Address: "10.0.0.4", Version: "v1.36.2+k3s1", OS: "linux", Architecture: "arm64",
 			CPUCapacityMillis: 4000, CPUUsedMillis: 760,
 			MemCapacityBytes: 8 << 30, MemUsedBytes: 3<<30 + 512<<20,
 			Pods: 23, PodCapacity: 110, UsageKnown: true, Pool: "system",
 		},
 		{
-			Name: "yacht-w1", Ready: true, Roles: []string{"worker"},
+			Name: "ozymandis-w1", Ready: true, Roles: []string{"worker"},
 			Address: "10.0.0.5", Version: "v1.36.2+k3s1", OS: "linux", Architecture: "arm64",
 			CPUCapacityMillis: 2000, CPUUsedMillis: 1640,
 			MemCapacityBytes: 4 << 30, MemUsedBytes: 3<<30 + 300<<20,
 			Pods: 31, PodCapacity: 110, UsageKnown: true, Pool: "apps",
 		},
 		{
-			Name: "yacht-w2", Ready: false, Roles: []string{"worker"},
+			Name: "ozymandis-w2", Ready: false, Roles: []string{"worker"},
 			Address: "10.0.0.6", Version: "v1.36.2+k3s1", OS: "linux", Architecture: "amd64",
 			CPUCapacityMillis: 2000, CPUUsedMillis: 1960,
 			MemCapacityBytes: 4 << 30, MemUsedBytes: 3<<30 + 900<<20,

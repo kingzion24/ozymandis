@@ -1,9 +1,9 @@
 # Binaries
-# Anchored to the repo root. An unanchored `yacht` matches at every depth and
-# silently excludes cmd/yacht/, so a fresh clone has no main package to build.
+# Anchored to the repo root. An unanchored `ozymandis` matches at every depth and
+# silently excludes cmd/ozymandis/, so a fresh clone has no main package to build.
 /bin/
 /dist/
-/yacht
+/ozymandis
 /docs/
 
 # Go
@@ -30,6 +30,10 @@ kubeconfig
 .claude/
 *.swp
 
+# Knowledge graph output. Regenerate with `/graphify` rather than committing it;
+# graph.json and the HTML are large and change on every build.
+/graphify-out/
+
 # Authoring-time only. The built bundle in internal/web/assets/js is committed,
-# so building and running Yacht need neither Node nor these.
+# so building and running Ozymandis need neither Node nor these.
 /node_modules/

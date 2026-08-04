@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/kingzion24/ozymandis/internal/app"
 )
 
 func node(t *testing.T, d CanvasData, name string) CanvasNode {

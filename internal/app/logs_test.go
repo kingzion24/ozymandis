@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 // loggingOrchestrator records which pod was asked for, so a test can prove the
@@ -59,7 +59,7 @@ func TestAPodNameFromTheRequestIsNotTrusted(t *testing.T) {
 	orch.pods = []orchestrator.PodInfo{
 		{Name: "web-1", Namespace: a.Namespace},
 		// Somebody else's, in a namespace this app does not own.
-		{Name: "victim-db-1", Namespace: "yacht-someone-else"},
+		{Name: "victim-db-1", Namespace: "ozymandis-someone-else"},
 	}
 
 	if _, err := s.Logs(ctx, ownerID, "web", LogRequest{Pod: "victim-db-1"}); err != ErrNotFound {
@@ -337,7 +337,7 @@ func TestAPodNameIsNotTrustedWhenStreamingEither(t *testing.T) {
 	}
 	orch.pods = []orchestrator.PodInfo{
 		{Name: "web-1", Namespace: a.Namespace},
-		{Name: "victim-db-1", Namespace: "yacht-someone-else"},
+		{Name: "victim-db-1", Namespace: "ozymandis-someone-else"},
 	}
 
 	if _, err := s.LogStream(ctx, ownerID, "web", LogRequest{Pod: "victim-db-1"}); err != ErrNotFound {

@@ -37,7 +37,7 @@ CREATE TABLE platform_dns (
     -- to target so it issues a CNAME instead of exposing raw node IPs.
     cname_target text NOT NULL DEFAULT '',
 
-    -- Must match --txt-prefix on the ExternalDNS controller. Yacht does not
+    -- Must match --txt-prefix on the ExternalDNS controller. Ozymandis does not
     -- deploy that controller and cannot set the flag; this is recorded so the
     -- two can be kept in step, and the page says so rather than implying the
     -- value takes effect from here.

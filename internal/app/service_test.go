@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"github.com/codeblocktz/yacht/internal/secret"
+	"github.com/kingzion24/ozymandis/internal/secret"
 	"io"
 	"log/slog"
 	"os"
@@ -14,15 +14,15 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
-	"github.com/codeblocktz/yacht/internal/store"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/store"
 )
 
 func testService(t *testing.T, opts Options) (*Service, *recordingOrchestrator, *pgxpool.Pool) {
 	t.Helper()
-	dsn := os.Getenv("YACHT_TEST_DATABASE_URL")
+	dsn := os.Getenv("OZYMANDIS_TEST_DATABASE_URL")
 	if dsn == "" {
-		t.Skip("set YACHT_TEST_DATABASE_URL to run app service tests")
+		t.Skip("set OZYMANDIS_TEST_DATABASE_URL to run app service tests")
 	}
 	ctx := context.Background()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -314,7 +314,7 @@ func TestCreateWithoutAnAppDomainIssuesNoHostname(t *testing.T) {
 
 // Changing the app domain moves each app's URL the next time it is applied,
 // rather than all at once at startup. The managed column is what makes that
-// safe: the reconcile rewrites only rows Yacht issued.
+// safe: the reconcile rewrites only rows Ozymandis issued.
 func TestApplyReissuesWhenTheAppDomainChanges(t *testing.T) {
 	ctx := context.Background()
 	s, _, pool := testService(t, Options{AppDomain: "apps.example.com"})

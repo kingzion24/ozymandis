@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
 // inspectorStub returns fixed cluster inspection data, so page behaviour can be
@@ -36,13 +36,13 @@ func newInspector() inspectorStub {
 		Noop: orchestrator.NewNoop(),
 		events: []orchestrator.EventInfo{
 			{
-				Namespace: "yacht-a1b2", Type: "Warning", Reason: "FailedScheduling",
+				Namespace: "ozymandis-a1b2", Type: "Warning", Reason: "FailedScheduling",
 				Message: "0/3 nodes are available: insufficient cpu",
 				Object:  "Pod/api-5c8b7d94f6-hq2mz",
 				Count:   7, LastSeen: now.Add(-4 * time.Minute),
 			},
 			{
-				Namespace: "yacht-c3d4", Type: "Normal", Reason: "Pulled",
+				Namespace: "ozymandis-c3d4", Type: "Normal", Reason: "Pulled",
 				Message: `Successfully pulled image "nginx:alpine"`,
 				Object:  "Pod/web-7d9f4b6c85-2xk9p",
 				Count:   1, LastSeen: now.Add(-90 * time.Second),
@@ -50,13 +50,13 @@ func newInspector() inspectorStub {
 		},
 		volumes: []orchestrator.VolumeInfo{
 			{
-				Name: "data-web-0", Namespace: "yacht-a1b2", Phase: "Bound",
+				Name: "data-web-0", Namespace: "ozymandis-a1b2", Phase: "Bound",
 				StorageClass: "local-path", CapacityBytes: 8 << 30,
 				RequestBytes: 8 << 30, AccessModes: []string{"RWO"},
 				App: "web", CreatedAt: now.Add(-48 * time.Hour),
 			},
 			{
-				Name: "data-api-0", Namespace: "yacht-c3d4", Phase: "Pending",
+				Name: "data-api-0", Namespace: "ozymandis-c3d4", Phase: "Pending",
 				StorageClass: "longhorn", RequestBytes: 20 << 30,
 				AccessModes: []string{"RWX"}, App: "api",
 				CreatedAt: now.Add(-2 * time.Minute),
@@ -78,7 +78,7 @@ func TestEventsPage(t *testing.T) {
 	// "insufficient cpu" is.
 	for _, want := range []string{
 		"FailedScheduling", "insufficient cpu",
-		"Pod/api-5c8b7d94f6-hq2mz", "yacht-a1b2",
+		"Pod/api-5c8b7d94f6-hq2mz", "ozymandis-a1b2",
 		// How many times it happened. A count column rather than a "×7" tag
 		// since the list became a table, but the number still has to be there:
 		// one FailedScheduling is a scheduling delay and seven is a cluster
