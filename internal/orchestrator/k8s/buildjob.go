@@ -121,7 +121,9 @@ fi`
 // gets its own image — clone, BuildKit, buildpacks — so none of them has to be
 // a custom image this project builds and publishes, which would make running
 // Ozymandis depend on Ozymandis having somewhere to push.
-func buildJob(name string, req orchestrator.BuildRequest, pullSecret string) *batchv1.Job {
+func buildJob(
+	name string, req orchestrator.BuildRequest, pullSecret, sshSecret string,
+) *batchv1.Job {
 	// Never retried. A build that failed will fail the same way, and a second
 	// attempt would double the log, double the wait, and end where it started.
 	// Kubernetes' own default is six.
@@ -133,7 +135,7 @@ func buildJob(name string, req orchestrator.BuildRequest, pullSecret string) *ba
 	labels := map[string]string{
 		orchestrator.LabelManagedBy: orchestrator.ManagedByValue,
 		orchestrator.LabelOwner:     sanitiseLabel(string(req.Owner)),
-		"ozymandis/build":               "true",
+		"ozymandis/build":           "true",
 	}
 
 	return &batchv1.Job{
@@ -166,7 +168,7 @@ func buildJob(name string, req orchestrator.BuildRequest, pullSecret string) *ba
 					SecurityContext: &corev1.PodSecurityContext{
 						FSGroup: int64Ptr(cnbGID),
 					},
-					Volumes: []corev1.Volume{
+					Volumes: append([]corev1.Volume{
 						{
 							Name: buildVolume,
 							VolumeSource: corev1.VolumeSource{
@@ -184,9 +186,9 @@ func buildJob(name string, req orchestrator.BuildRequest, pullSecret string) *ba
 								},
 							},
 						},
-					},
+					}, sshVolumes(sshSecret)...),
 					InitContainers: []corev1.Container{
-						cloneStep(req),
+						cloneStep(req, sshSecret),
 						dockerfileStep(req),
 					},
 					Containers: []corev1.Container{buildpackStep(req)},
@@ -202,8 +204,8 @@ func buildJob(name string, req orchestrator.BuildRequest, pullSecret string) *ba
 // into the script. A repository URL is somebody's input, and a value spliced
 // into a shell command is a command they get to extend — validation upstream
 // makes that unlikely, and this makes it impossible.
-func cloneStep(req orchestrator.BuildRequest) corev1.Container {
-	return corev1.Container{
+func cloneStep(req orchestrator.BuildRequest, sshSecret string) corev1.Container {
+	c := corev1.Container{
 		Name:  cloneContainer,
 		Image: gitImage,
 		Env: []corev1.EnvVar{
@@ -220,6 +222,55 @@ echo "Cloned $(git -C /workspace/src rev-parse --short HEAD)"
 		SecurityContext: hardened(buildUID),
 		VolumeMounts:    []corev1.VolumeMount{{Name: buildVolume, MountPath: "/workspace"}},
 	}
+
+	if sshSecret == "" {
+		return c
+	}
+
+	// The deploy key, mounted read-only into THIS STEP ONLY.
+	//
+	// Only the clone: the BuildKit and buildpack steps run whatever the
+	// repository tells them to, and a key readable there is a key any
+	// Dockerfile can copy into a layer and publish with the image.
+	//
+	// StrictHostKeyChecking=accept-new rather than yes: pinning a host key
+	// would mean shipping GitHub's, and it rotates. accept-new still refuses a
+	// host whose key CHANGES mid-life, which is the attack worth catching here;
+	// "no" would accept anything and is what most examples on the internet say.
+	c.Env = append(c.Env, corev1.EnvVar{
+		Name: "GIT_SSH_COMMAND",
+		Value: "ssh -i /ssh/id -o IdentitiesOnly=yes " +
+			"-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known_hosts",
+	})
+	c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{
+		Name: sshVolume, MountPath: "/ssh", ReadOnly: true,
+	})
+	return c
+}
+
+// sshVolume is the name of the deploy-key volume.
+const sshVolume = "deploy-key"
+
+// sshVolumes is the volume list for a build that has a deploy key, or nothing.
+//
+// Mode 0400: ssh refuses a private key any group or other can read, and the
+// failure it gives — "permissions are too open" — is one people spend an
+// afternoon on.
+func sshVolumes(sshSecret string) []corev1.Volume {
+	if sshSecret == "" {
+		return nil
+	}
+	mode := int32(0o400)
+	return []corev1.Volume{{
+		Name: sshVolume,
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName:  sshSecret,
+				DefaultMode: &mode,
+				Items:       []corev1.KeyToPath{{Key: "id", Path: "id"}},
+			},
+		},
+	}}
 }
 
 // dockerfileStep builds a Dockerfile with rootless BuildKit, if there is one.

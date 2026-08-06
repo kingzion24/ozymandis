@@ -144,10 +144,19 @@ func TestMembershipIsUniquePerUserAndTeam(t *testing.T) {
 	const teamID = "test-membership-team"
 	seedOwners(t, pool, teamID)
 
+	// @store.test, not @example.test. `go test ./...` runs packages in parallel
+	// against one database, and the account package's fixture purges every user
+	// matching '%@example.test' on setup and teardown. A purge landing between
+	// the insert below and the membership insert after it deletes this user
+	// mid-test, and the failure surfaces as a foreign key violation on
+	// memberships that has nothing to do with what is being tested.
+	//
+	// Every package that creates users keeps to its own suffix for this reason —
+	// web uses @web.test — and this one was the exception.
 	var userID string
 	if err := pool.QueryRow(ctx,
 		`INSERT INTO users (email) VALUES ($1) RETURNING id`,
-		"membership@example.test").Scan(&userID); err != nil {
+		"membership@store.test").Scan(&userID); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
 	t.Cleanup(func() {

@@ -31,7 +31,7 @@ INSERT INTO apps (
     repo_url, repo_branch, repo_subdir, command
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command, release_command, auto_deploy, webhook_secret, deploy_key, deploy_key_public, last_deployed_sha
 `
 
 type CreateAppParams struct {
@@ -103,6 +103,12 @@ func (q *Queries) CreateApp(ctx context.Context, arg CreateAppParams) (App, erro
 		&i.RepoSubdir,
 		&i.RunAsUser,
 		&i.Command,
+		&i.ReleaseCommand,
+		&i.AutoDeploy,
+		&i.WebhookSecret,
+		&i.DeployKey,
+		&i.DeployKeyPublic,
+		&i.LastDeployedSha,
 	)
 	return i, err
 }
@@ -110,7 +116,7 @@ func (q *Queries) CreateApp(ctx context.Context, arg CreateAppParams) (App, erro
 const createDeployment = `-- name: CreateDeployment :one
 INSERT INTO deployments (owner_id, app_id, image, revision, status)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, owner_id, app_id, image, revision, status, message, started_at, finished_at
+RETURNING id, owner_id, app_id, image, revision, status, message, started_at, finished_at, release_log, release_status
 `
 
 type CreateDeploymentParams struct {
@@ -140,6 +146,8 @@ func (q *Queries) CreateDeployment(ctx context.Context, arg CreateDeploymentPara
 		&i.Message,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.ReleaseLog,
+		&i.ReleaseStatus,
 	)
 	return i, err
 }
@@ -247,7 +255,7 @@ const finishDeployment = `-- name: FinishDeployment :one
 UPDATE deployments
 SET status = $3, message = $4, finished_at = now()
 WHERE owner_id = $1 AND id = $2
-RETURNING id, owner_id, app_id, image, revision, status, message, started_at, finished_at
+RETURNING id, owner_id, app_id, image, revision, status, message, started_at, finished_at, release_log, release_status
 `
 
 type FinishDeploymentParams struct {
@@ -275,12 +283,14 @@ func (q *Queries) FinishDeployment(ctx context.Context, arg FinishDeploymentPara
 		&i.Message,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.ReleaseLog,
+		&i.ReleaseStatus,
 	)
 	return i, err
 }
 
 const getApp = `-- name: GetApp :one
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command, release_command, auto_deploy, webhook_secret, deploy_key, deploy_key_public, last_deployed_sha FROM apps
 WHERE owner_id = $1 AND name = $2
 `
 
@@ -320,12 +330,18 @@ func (q *Queries) GetApp(ctx context.Context, arg GetAppParams) (App, error) {
 		&i.RepoSubdir,
 		&i.RunAsUser,
 		&i.Command,
+		&i.ReleaseCommand,
+		&i.AutoDeploy,
+		&i.WebhookSecret,
+		&i.DeployKey,
+		&i.DeployKeyPublic,
+		&i.LastDeployedSha,
 	)
 	return i, err
 }
 
 const getAppByID = `-- name: GetAppByID :one
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command, release_command, auto_deploy, webhook_secret, deploy_key, deploy_key_public, last_deployed_sha FROM apps
 WHERE owner_id = $1 AND id = $2
 `
 
@@ -365,12 +381,18 @@ func (q *Queries) GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, er
 		&i.RepoSubdir,
 		&i.RunAsUser,
 		&i.Command,
+		&i.ReleaseCommand,
+		&i.AutoDeploy,
+		&i.WebhookSecret,
+		&i.DeployKey,
+		&i.DeployKeyPublic,
+		&i.LastDeployedSha,
 	)
 	return i, err
 }
 
 const getDeployment = `-- name: GetDeployment :one
-SELECT id, owner_id, app_id, image, revision, status, message, started_at, finished_at FROM deployments
+SELECT id, owner_id, app_id, image, revision, status, message, started_at, finished_at, release_log, release_status FROM deployments
 WHERE owner_id = $1 AND id = $2
 `
 
@@ -392,6 +414,8 @@ func (q *Queries) GetDeployment(ctx context.Context, arg GetDeploymentParams) (D
 		&i.Message,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.ReleaseLog,
+		&i.ReleaseStatus,
 	)
 	return i, err
 }
@@ -414,7 +438,7 @@ func (q *Queries) GetTeamRow(ctx context.Context, id string) (Team, error) {
 }
 
 const listApps = `-- name: ListApps :many
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command, release_command, auto_deploy, webhook_secret, deploy_key, deploy_key_public, last_deployed_sha FROM apps
 WHERE owner_id = $1
 ORDER BY name
 `
@@ -456,6 +480,135 @@ func (q *Queries) ListApps(ctx context.Context, ownerID string) ([]App, error) {
 			&i.RepoSubdir,
 			&i.RunAsUser,
 			&i.Command,
+			&i.ReleaseCommand,
+			&i.AutoDeploy,
+			&i.WebhookSecret,
+			&i.DeployKey,
+			&i.DeployKeyPublic,
+			&i.LastDeployedSha,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAutoDeployApps = `-- name: ListAutoDeployApps :many
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command, release_command, auto_deploy, webhook_secret, deploy_key, deploy_key_public, last_deployed_sha FROM apps WHERE auto_deploy AND webhook_secret IS NOT NULL
+`
+
+// Candidates a push might affect.
+//
+// Deliberately NOT filtered by repository URL in SQL. The URL in a webhook
+// payload is attacker-controlled — anybody can POST a body naming any
+// repository — so it must never be the thing that selects which app is
+// deployed. The signature does that: every candidate is tried and only the one
+// whose secret verifies is acted on, which is why this returns them all.
+func (q *Queries) ListAutoDeployApps(ctx context.Context) ([]App, error) {
+	rows, err := q.db.Query(ctx, listAutoDeployApps)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []App{}
+	for rows.Next() {
+		var i App
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.Name,
+			&i.Namespace,
+			&i.Image,
+			&i.Replicas,
+			&i.Port,
+			&i.CpuRequest,
+			&i.CpuLimit,
+			&i.MemoryRequest,
+			&i.MemoryLimit,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.HealthPath,
+			&i.HealthLiveness,
+			&i.Source,
+			&i.Internal,
+			&i.ProjectID,
+			&i.CanvasX,
+			&i.CanvasY,
+			&i.HttpsOnly,
+			&i.CnameOnly,
+			&i.RepoUrl,
+			&i.RepoBranch,
+			&i.RepoSubdir,
+			&i.RunAsUser,
+			&i.Command,
+			&i.ReleaseCommand,
+			&i.AutoDeploy,
+			&i.WebhookSecret,
+			&i.DeployKey,
+			&i.DeployKeyPublic,
+			&i.LastDeployedSha,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAutoDeployAppsForOwner = `-- name: ListAutoDeployAppsForOwner :many
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command, release_command, auto_deploy, webhook_secret, deploy_key, deploy_key_public, last_deployed_sha FROM apps WHERE owner_id = $1 AND auto_deploy
+`
+
+func (q *Queries) ListAutoDeployAppsForOwner(ctx context.Context, ownerID string) ([]App, error) {
+	rows, err := q.db.Query(ctx, listAutoDeployAppsForOwner, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []App{}
+	for rows.Next() {
+		var i App
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.Name,
+			&i.Namespace,
+			&i.Image,
+			&i.Replicas,
+			&i.Port,
+			&i.CpuRequest,
+			&i.CpuLimit,
+			&i.MemoryRequest,
+			&i.MemoryLimit,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.HealthPath,
+			&i.HealthLiveness,
+			&i.Source,
+			&i.Internal,
+			&i.ProjectID,
+			&i.CanvasX,
+			&i.CanvasY,
+			&i.HttpsOnly,
+			&i.CnameOnly,
+			&i.RepoUrl,
+			&i.RepoBranch,
+			&i.RepoSubdir,
+			&i.RunAsUser,
+			&i.Command,
+			&i.ReleaseCommand,
+			&i.AutoDeploy,
+			&i.WebhookSecret,
+			&i.DeployKey,
+			&i.DeployKeyPublic,
+			&i.LastDeployedSha,
 		); err != nil {
 			return nil, err
 		}
@@ -468,7 +621,7 @@ func (q *Queries) ListApps(ctx context.Context, ownerID string) ([]App, error) {
 }
 
 const listDeployments = `-- name: ListDeployments :many
-SELECT id, owner_id, app_id, image, revision, status, message, started_at, finished_at FROM deployments
+SELECT id, owner_id, app_id, image, revision, status, message, started_at, finished_at, release_log, release_status FROM deployments
 WHERE owner_id = $1 AND app_id = $2
 ORDER BY started_at DESC
 LIMIT $3
@@ -499,6 +652,8 @@ func (q *Queries) ListDeployments(ctx context.Context, arg ListDeploymentsParams
 			&i.Message,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.ReleaseLog,
+			&i.ReleaseStatus,
 		); err != nil {
 			return nil, err
 		}
@@ -511,7 +666,7 @@ func (q *Queries) ListDeployments(ctx context.Context, arg ListDeploymentsParams
 }
 
 const listRecentDeployments = `-- name: ListRecentDeployments :many
-SELECT d.id, d.owner_id, d.app_id, d.image, d.revision, d.status, d.message, d.started_at, d.finished_at, a.name AS app_name, a.namespace AS app_namespace
+SELECT d.id, d.owner_id, d.app_id, d.image, d.revision, d.status, d.message, d.started_at, d.finished_at, d.release_log, d.release_status, a.name AS app_name, a.namespace AS app_namespace
 FROM deployments d
 JOIN apps a ON a.id = d.app_id AND a.owner_id = d.owner_id
 WHERE d.owner_id = $1
@@ -525,17 +680,19 @@ type ListRecentDeploymentsParams struct {
 }
 
 type ListRecentDeploymentsRow struct {
-	ID           uuid.UUID
-	OwnerID      string
-	AppID        uuid.UUID
-	Image        string
-	Revision     string
-	Status       string
-	Message      string
-	StartedAt    time.Time
-	FinishedAt   pgtype.Timestamptz
-	AppName      string
-	AppNamespace string
+	ID            uuid.UUID
+	OwnerID       string
+	AppID         uuid.UUID
+	Image         string
+	Revision      string
+	Status        string
+	Message       string
+	StartedAt     time.Time
+	FinishedAt    pgtype.Timestamptz
+	ReleaseLog    string
+	ReleaseStatus string
+	AppName       string
+	AppNamespace  string
 }
 
 // Joined to apps so the activity feed can name the workload without a second
@@ -560,6 +717,8 @@ func (q *Queries) ListRecentDeployments(ctx context.Context, arg ListRecentDeplo
 			&i.Message,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.ReleaseLog,
+			&i.ReleaseStatus,
 			&i.AppName,
 			&i.AppNamespace,
 		); err != nil {
@@ -573,12 +732,66 @@ func (q *Queries) ListRecentDeployments(ctx context.Context, arg ListRecentDeplo
 	return items, nil
 }
 
+const setAppAutoDeploy = `-- name: SetAppAutoDeploy :one
+UPDATE apps
+SET auto_deploy = $1, updated_at = now()
+WHERE owner_id = $2 AND id = $3
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command, release_command, auto_deploy, webhook_secret, deploy_key, deploy_key_public, last_deployed_sha
+`
+
+type SetAppAutoDeployParams struct {
+	AutoDeploy bool
+	OwnerID    string
+	ID         uuid.UUID
+}
+
+func (q *Queries) SetAppAutoDeploy(ctx context.Context, arg SetAppAutoDeployParams) (App, error) {
+	row := q.db.QueryRow(ctx, setAppAutoDeploy, arg.AutoDeploy, arg.OwnerID, arg.ID)
+	var i App
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.Name,
+		&i.Namespace,
+		&i.Image,
+		&i.Replicas,
+		&i.Port,
+		&i.CpuRequest,
+		&i.CpuLimit,
+		&i.MemoryRequest,
+		&i.MemoryLimit,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.HealthPath,
+		&i.HealthLiveness,
+		&i.Source,
+		&i.Internal,
+		&i.ProjectID,
+		&i.CanvasX,
+		&i.CanvasY,
+		&i.HttpsOnly,
+		&i.CnameOnly,
+		&i.RepoUrl,
+		&i.RepoBranch,
+		&i.RepoSubdir,
+		&i.RunAsUser,
+		&i.Command,
+		&i.ReleaseCommand,
+		&i.AutoDeploy,
+		&i.WebhookSecret,
+		&i.DeployKey,
+		&i.DeployKeyPublic,
+		&i.LastDeployedSha,
+	)
+	return i, err
+}
+
 const setAppCommand = `-- name: SetAppCommand :one
 UPDATE apps
 SET command    = $1,
     updated_at = now()
 WHERE owner_id = $2 AND id = $3
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command, release_command, auto_deploy, webhook_secret, deploy_key, deploy_key_public, last_deployed_sha
 `
 
 type SetAppCommandParams struct {
@@ -618,8 +831,37 @@ func (q *Queries) SetAppCommand(ctx context.Context, arg SetAppCommandParams) (A
 		&i.RepoSubdir,
 		&i.RunAsUser,
 		&i.Command,
+		&i.ReleaseCommand,
+		&i.AutoDeploy,
+		&i.WebhookSecret,
+		&i.DeployKey,
+		&i.DeployKeyPublic,
+		&i.LastDeployedSha,
 	)
 	return i, err
+}
+
+const setAppDeployKey = `-- name: SetAppDeployKey :exec
+UPDATE apps
+SET deploy_key = $1, deploy_key_public = $2, updated_at = now()
+WHERE owner_id = $3 AND id = $4
+`
+
+type SetAppDeployKeyParams struct {
+	DeployKey       []byte
+	DeployKeyPublic string
+	OwnerID         string
+	ID              uuid.UUID
+}
+
+func (q *Queries) SetAppDeployKey(ctx context.Context, arg SetAppDeployKeyParams) error {
+	_, err := q.db.Exec(ctx, setAppDeployKey,
+		arg.DeployKey,
+		arg.DeployKeyPublic,
+		arg.OwnerID,
+		arg.ID,
+	)
+	return err
 }
 
 const setAppHealth = `-- name: SetAppHealth :one
@@ -628,7 +870,7 @@ SET health_path     = $1,
     health_liveness = $2,
     updated_at      = now()
 WHERE owner_id = $3 AND id = $4
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command, release_command, auto_deploy, webhook_secret, deploy_key, deploy_key_public, last_deployed_sha
 `
 
 type SetAppHealthParams struct {
@@ -674,6 +916,12 @@ func (q *Queries) SetAppHealth(ctx context.Context, arg SetAppHealthParams) (App
 		&i.RepoSubdir,
 		&i.RunAsUser,
 		&i.Command,
+		&i.ReleaseCommand,
+		&i.AutoDeploy,
+		&i.WebhookSecret,
+		&i.DeployKey,
+		&i.DeployKeyPublic,
+		&i.LastDeployedSha,
 	)
 	return i, err
 }
@@ -682,7 +930,7 @@ const setAppImage = `-- name: SetAppImage :one
 UPDATE apps
 SET image = $3, updated_at = now()
 WHERE owner_id = $1 AND id = $2
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command, release_command, auto_deploy, webhook_secret, deploy_key, deploy_key_public, last_deployed_sha
 `
 
 type SetAppImageParams struct {
@@ -725,8 +973,30 @@ func (q *Queries) SetAppImage(ctx context.Context, arg SetAppImageParams) (App, 
 		&i.RepoSubdir,
 		&i.RunAsUser,
 		&i.Command,
+		&i.ReleaseCommand,
+		&i.AutoDeploy,
+		&i.WebhookSecret,
+		&i.DeployKey,
+		&i.DeployKeyPublic,
+		&i.LastDeployedSha,
 	)
 	return i, err
+}
+
+const setAppLastDeployedSHA = `-- name: SetAppLastDeployedSHA :exec
+UPDATE apps SET last_deployed_sha = $1, updated_at = now()
+WHERE owner_id = $2 AND id = $3
+`
+
+type SetAppLastDeployedSHAParams struct {
+	LastDeployedSha string
+	OwnerID         string
+	ID              uuid.UUID
+}
+
+func (q *Queries) SetAppLastDeployedSHA(ctx context.Context, arg SetAppLastDeployedSHAParams) error {
+	_, err := q.db.Exec(ctx, setAppLastDeployedSHA, arg.LastDeployedSha, arg.OwnerID, arg.ID)
+	return err
 }
 
 const setAppNetworking = `-- name: SetAppNetworking :execrows
@@ -755,11 +1025,66 @@ func (q *Queries) SetAppNetworking(ctx context.Context, arg SetAppNetworkingPara
 	return result.RowsAffected(), nil
 }
 
+const setAppReleaseCommand = `-- name: SetAppReleaseCommand :one
+UPDATE apps
+SET release_command = $1,
+    updated_at      = now()
+WHERE owner_id = $2 AND id = $3
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command, release_command, auto_deploy, webhook_secret, deploy_key, deploy_key_public, last_deployed_sha
+`
+
+type SetAppReleaseCommandParams struct {
+	ReleaseCommand string
+	OwnerID        string
+	ID             uuid.UUID
+}
+
+func (q *Queries) SetAppReleaseCommand(ctx context.Context, arg SetAppReleaseCommandParams) (App, error) {
+	row := q.db.QueryRow(ctx, setAppReleaseCommand, arg.ReleaseCommand, arg.OwnerID, arg.ID)
+	var i App
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.Name,
+		&i.Namespace,
+		&i.Image,
+		&i.Replicas,
+		&i.Port,
+		&i.CpuRequest,
+		&i.CpuLimit,
+		&i.MemoryRequest,
+		&i.MemoryLimit,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.HealthPath,
+		&i.HealthLiveness,
+		&i.Source,
+		&i.Internal,
+		&i.ProjectID,
+		&i.CanvasX,
+		&i.CanvasY,
+		&i.HttpsOnly,
+		&i.CnameOnly,
+		&i.RepoUrl,
+		&i.RepoBranch,
+		&i.RepoSubdir,
+		&i.RunAsUser,
+		&i.Command,
+		&i.ReleaseCommand,
+		&i.AutoDeploy,
+		&i.WebhookSecret,
+		&i.DeployKey,
+		&i.DeployKeyPublic,
+		&i.LastDeployedSha,
+	)
+	return i, err
+}
+
 const setAppReplicas = `-- name: SetAppReplicas :one
 UPDATE apps
 SET replicas = $3, updated_at = now()
 WHERE owner_id = $1 AND id = $2
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command, release_command, auto_deploy, webhook_secret, deploy_key, deploy_key_public, last_deployed_sha
 `
 
 type SetAppReplicasParams struct {
@@ -799,6 +1124,12 @@ func (q *Queries) SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) 
 		&i.RepoSubdir,
 		&i.RunAsUser,
 		&i.Command,
+		&i.ReleaseCommand,
+		&i.AutoDeploy,
+		&i.WebhookSecret,
+		&i.DeployKey,
+		&i.DeployKeyPublic,
+		&i.LastDeployedSha,
 	)
 	return i, err
 }
@@ -817,6 +1148,125 @@ type SetAppRunAsUserParams struct {
 // Recorded by a build, which is the only thing that can discover it.
 func (q *Queries) SetAppRunAsUser(ctx context.Context, arg SetAppRunAsUserParams) error {
 	_, err := q.db.Exec(ctx, setAppRunAsUser, arg.RunAsUser, arg.OwnerID, arg.ID)
+	return err
+}
+
+const setAppService = `-- name: SetAppService :one
+UPDATE apps
+SET port       = $1,
+    internal   = $2,
+    updated_at = now()
+WHERE owner_id = $3 AND id = $4
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command, release_command, auto_deploy, webhook_secret, deploy_key, deploy_key_public, last_deployed_sha
+`
+
+type SetAppServiceParams struct {
+	Port     int32
+	Internal bool
+	OwnerID  string
+	ID       uuid.UUID
+}
+
+// Both together, because they are one decision.
+//
+// A port is what traffic is routed to and internal is whether any is routed at
+// all; setting one without the other produces states nobody asked for — an
+// internal app that just acquired a port, or a public app whose port was
+// cleared and which therefore has a hostname routing to nothing. The caller
+// passes both and the pair is written atomically.
+//
+// Narrow rather than reusing UpdateApp, which also carries image and replicas.
+// Those belong to the deploy and the scale paths respectively, and a query that
+// can write all five is one that will eventually write a stale image while
+// changing a port.
+func (q *Queries) SetAppService(ctx context.Context, arg SetAppServiceParams) (App, error) {
+	row := q.db.QueryRow(ctx, setAppService,
+		arg.Port,
+		arg.Internal,
+		arg.OwnerID,
+		arg.ID,
+	)
+	var i App
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.Name,
+		&i.Namespace,
+		&i.Image,
+		&i.Replicas,
+		&i.Port,
+		&i.CpuRequest,
+		&i.CpuLimit,
+		&i.MemoryRequest,
+		&i.MemoryLimit,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.HealthPath,
+		&i.HealthLiveness,
+		&i.Source,
+		&i.Internal,
+		&i.ProjectID,
+		&i.CanvasX,
+		&i.CanvasY,
+		&i.HttpsOnly,
+		&i.CnameOnly,
+		&i.RepoUrl,
+		&i.RepoBranch,
+		&i.RepoSubdir,
+		&i.RunAsUser,
+		&i.Command,
+		&i.ReleaseCommand,
+		&i.AutoDeploy,
+		&i.WebhookSecret,
+		&i.DeployKey,
+		&i.DeployKeyPublic,
+		&i.LastDeployedSha,
+	)
+	return i, err
+}
+
+const setAppWebhookSecret = `-- name: SetAppWebhookSecret :exec
+UPDATE apps SET webhook_secret = $1, updated_at = now()
+WHERE owner_id = $2 AND id = $3
+`
+
+type SetAppWebhookSecretParams struct {
+	WebhookSecret []byte
+	OwnerID       string
+	ID            uuid.UUID
+}
+
+func (q *Queries) SetAppWebhookSecret(ctx context.Context, arg SetAppWebhookSecretParams) error {
+	_, err := q.db.Exec(ctx, setAppWebhookSecret, arg.WebhookSecret, arg.OwnerID, arg.ID)
+	return err
+}
+
+const setDeploymentRelease = `-- name: SetDeploymentRelease :exec
+UPDATE deployments
+SET release_status = $1,
+    release_log    = $2
+WHERE owner_id = $3 AND id = $4
+`
+
+type SetDeploymentReleaseParams struct {
+	ReleaseStatus string
+	ReleaseLog    string
+	OwnerID       string
+	ID            uuid.UUID
+}
+
+// Written whether the release passed or failed.
+//
+// A failed release's reason is in its log, and dropping the log on failure is
+// how a vetoed deploy becomes impossible to explain — which is the one case
+// somebody actually needs it.
+func (q *Queries) SetDeploymentRelease(ctx context.Context, arg SetDeploymentReleaseParams) error {
+	_, err := q.db.Exec(ctx, setDeploymentRelease,
+		arg.ReleaseStatus,
+		arg.ReleaseLog,
+		arg.OwnerID,
+		arg.ID,
+	)
 	return err
 }
 
@@ -856,7 +1306,7 @@ SET image          = $3,
     memory_limit   = $9,
     updated_at     = now()
 WHERE owner_id = $1 AND id = $2
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command, release_command, auto_deploy, webhook_secret, deploy_key, deploy_key_public, last_deployed_sha
 `
 
 type UpdateAppParams struct {
@@ -912,6 +1362,12 @@ func (q *Queries) UpdateApp(ctx context.Context, arg UpdateAppParams) (App, erro
 		&i.RepoSubdir,
 		&i.RunAsUser,
 		&i.Command,
+		&i.ReleaseCommand,
+		&i.AutoDeploy,
+		&i.WebhookSecret,
+		&i.DeployKey,
+		&i.DeployKeyPublic,
+		&i.LastDeployedSha,
 	)
 	return i, err
 }

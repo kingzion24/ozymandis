@@ -16,6 +16,11 @@ import (
 var appDomainRE = regexp.MustCompile(
 	`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$`)
 
+// k8sName matches an RFC 1123 label, which is what a Kubernetes object name
+// has to be. Used for values that are written into an annotation and only
+// validated by another controller, where a typo is silent.
+var k8sName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+
 // DNS limits, and the app-name limit they have to accommodate.
 //
 // maxAppName mirrors the 40-character cap app.CreateInput.Validate enforces.
@@ -87,18 +92,25 @@ type Config struct {
 	// as apps.example.com. Empty switches per-app hostnames off entirely.
 	AppDomain string
 
-	// WildcardTLS serves platform hostnames over TLS using the ingress
-	// controller's configured default certificate.
-	//
-	// Ozymandis cannot verify that default exists. An install without one serves
-	// the wrong certificate rather than failing, so this is logged at startup
-	// and shown on the settings page — a capability the engine cannot check is
-	// one it should be noisy about.
-	WildcardTLS bool
-
 	// ReservedDomains are additional suffixes no tenant may claim. AppDomain
 	// is always reserved whether or not it appears here.
 	ReservedDomains []string
+
+	// CertResolver names the ACME resolver the ingress controller obtains
+	// every hostname's certificate from — a Traefik certificatesResolvers
+	// entry, defaulting to "letsencrypt".
+	//
+	// One resolver for every routed name, platform subdomain and brought
+	// domain alike, each certificate issued for the name it serves. Set empty
+	// to switch TLS off entirely, which leaves hostnames on plain HTTP and
+	// says so on the dashboard.
+	//
+	// Ozymandis cannot verify a resolver by this name exists on the
+	// controller. Naming one that does not produces Ingresses that are
+	// accepted, never issued against, and served under the controller's own
+	// certificate — so the check is `curl` against a real hostname, and the
+	// thing to look at is the issuer rather than the status code.
+	CertResolver string
 
 	// BaseURL is the public URL the dashboard is reached at, such as
 	// https://ozymandis.example.com. It is what a sign-in link is built from, and
@@ -144,8 +156,10 @@ func Load() (Config, error) {
 		OwnerEmail:      strings.TrimSpace(env("OZYMANDIS_OWNER_EMAIL", "")),
 		SecretKey:       strings.TrimSpace(env("OZYMANDIS_SECRET_KEY", "")),
 		AppDomain:       env("OZYMANDIS_APP_DOMAIN", ""),
-		WildcardTLS:     envBool("OZYMANDIS_WILDCARD_TLS", false),
 		ReservedDomains: envList("OZYMANDIS_RESERVED_DOMAINS"),
+
+		CertResolver: strings.TrimSpace(envAllowingEmpty("OZYMANDIS_CERT_RESOLVER", "letsencrypt")),
+
 		BaseURL:         strings.TrimRight(env("OZYMANDIS_BASE_URL", ""), "/"),
 		SMTPAddr:        env("OZYMANDIS_SMTP_ADDR", ""),
 		SMTPUsername:    env("OZYMANDIS_SMTP_USER", ""),
@@ -203,11 +217,14 @@ func (c Config) validate() error {
 			errs = append(errs, fmt.Errorf("OZYMANDIS_RESERVED_DOMAINS entry %q %s", d, fault))
 		}
 	}
-	// TLS with nothing to apply it to leaves the operator believing apps are
-	// served over TLS while nothing says otherwise.
-	if c.WildcardTLS && c.AppDomain == "" {
-		errs = append(errs, errors.New(
-			"OZYMANDIS_WILDCARD_TLS requires OZYMANDIS_APP_DOMAIN — there would be no hostnames to serve"))
+	// The resolver name goes into an annotation Traefik matches against its own
+	// static configuration. A malformed one is accepted by Kubernetes, matches
+	// no resolver, and is reported nowhere the operator is looking — the
+	// hostname simply never gets a certificate and is served the controller's
+	// own. Rejecting it here is the only place that failure is cheap.
+	if c.CertResolver != "" && !k8sName.MatchString(c.CertResolver) {
+		errs = append(errs, fmt.Errorf(
+			"OZYMANDIS_CERT_RESOLVER %q must be a lowercase name like \"letsencrypt\"", c.CertResolver))
 	}
 	if c.OwnerEmail != "" {
 		if _, err := mail.ParseAddress(c.OwnerEmail); err != nil {
@@ -277,6 +294,31 @@ func (c Config) AccountsEnabled() bool { return c.BaseURL != "" }
 
 func env(key, fallback string) string {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
+		return v
+	}
+	return fallback
+}
+
+// envAllowingEmpty reads a variable for which SET-BUT-EMPTY is a meaningful
+// value rather than a mistake to fall back from.
+//
+// env above collapses the two, and that is right for every variable whose empty
+// value is nonsense: an empty listen address or owner ID is a typo, and taking
+// the default is the kinder reading. It is wrong for exactly one variable.
+//
+// An empty OZYMANDIS_CERT_RESOLVER means "serve every hostname over plain HTTP",
+// which is a supported way to run and the value install.sh writes on a fresh
+// machine — it has just created a cluster with no ingress controller, so there
+// is no resolver name that could be correct. Read through env, that empty value
+// came back as "letsencrypt": every hostname annotated for a resolver matching
+// nothing, served the controller's own certificate, with the deploy green and
+// nothing anywhere reporting a fault. The bug was the one the whole cert path
+// was rewritten to remove, reintroduced by a helper being helpful.
+//
+// Only this variable needs it. Widening the behaviour to env itself would make
+// an empty OZYMANDIS_ADDR mean "listen on no address" rather than ":8080".
+func envAllowingEmpty(key, fallback string) string {
+	if v, ok := os.LookupEnv(key); ok {
 		return v
 	}
 	return fallback

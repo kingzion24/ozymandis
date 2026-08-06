@@ -214,7 +214,7 @@ templ appPanelBody(d AppDetailData) {
 			<button class="btn btn-danger btn-sm" type="submit">Delete</button>
 		</form>
 	</div>
-	@appTabs(d.App.Name, d.Tab)
+	@appTabs(d.App.Name, d.Tab, d.Backups)
 	<div class="canvas-sheet-body">
 		switch d.Tab {
 			case "variables":

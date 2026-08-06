@@ -1,6 +1,9 @@
 package orchestrator
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func validSpec() AppSpec {
 	return AppSpec{
@@ -13,10 +16,76 @@ func validSpec() AppSpec {
 
 func TestAppSpecAcceptsHosts(t *testing.T) {
 	s := validSpec()
-	s.Hosts = []string{"web.apps.example.com", "www.customer.test"}
-	s.TLS = true
+	s.Issuer = IssuerRef{Name: "letsencrypt"}
+	s.Hosts = []HostSpec{
+		{Name: "web.apps.example.com", Cert: CertIssued},
+		{Name: "www.customer.test", Cert: CertIssued},
+	}
 	if err := s.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
+	}
+}
+
+// The check that matters: a hostname needing a certificate of its own, on an
+// install that cannot obtain one, is refused rather than deployed. Accepting it
+// would route the name and serve it under whatever certificate the controller
+// holds for a different domain.
+func TestAppSpecRejectsIssuedHostWithNoIssuer(t *testing.T) {
+	s := validSpec()
+	s.Hosts = []HostSpec{{Name: "www.customer.test", Cert: CertIssued}}
+
+	err := s.Validate()
+	if err == nil {
+		t.Fatal("Validate accepted a host needing issuance with no issuer configured")
+	}
+	if !strings.Contains(err.Error(), "www.customer.test") {
+		t.Fatalf("error does not name the host: %v", err)
+	}
+}
+
+// IssuedHosts selects the names a certificate is obtained for, and leaves the
+// plain-HTTP ones out. The partition used to be three-way, across a default-cert
+// source that no longer exists; what remains is the only distinction there is.
+func TestAppSpecPartitionsHostsByCertificate(t *testing.T) {
+	s := validSpec()
+	s.Issuer = IssuerRef{Name: "letsencrypt"}
+	s.Hosts = []HostSpec{
+		{Name: "web.apps.example.com", Cert: CertIssued},
+		{Name: "www.customer.test", Cert: CertIssued},
+		{Name: "shop.customer.test", Cert: CertIssued},
+		{Name: "plain.customer.test", Cert: CertNone},
+	}
+
+	got := s.IssuedHosts()
+	if len(got) != 3 {
+		t.Errorf("IssuedHosts = %v, want the three names asking for a certificate", got)
+	}
+	for _, h := range got {
+		if h == "plain.customer.test" {
+			t.Error("a CertNone host was included — it would be issued for and " +
+				"served over TLS when the caller asked for plain HTTP")
+		}
+	}
+}
+
+// Two rules for one hostname is a caller that built its host list from two
+// sources without merging them. Kubernetes accepts it and routes whichever
+// rule it reads last, so the disagreement resolves silently.
+func TestAppSpecRejectsDuplicateHosts(t *testing.T) {
+	s := validSpec()
+	// Both CertNone, and deliberately: a CertIssued host on a spec with no
+	// issuer fails the issuer check first, so this test would pass on an error
+	// that has nothing to do with duplication.
+	s.Hosts = []HostSpec{
+		{Name: "web.apps.example.com", Cert: CertNone},
+		{Name: "web.apps.example.com", Cert: CertNone},
+	}
+	err := s.Validate()
+	if err == nil {
+		t.Fatal("Validate accepted the same hostname twice")
+	}
+	if !strings.Contains(err.Error(), "routed twice") {
+		t.Fatalf("error = %v, want the duplicate-hostname one", err)
 	}
 }
 
@@ -37,7 +106,7 @@ func TestAppSpecRejectsMalformedHosts(t *testing.T) {
 	for name, host := range cases {
 		t.Run(name, func(t *testing.T) {
 			s := validSpec()
-			s.Hosts = []string{host}
+			s.Hosts = []HostSpec{Host(host)}
 			if err := s.Validate(); err == nil {
 				t.Fatalf("Validate accepted malformed host %q", host)
 			}
@@ -51,7 +120,7 @@ func TestAppSpecRejectsMalformedHosts(t *testing.T) {
 func TestAppSpecRejectsHostsWithoutAPort(t *testing.T) {
 	s := validSpec()
 	s.Port = 0
-	s.Hosts = []string{"web.apps.example.com"}
+	s.Hosts = []HostSpec{Host("web.apps.example.com")}
 	if err := s.Validate(); err == nil {
 		t.Fatal("Validate accepted hosts on a spec with no port")
 	}

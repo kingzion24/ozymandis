@@ -89,8 +89,17 @@ func (o *Orchestrator) Build(
 		return orchestrator.BuildResult{}, err
 	}
 
+	// The deploy key, when this repository needs one. Its own Secret rather
+	// than a key in the registry one: the two have different blast radii — a
+	// registry credential pushes images, a deploy key reads source — and they
+	// are mounted into different steps.
+	sshSecret, err := o.ensureBuildSSHSecret(ctx, req)
+	if err != nil {
+		return orchestrator.BuildResult{}, err
+	}
+
 	name := buildJobName(req)
-	job := buildJob(name, req, secret)
+	job := buildJob(name, req, secret, sshSecret)
 
 	// Removed first. A Job name is derived from the deployment, so a retry of
 	// the same deployment collides with the previous attempt — and Kubernetes
@@ -104,7 +113,13 @@ func (o *Orchestrator) Build(
 	// The Job outlives this function only if something goes very wrong; the
 	// deferred delete is what stops a failed build's pod sitting on a node
 	// holding its image cache and its disk.
-	defer func() { _ = o.deleteBuildJob(context.WithoutCancel(ctx), name) }()
+	defer func() {
+		clean := context.WithoutCancel(ctx)
+		_ = o.deleteBuildJob(clean, name)
+		// The key goes with the build. Left behind it would be readable by
+		// every later build in this namespace, which is every other tenant's.
+		o.deleteBuildSSHSecret(clean, sshSecret)
+	}()
 
 	ctx, cancel := context.WithTimeout(ctx, buildTimeout)
 	defer cancel()
@@ -199,6 +214,57 @@ func (o *Orchestrator) ensureBuildSecret(ctx context.Context, auth []byte) (stri
 		return "", fmt.Errorf("k8s: store the build credential: %w", err)
 	}
 	return buildRegistrySecret, nil
+}
+
+// buildSSHSecretName is where a build's deploy key lives.
+//
+// Per build rather than shared, and deleted with the Job: a key that outlived
+// its build would sit in the build namespace readable by every later build,
+// which is every other tenant's build too.
+func buildSSHSecretName(name string) string { return name + "-ssh" }
+
+// ensureBuildSSHSecret puts the deploy key where the clone step can read it.
+//
+// Returns an empty name when the build needs no key, which is every public
+// repository — and the Job is then built without the volume at all rather than
+// with an empty one, so a public build has nothing extra to go wrong.
+func (o *Orchestrator) ensureBuildSSHSecret(
+	ctx context.Context, req orchestrator.BuildRequest,
+) (string, error) {
+	if len(req.SSHKey) == 0 {
+		return "", nil
+	}
+
+	name := buildSSHSecretName(buildJobName(req))
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: BuildNamespace,
+			Labels: map[string]string{orchestrator.LabelManagedBy: orchestrator.ManagedByValue},
+		},
+		Data: map[string][]byte{"id": req.SSHKey},
+	}
+
+	_, err := o.client.CoreV1().Secrets(BuildNamespace).Create(ctx, sec, metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		_, err = o.client.CoreV1().Secrets(BuildNamespace).Update(ctx, sec, metav1.UpdateOptions{})
+	}
+	if err != nil {
+		return "", fmt.Errorf("k8s: store the deploy key for the build: %w", err)
+	}
+	return name, nil
+}
+
+// deleteBuildSSHSecret removes a build's deploy key.
+func (o *Orchestrator) deleteBuildSSHSecret(ctx context.Context, name string) {
+	if name == "" {
+		return
+	}
+	err := o.client.CoreV1().Secrets(BuildNamespace).
+		Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		o.log.Warn("could not remove a build's deploy key",
+			"secret", name, "error", err)
+	}
 }
 
 // buildJobName is derived from the image tag, which is derived from the

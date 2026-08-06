@@ -51,6 +51,28 @@ type App struct {
 	Source   Source
 	Internal bool
 
+	// AutoDeploy makes a push to this app's branch deploy it.
+	AutoDeploy bool
+
+	// LastDeployedSHA is the commit last built, so a redelivered webhook does
+	// not build it again. GitHub redelivers on its own schedule and a person can
+	// replay a delivery, so "have I already built this" must be answerable from
+	// state rather than from trusting the sender not to repeat itself.
+	LastDeployedSHA string
+
+	// DeployKeyPublic is the public half of the key that clones a private
+	// repository, for somebody to paste into their host's settings. The private
+	// half is sealed and never leaves the service.
+	DeployKeyPublic string
+
+	// ReleaseCommand runs against a new image before traffic moves to it, as a
+	// person typed it. Empty means no release step.
+	//
+	// Held as the raw line rather than parsed argv, for the reason Command is:
+	// the form shows back what was written, and ParseCommand turns it into argv
+	// at the moment it runs.
+	ReleaseCommand string
+
 	// Command replaces the image's entrypoint, as a person typed it. Empty
 	// runs whatever the image already says to.
 	//
@@ -126,6 +148,18 @@ type Deployment struct {
 	Message    string
 	StartedAt  time.Time
 	FinishedAt *time.Time
+
+	// ReleaseStatus and ReleaseLog are what the release command did for this
+	// deployment. Carried per deployment rather than per app because the
+	// question is always about one attempt — "did the migrations run for THIS
+	// deploy" is what somebody asks at 3am.
+	//
+	// ReleaseStatus is one of the Release* constants, or empty for a deployment
+	// that predates the column. Empty and "skipped" are deliberately different:
+	// "no release ran" and "this row is older than the feature" are not the
+	// same answer.
+	ReleaseStatus string
+	ReleaseLog    string
 }
 
 // Source describes where a deployment was triggered from.
@@ -175,8 +209,9 @@ func (a App) URLScheme() string {
 // nobody will trust.
 //
 // Worth saying rather than leaving to a browser warning: the warning names the
-// certificate, not the reason, and the reason is that this install has no
-// wildcard certificate configured.
+// certificate, not the reason, and the reason is that this install has no ACME
+// resolver configured, so the ingress controller is answering with its own
+// built-in certificate.
 func (a App) UntrustedCert() bool {
 	return a.Host != "" && a.HTTPSOnly && !a.TLS
 }
@@ -192,9 +227,16 @@ type Options struct {
 	// switches per-app hostnames off.
 	AppDomain string
 
-	// WildcardTLS serves those hostnames over TLS from the ingress
-	// controller's default certificate.
-	WildcardTLS bool
+	// CertResolver is the ACME resolver every routed hostname's certificate
+	// comes from — platform subdomains and brought domains alike, each issued
+	// for its own name.
+	//
+	// Empty leaves every hostname on plain HTTP, which the dashboard says out
+	// loud. That is the only alternative offered: there is no shared or
+	// wildcard certificate to fall back to, because serving one name under a
+	// certificate issued for another is what a browser reports as
+	// impersonation.
+	CertResolver orchestrator.IssuerRef
 
 	// ReservedDomains are hostnames no app may claim, even under the app
 	// domain. An app named "admin" would otherwise take admin.<app domain>
@@ -490,7 +532,7 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 		return App{}, fmt.Errorf("app: issue hostname: %w", err)
 	}
 	created.Host = host
-	created.TLS = s.opts.WildcardTLS && host != ""
+	created.TLS = s.opts.CertResolver.Set() && host != ""
 
 	if err := s.apply(ctx, q, created); err != nil {
 		// Best effort: the workload may be partly applied, and leaving it
@@ -610,14 +652,14 @@ func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
 		ScratchPaths:  runtimeOf(a).ScratchPaths,
 		HealthPath:    a.HealthPath,
 		Liveness:      a.Liveness,
-		Hosts:         hosts,
-		TLS:           s.opts.WildcardTLS && len(hosts) > 0,
+		Hosts:         s.hostSpecs(hosts),
+		Issuer:        s.opts.CertResolver,
 		HTTPSOnly:     a.HTTPSOnly && len(hosts) > 0,
 		// Only when the install has a target to point at. Writing the
 		// annotation with an empty value would tell ExternalDNS to publish a
 		// CNAME to nothing, which is worse than leaving it to its default.
 		CNAMETarget: cnameTargetFor(a, s.cnameTarget(ctx)),
-		Volumes:       volumeSpecs(vols),
+		Volumes:     volumeSpecs(vols),
 	})
 }
 
@@ -670,14 +712,45 @@ func (s *Service) managedInput(a App) domain.ManagedInput {
 	}
 	return domain.ManagedInput{
 		OwnerID: a.OwnerID, AppID: a.ID, AppName: a.Name,
-		AppDomain: appDomain, TLS: s.opts.WildcardTLS,
+		AppDomain: appDomain, TLS: s.opts.CertResolver.Set(),
 		Reserved: s.opts.ReservedDomains,
 	}
 }
 
+// hostSpecs decides which certificate serves each of an app's hostnames.
+//
+// One fact decides it: whether the install has an ACME resolver. Every routed
+// hostname is then issued for individually, and whether the platform minted the
+// name or somebody brought it makes no difference to how it is served.
+//
+// It used to make a difference, and that was the bug. A managed hostname was
+// served from a wildcard the operator had pointed the ingress controller at,
+// which meant a managed hostname could never obtain a certificate of its own —
+// there was no branch that reached CertIssued for one. On an install whose
+// controller issues per host rather than holding a wildcard, that left every
+// platform subdomain served under the controller's built-in self-signed
+// certificate, with the deploy green and nothing anywhere reporting it.
+//
+// Deleting the wildcard case rather than adding a third one is what keeps that
+// from coming back: there is no longer a value to express "covered by
+// something issued for another name".
+func (s *Service) hostSpecs(hosts []domain.Routable) []orchestrator.HostSpec {
+	out := make([]orchestrator.HostSpec, 0, len(hosts))
+	for _, h := range hosts {
+		spec := orchestrator.HostSpec{Name: h.Host}
+		if s.opts.CertResolver.Set() {
+			spec.Cert = orchestrator.CertIssued
+		} else {
+			spec.Cert = orchestrator.CertNone
+		}
+		out = append(out, spec)
+	}
+	return out
+}
+
 func (s *Service) reconcileHosts(
 	ctx context.Context, q *dbgen.Queries, a App,
-) ([]string, error) {
+) ([]domain.Routable, error) {
 	if _, err := domain.EnsureManaged(ctx, q, s.managedInput(a)); err != nil {
 		return nil, fmt.Errorf("app: reconcile hostname: %w", err)
 	}
@@ -741,7 +814,7 @@ func (s *Service) attachHost(ctx context.Context, a *App) {
 	}
 	if len(hosts) > 0 {
 		a.Host = hosts[0]
-		a.TLS = s.opts.WildcardTLS
+		a.TLS = s.opts.CertResolver.Set()
 	}
 
 	// Read on the same pass. Storage changes what the app page can offer —
@@ -799,6 +872,9 @@ func (s *Service) Deployments(
 			Status:    row.Status,
 			Message:   row.Message,
 			StartedAt: row.StartedAt,
+
+			ReleaseStatus: row.ReleaseStatus,
+			ReleaseLog:    row.ReleaseLog,
 		}
 		if row.FinishedAt.Valid {
 			finished := row.FinishedAt.Time
@@ -961,13 +1037,24 @@ func (s *Service) Redeploy(ctx context.Context, ownerID, name string) error {
 	}
 	id := s.beginDeployment(ctx, ownerID, a, "redeploy")
 
-	// A build takes minutes, so it does not happen on the request. The
-	// deployment is already recorded as running; the goroutine finishes it,
-	// and the page that started it polls the same row.
-	if a.Source == SourceGit {
+	// Backgrounded when there is minutes-scale work: a build, OR a release
+	// command. The deployment is already recorded as running; the goroutine
+	// finishes it, and the page that started it polls the same row.
+	//
+	// The release condition is not an optimisation. Without it an
+	// image-sourced app's release command would never run at all — this branch
+	// applies directly and the hook lives in deployInBackground — which is the
+	// silent no-op runRelease refuses to be for a missing Runner. An image app
+	// with migrations is an ordinary thing to have.
+	if a.Source == SourceGit || strings.TrimSpace(a.ReleaseCommand) != "" {
 		s.deployInBackground(ctx, ownerID, a, id)
 		return nil
 	}
+
+	// Nothing to build and nothing to release. Recorded rather than left blank,
+	// so every deployment says what happened to its release instead of leaving
+	// "no release ran" and "this predates the column" looking alike.
+	s.recordRelease(ctx, ownerID, id, ReleaseSkipped, "")
 
 	err = s.apply(ctx, s.q, a)
 	s.endDeployment(ctx, ownerID, id, err)
@@ -996,6 +1083,14 @@ func (s *Service) deployInBackground(
 		defer cancel()
 
 		built, err := s.buildIfNeeded(ctx, ownerID, a, deployID)
+
+		// Between the build and the apply, and a veto. A release that fails
+		// leaves apply uncalled, so the previous image keeps serving — which is
+		// the entire point: a migration that cannot run is caught before the
+		// code assuming it ran starts taking requests.
+		if err == nil {
+			err = s.runRelease(ctx, ownerID, built, deployID)
+		}
 		if err == nil {
 			err = s.apply(ctx, s.q, built)
 		}
@@ -1102,16 +1197,20 @@ func Namespace(ownerID, name string) string {
 
 func toApp(row dbgen.App) App {
 	return App{
-		ID:            row.ID,
-		OwnerID:       row.OwnerID,
-		Name:          row.Name,
-		Namespace:     row.Namespace,
-		Image:         row.Image,
-		Replicas:      row.Replicas,
-		Port:          row.Port,
-		Source:        Source(row.Source),
-		RunAsUser:     row.RunAsUser,
-		Command:       row.Command,
+		ID:              row.ID,
+		OwnerID:         row.OwnerID,
+		Name:            row.Name,
+		Namespace:       row.Namespace,
+		Image:           row.Image,
+		Replicas:        row.Replicas,
+		Port:            row.Port,
+		Source:          Source(row.Source),
+		RunAsUser:       row.RunAsUser,
+		Command:         row.Command,
+		AutoDeploy:      row.AutoDeploy,
+		LastDeployedSHA: row.LastDeployedSha,
+		DeployKeyPublic: row.DeployKeyPublic,
+		ReleaseCommand:  row.ReleaseCommand,
 		Repo: Repo{
 			URL: row.RepoUrl, Branch: row.RepoBranch, Subdir: row.RepoSubdir,
 		},
@@ -1235,6 +1334,59 @@ func (s *Service) SetCommand(ctx context.Context, ownerID, name, command string)
 
 	s.log.Info("command set",
 		slog.String("app", name), slog.Int("args", len(argv)))
+	return nil
+}
+
+// SetService changes what traffic reaches the app: the port it is routed to,
+// and whether it is routed to at all.
+//
+// Applied immediately rather than at the next deploy, for the reason SetCommand
+// is: the port is what the workload is reachable on, and leaving the old one
+// live would show a dashboard describing routing that does not exist.
+//
+// Both values together, because they are one decision. Changing a port without
+// saying whether the app is internal produces states nobody asked for — and
+// clearing the port on a public app has to retire its hostname, which
+// reconcileHosts does inside apply only if it sees both.
+//
+// Nothing here is a build concern. The port is routing configuration: it says
+// where Kubernetes sends traffic, not what the process listens on. Ozymandis
+// never passes a port to a build — BuildRequest has no field for one — so
+// changing it is a live operation and not a reason to rebuild.
+func (s *Service) SetService(
+	ctx context.Context, ownerID, name string, port int32, internal bool,
+) error {
+	a, err := s.Get(ctx, ownerID, name)
+	if err != nil {
+		return err
+	}
+
+	next := a
+	next.Port = port
+	next.Internal = internal
+	if err := (orchestrator.AppSpec{
+		Ref: next.Ref(), Image: next.Image, Replicas: next.Replicas,
+		Port: next.Port, Internal: next.Internal,
+		HealthPath: next.HealthPath, Liveness: next.Liveness,
+	}).Validate(); err != nil {
+		return err
+	}
+
+	row, err := s.q.SetAppService(ctx, dbgen.SetAppServiceParams{
+		OwnerID: ownerID, ID: a.ID, Port: port, Internal: internal,
+	})
+	if err != nil {
+		return fmt.Errorf("app: set service: %w", err)
+	}
+
+	updated := toApp(row)
+	if err := s.apply(ctx, s.q, updated); err != nil {
+		return err
+	}
+
+	s.log.Info("service set",
+		slog.String("app", name), slog.Int("port", int(port)),
+		slog.Bool("internal", internal))
 	return nil
 }
 

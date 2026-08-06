@@ -162,6 +162,7 @@ func (s *Service) runBuild(
 
 		Insecure:     s.images.Insecure(ctx),
 		RegistryAuth: auth,
+		SSHKey:       s.deployKeyFor(ctx, ownerID, a),
 		Log:          s.buildLogger(ctx, row.ID),
 	}
 

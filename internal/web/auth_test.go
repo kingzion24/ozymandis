@@ -261,6 +261,22 @@ func (f *fakeAccounts) RemoveMember(context.Context, uuid.UUID, string, uuid.UUI
 	return errNoFakeAccountsBackend
 }
 
+func (f *fakeAccounts) IssueAPIToken(
+	context.Context, uuid.UUID, string, string, time.Duration,
+) (string, account.APIToken, error) {
+	return "", account.APIToken{}, errNoFakeAccountsBackend
+}
+
+func (f *fakeAccounts) ListAPITokens(
+	context.Context, uuid.UUID, string,
+) ([]account.APIToken, error) {
+	return nil, errNoFakeAccountsBackend
+}
+
+func (f *fakeAccounts) RevokeAPIToken(context.Context, uuid.UUID, string, uuid.UUID) error {
+	return errNoFakeAccountsBackend
+}
+
 var errNoFakeAccountsBackend = errors.New("fakeAccounts holds no teams or sessions")
 
 type fakeMailer struct {

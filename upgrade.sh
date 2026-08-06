@@ -22,6 +22,11 @@ REPO="codeblocktz/ozymandis"
 INSTALL_DIR="/usr/local/bin"
 BIN="${INSTALL_DIR}/ozymandis"
 PREV="${INSTALL_DIR}/ozymandis.prev"
+CLI_BIN="${INSTALL_DIR}/oz"
+# The CLI is staged beside its destination rather than left in the temporary
+# directory, because that directory is removed before the health check and the
+# CLI is installed after it.
+CLI_STAGED="${INSTALL_DIR}/oz.staged"
 ENV_FILE="/etc/ozymandis/ozymandis.env"
 
 VERSION=""
@@ -129,6 +134,9 @@ fetch() {
 	tar -xzf "${tmp}/${tarball}" -C "$tmp" || die "could not unpack ${tarball}"
 	[ -f "${tmp}/ozymandis" ] || die "${tarball} does not contain a ozymandis binary"
 	STAGED="${tmp}/ozymandis"
+	# Optional: a release published before oz existed carries no CLI, and an
+	# upgrade script that died on that would make an old tag unupgradeable.
+	[ -f "${tmp}/oz" ] && STAGED_CLI="${tmp}/oz"
 	TMPDIR_USED="$tmp"
 	say "checksum ok"
 }
@@ -149,6 +157,9 @@ healthy() {
 
 rollback() {
 	printf '\033[33m==>\033[0m New version unhealthy — rolling back\n' >&2
+	# Discarded rather than installed: a client from a version that never ran
+	# healthy on this machine has no business being on it.
+	rm -f "$CLI_STAGED"
 	mv -f "$PREV" "$BIN"
 	systemctl restart ozymandis
 	if healthy; then
@@ -178,6 +189,11 @@ main() {
 	cp -f "$BIN" "$PREV"
 	install -m 0755 "$STAGED" "${BIN}.new"
 	mv -f "${BIN}.new" "$BIN"
+	# Moved out of the temporary directory before it is removed, so the CLI
+	# survives to be installed after the health check below.
+	if [ -n "${STAGED_CLI:-}" ] && [ -f "$STAGED_CLI" ]; then
+		install -m 0755 "$STAGED_CLI" "$CLI_STAGED"
+	fi
 	rm -rf "$TMPDIR_USED"
 	trap - EXIT INT TERM
 
@@ -186,6 +202,20 @@ main() {
 
 	if healthy; then
 		rm -f "$PREV"
+
+		# The CLI is swapped only once the server is known healthy, and is
+		# deliberately outside the rollback.
+		#
+		# Ordering it here means a rollback leaves oz matching the server that
+		# is actually running, rather than a newer client against an older
+		# install. It is not part of the rollback itself because oz is a client:
+		# a bad one is a broken command, not a broken install, and making the
+		# health of the service depend on it would widen what a rollback has to
+		# reason about for no gain.
+		if [ -f "$CLI_STAGED" ]; then
+			mv -f "$CLI_STAGED" "$CLI_BIN" && say "oz is now ${VERSION}"
+		fi
+
 		step "Done"
 		say "ozymandis is now ${VERSION}"
 		say "journalctl -u ozymandis -f"

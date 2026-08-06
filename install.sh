@@ -178,6 +178,18 @@ install_binary() {
 	mv -f "${INSTALL_DIR}/ozymandis.new" "${INSTALL_DIR}/ozymandis"
 	say "${INSTALL_DIR}/ozymandis"
 
+	# The CLI, when the release carries one.
+	#
+	# Optional rather than required, so this script keeps working against a
+	# release published before oz existed — an installer that dies on a missing
+	# file turns an old tag into an uninstallable one. The server is what this
+	# script is for; oz is a convenience beside it.
+	if [ -f "${tmp}/oz" ]; then
+		install -m 0755 "${tmp}/oz" "${INSTALL_DIR}/oz.new"
+		mv -f "${INSTALL_DIR}/oz.new" "${INSTALL_DIR}/oz"
+		say "${INSTALL_DIR}/oz"
+	fi
+
 	rm -rf "$tmp"
 	trap - EXIT INT TERM
 }
@@ -193,9 +205,32 @@ install_k3s() {
 
 	if need_cmd k3s && systemctl is-active --quiet k3s; then
 		step "K3s is already running"
+		# Not reconfigured. If this cluster was installed with K3s's bundled
+		# Traefik, it is still there and still holding :80 and :443 — see the
+		# comment on the install below for why that matters.
+		if k3s kubectl get deployment traefik -n kube-system >/dev/null 2>&1; then
+			warn "this cluster runs K3s's bundled Traefik, which has no ACME resolver."
+			say  "an ingress controller you install yourself will collide with it over"
+			say  "ports 80 and 443. Remove it first:"
+			say  "  k3s kubectl -n kube-system delete helmchart traefik"
+		fi
 	else
 		step "Installing K3s"
-		curl -sfL https://get.k3s.io | INSTALL_K3S_SKIP_SELINUX_RPM=true sh - \
+		# --disable traefik: this installer does not own the edge.
+		#
+		# Ozymandis annotates its Ingresses with the name of an ACME resolver the
+		# operator configures on their own ingress controller. K3s's bundled
+		# Traefik ships with no resolvers at all, so leaving it in place would
+		# serve every hostname the controller's built-in self-signed certificate
+		# while every deploy stayed green.
+		#
+		# Worse, it would still be holding the host's :80 and :443. A controller
+		# installed afterwards asks for the same ports and never schedules —
+		# which is a deadlock that reads as a broken cluster rather than as two
+		# things competing for one edge. One place configures the edge, and it is
+		# not this script.
+		curl -sfL https://get.k3s.io \
+			| INSTALL_K3S_SKIP_SELINUX_RPM=true INSTALL_K3S_EXEC="--disable traefik" sh - \
 			|| die "K3s install failed"
 	fi
 
@@ -284,6 +319,10 @@ configure() {
 	fi
 	owner_email=$(env_get OZYMANDIS_OWNER_EMAIL || printf '')
 
+	# Preserved across re-runs like every other value, so an operator who named
+	# their controller's resolver by hand does not lose it by upgrading.
+	cert_resolver=$(env_get OZYMANDIS_CERT_RESOLVER || printf '')
+
 	umask 077
 	cat > "${ENV_FILE}.new" <<-EOF
 		# Written by the Ozymandis installer. Re-running preserves every value here
@@ -297,6 +336,20 @@ configure() {
 		OZYMANDIS_AUTH_TOKEN=${auth_token}
 		OZYMANDIS_SECRET_KEY=${secret_key}
 		OZYMANDIS_OWNER_EMAIL=${owner_email}
+
+		# The ACME resolver the ingress controller obtains certificates from — a
+		# name from its own certificatesResolvers configuration, such as
+		# "letsencrypt". Every hostname is then issued for individually.
+		#
+		# Written EMPTY on a fresh install, deliberately. This script installs K3s
+		# with --disable traefik and installs no ingress controller of its own, so
+		# on a fresh machine there is no controller here yet and no resolver name
+		# that could be correct. Naming one that does not exist does not fail:
+		# hostnames are served the controller's own certificate, browsers refuse
+		# it, and nothing here or in the dashboard reports why. Empty serves plain
+		# http instead — visibly wrong rather than invisibly wrong. Set this once
+		# you have installed a controller, to the name of ITS resolver.
+		OZYMANDIS_CERT_RESOLVER=${cert_resolver}
 
 		# Set OZYMANDIS_BASE_URL to a public https URL to turn magic-link sign-in on,
 		# and OZYMANDIS_APP_DOMAIN to the domain apps get a hostname under.
@@ -400,6 +453,22 @@ summary() {
 		  on it, or reach it over an SSH tunnel in the meantime:
 
 		    ssh -L ${PORT}:127.0.0.1:${PORT} root@${addr}
+
+		  THIS INSTALLER DOES NOT SET UP TLS, and there is no ingress controller
+		  on this cluster — K3s was installed with --disable traefik. Apps you
+		  deploy are reachable over plain http and nothing will report that as a
+		  fault. The edge is yours to wire, in one place, deliberately:
+
+		    1. Install an ingress controller with an ACME resolver. Traefik with
+		       a Let's Encrypt resolver over TLS-ALPN-01 is what this is built
+		       against.
+		    2. Set OZYMANDIS_CERT_RESOLVER in ${ENV_FILE} to that resolver's
+		       name, then: systemctl restart ozymandis
+
+		  Leave OZYMANDIS_CERT_RESOLVER empty until step 1 is done. A name that
+		  matches no resolver is not an error anywhere — hostnames are served the
+		  controller's own certificate and every deploy still goes green. See the
+		  Certificates section of the README.
 
 		  Back up ${ENV_FILE}. OZYMANDIS_SECRET_KEY seals your stored secrets and
 		  cannot be regenerated.

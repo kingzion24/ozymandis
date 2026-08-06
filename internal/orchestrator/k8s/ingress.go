@@ -29,6 +29,15 @@ const (
 	// Ingress. Set to the secure one, a request arriving on plain HTTP is not
 	// served rather than served and redirected.
 	traefikEntrypoints = "traefik.ingress.kubernetes.io/router.entrypoints"
+
+	// traefikCertResolver names the ACME resolver Traefik obtains this
+	// Ingress's certificate from — an entry under certificatesResolvers in
+	// Traefik's own static configuration.
+	//
+	// Traefik keeps what it issues in its ACME store, not in a Kubernetes
+	// Secret, which is why an Ingress carrying this annotation names no
+	// secretName. See ingressTLS.
+	traefikCertResolver = "traefik.ingress.kubernetes.io/router.tls.certresolver"
 )
 
 // ingressAnnotations returns what the spec asks the controllers for.
@@ -40,7 +49,39 @@ func ingressAnnotations(spec orchestrator.AppSpec) map[string]string {
 	if spec.HTTPSOnly {
 		ann[traefikEntrypoints] = "websecure"
 	}
+
+	// Only when something on this Ingress actually needs issuing. An app with
+	// no routed hostname, or an install with no resolver, gets no annotation
+	// rather than one naming a resolver that will never be asked for anything.
+	if len(spec.IssuedHosts()) > 0 && spec.Issuer.Set() {
+		ann[traefikCertResolver] = spec.Issuer.Name
+	}
 	return ann
+}
+
+// ingressTLS returns the TLS block for the hostnames the resolver issues for.
+//
+// One block, and deliberately with NO secretName.
+//
+// A secretName is how an Ingress points at a certificate somebody else put in
+// this namespace — the shape cert-manager needs, because it creates that Secret
+// in response to the issuer annotation. Traefik's ACME resolver does not work
+// that way: it keeps what it issues in its own store (acme.json on the
+// controller's volume) and serves it directly.
+//
+// So naming a Secret here would be worse than redundant. Traefik would look for
+// a Secret nothing ever creates, find it missing, and fall back to its built-in
+// self-signed certificate — while the Ingress, the pod and the deploy all stay
+// green. That is the whole failure this package was changed to remove, and it
+// would arrive by way of a leftover field rather than a missing one.
+func ingressTLS(spec orchestrator.AppSpec) []*networkingv1ac.IngressTLSApplyConfiguration {
+	hosts := spec.IssuedHosts()
+	if len(hosts) == 0 {
+		return nil
+	}
+	return []*networkingv1ac.IngressTLSApplyConfiguration{
+		networkingv1ac.IngressTLS().WithHosts(hosts...),
+	}
 }
 
 // applyIngress routes the spec's hostnames to its Service.
@@ -48,19 +89,13 @@ func ingressAnnotations(spec orchestrator.AppSpec) map[string]string {
 // ingressClassName is left unset so the cluster's default IngressClass
 // applies. Naming a class here would hard-code which controller is installed,
 // which is the coupling this design otherwise avoids.
-//
-// The TLS block, when present, lists hosts and names no Secret. An Ingress's
-// TLS Secret must live in the Ingress's own namespace, and every app has its
-// own namespace — so one pre-provisioned wildcard cannot be referenced from
-// all of them. The certificate comes from the ingress controller's configured
-// default instead, which also keeps the private key out of tenant namespaces.
 func (o *Orchestrator) applyIngress(ctx context.Context, spec orchestrator.AppSpec) error {
 	pathType := networkingv1.PathTypePrefix
 
 	rules := make([]*networkingv1ac.IngressRuleApplyConfiguration, 0, len(spec.Hosts))
 	for _, host := range spec.Hosts {
 		rules = append(rules, networkingv1ac.IngressRule().
-			WithHost(host).
+			WithHost(host.Name).
 			WithHTTP(networkingv1ac.HTTPIngressRuleValue().
 				WithPaths(networkingv1ac.HTTPIngressPath().
 					WithPath("/").
@@ -74,9 +109,8 @@ func (o *Orchestrator) applyIngress(ctx context.Context, spec orchestrator.AppSp
 
 	ingSpec := networkingv1ac.IngressSpec().WithRules(rules...)
 
-	if spec.TLS {
-		ingSpec = ingSpec.WithTLS(networkingv1ac.IngressTLS().
-			WithHosts(spec.Hosts...))
+	if tls := ingressTLS(spec); len(tls) > 0 {
+		ingSpec = ingSpec.WithTLS(tls...)
 	}
 
 	ing := networkingv1ac.Ingress(spec.Name, spec.Namespace).

@@ -26,15 +26,14 @@ func TestAppDomainDefaultsToOff(t *testing.T) {
 	if c.AppDomain != "" {
 		t.Fatalf("AppDomain = %q, want empty by default", c.AppDomain)
 	}
-	if c.WildcardTLS {
-		t.Fatal("WildcardTLS should default to false")
+	if c.CertResolver != "letsencrypt" {
+		t.Fatalf("CertResolver = %q, want letsencrypt by default", c.CertResolver)
 	}
 }
 
 func TestAppDomainAndReservedDomainsLoad(t *testing.T) {
 	setEnv(t, map[string]string{
 		"OZYMANDIS_APP_DOMAIN":       "apps.example.com",
-		"OZYMANDIS_WILDCARD_TLS":     "true",
 		"OZYMANDIS_RESERVED_DOMAINS": "internal.example.com, admin.example.com",
 	})
 	c, err := Load()
@@ -44,9 +43,6 @@ func TestAppDomainAndReservedDomainsLoad(t *testing.T) {
 	if c.AppDomain != "apps.example.com" {
 		t.Fatalf("AppDomain = %q", c.AppDomain)
 	}
-	if !c.WildcardTLS {
-		t.Fatal("WildcardTLS = false, want true")
-	}
 	if len(c.ReservedDomains) != 2 ||
 		c.ReservedDomains[0] != "internal.example.com" ||
 		c.ReservedDomains[1] != "admin.example.com" {
@@ -54,17 +50,46 @@ func TestAppDomainAndReservedDomainsLoad(t *testing.T) {
 	}
 }
 
-// Wildcard TLS with nothing to apply it to is incoherent rather than merely
-// useless: the operator believes apps are served over TLS and nothing says
-// otherwise. Fail at startup instead.
-func TestWildcardTLSWithoutAnAppDomainFails(t *testing.T) {
-	setEnv(t, map[string]string{"OZYMANDIS_WILDCARD_TLS": "true"})
-	_, err := Load()
-	if err == nil {
-		t.Fatal("Load accepted OZYMANDIS_WILDCARD_TLS with no OZYMANDIS_APP_DOMAIN")
+// A resolver name that cannot match anything is refused at startup.
+//
+// This is the only place the mistake is cheap. A malformed name is accepted by
+// Kubernetes, written into the annotation, matched by no resolver, and reported
+// nowhere — the hostname is served the controller's own certificate and every
+// deploy stays green. Catching it here turns a silent TLS failure into a
+// process that will not start.
+func TestMalformedCertResolverFails(t *testing.T) {
+	for _, bad := range []string{"Lets Encrypt", "LETSENCRYPT", "le_prod", "letsencrypt!"} {
+		setEnv(t, map[string]string{"OZYMANDIS_CERT_RESOLVER": bad})
+		_, err := Load()
+		if err == nil {
+			t.Fatalf("Load accepted OZYMANDIS_CERT_RESOLVER=%q", bad)
+		}
+		if !strings.Contains(err.Error(), "OZYMANDIS_CERT_RESOLVER") {
+			t.Fatalf("error should name the variable, got: %v", err)
+		}
 	}
-	if !strings.Contains(err.Error(), "OZYMANDIS_APP_DOMAIN") {
-		t.Fatalf("error should name the missing variable, got: %v", err)
+}
+
+func TestCertResolverAcceptsAValidNameAndEmpty(t *testing.T) {
+	setEnv(t, map[string]string{"OZYMANDIS_CERT_RESOLVER": "corporate-ca"})
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.CertResolver != "corporate-ca" {
+		t.Fatalf("CertResolver = %q, want corporate-ca", c.CertResolver)
+	}
+
+	// Empty is supported, not a mistake: it serves every hostname over plain
+	// HTTP, which is the honest state for an install whose controller has no
+	// resolver yet. Rejecting it would leave no way to run without TLS.
+	setEnv(t, map[string]string{"OZYMANDIS_CERT_RESOLVER": ""})
+	c, err = Load()
+	if err != nil {
+		t.Fatalf("Load rejected an empty resolver: %v", err)
+	}
+	if c.CertResolver != "" {
+		t.Fatalf("CertResolver = %q, want empty", c.CertResolver)
 	}
 }
 
@@ -88,7 +113,7 @@ func TestEveryVariableIsDocumented(t *testing.T) {
 	}
 
 	for _, name := range []string{
-		"OZYMANDIS_APP_DOMAIN", "OZYMANDIS_WILDCARD_TLS", "OZYMANDIS_RESERVED_DOMAINS",
+		"OZYMANDIS_APP_DOMAIN", "OZYMANDIS_CERT_RESOLVER", "OZYMANDIS_RESERVED_DOMAINS",
 	} {
 		if !strings.Contains(string(src), name) {
 			t.Fatalf("%s is not read by config.go", name)

@@ -204,6 +204,21 @@ func RemoveCustom(
 	return nil
 }
 
+// Routable is a hostname an app's Ingress should carry.
+//
+// Managed travels with the name because the two are needed together at exactly
+// one place — building the Ingress — and separating them there is what served a
+// customer's domain the platform's wildcard certificate.
+type Routable struct {
+	Host string
+
+	// Managed is true for a hostname the platform issued, which is to say one
+	// under the app domain and therefore covered by the wildcard certificate
+	// the ingress controller already holds. False is a name somebody brought,
+	// which that certificate does not cover.
+	Managed bool
+}
+
 // RoutableHosts returns the hostnames an app's Ingress should carry.
 //
 // A managed host is routable because the platform issued it. A custom one only
@@ -211,12 +226,16 @@ func RemoveCustom(
 // nothing can route an unverified claim by forgetting to check.
 func RoutableHosts(
 	ctx context.Context, q *dbgen.Queries, appID uuid.UUID,
-) ([]string, error) {
-	hosts, err := q.RoutableHostsForApp(ctx, appID)
+) ([]Routable, error) {
+	rows, err := q.RoutableHostsForApp(ctx, appID)
 	if err != nil {
 		return nil, fmt.Errorf("domain: routable hosts: %w", err)
 	}
-	return hosts, nil
+	out := make([]Routable, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, Routable{Host: r.Host, Managed: r.Managed})
+	}
+	return out, nil
 }
 
 func toCustom(row dbgen.Domain) Custom {

@@ -219,6 +219,8 @@ func breadcrumbFor(path string) []Crumb {
 		return []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "Registry"}}
 	case hasPrefix(path, "/cluster"):
 		return []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "Cluster"}}
+	case hasPrefix(path, "/settings/backups"):
+		return []Crumb{{Label: "Settings", Href: "/settings"}, {Label: "Backups"}}
 	case hasPrefix(path, "/settings"):
 		return []Crumb{{Label: "Settings"}}
 	}
@@ -277,14 +279,26 @@ func slot(c templ.Component) templ.Component {
 // An install resolved by a shared token has one owner and no memberships, so
 // the page would show a list of one person nobody can change. The switcher
 // already answers "is this install multi-team?", and this asks it the same way.
+//
+// Access tokens ride the same condition, because they are gated on the same
+// thing: a token is minted for a person acting in a team, and an install with
+// no accounts has neither. Such an install already has a credential for the
+// CLI — the shared OZYMANDIS_AUTH_TOKEN — so there is nothing missing there,
+// only nothing to manage.
 func teamNav(ctx context.Context, path string) []NavItem {
 	if len(TeamsFromContext(ctx)) == 0 {
 		return nil
 	}
-	return []NavItem{{
-		Label: "Team", Href: "/team", Icon: "users",
-		Active: hasPrefix(path, "/team"),
-	}}
+	return []NavItem{
+		{
+			Label: "Team", Href: "/team", Icon: "users",
+			Active: hasPrefix(path, "/team"),
+		},
+		{
+			Label: "Access tokens", Href: "/settings/tokens", Icon: "key",
+			Active: hasPrefix(path, "/settings/tokens"),
+		},
+	}
 }
 
 // infraNav lists the install-wide settings pages this install actually has.
@@ -306,6 +320,12 @@ func infraNav(ctx context.Context, path string) []NavItem {
 		items = append(items, NavItem{
 			Label: "Registry", Href: "/cluster/registry", Icon: "package",
 			Active: hasPrefix(path, "/cluster/registry"),
+		})
+	}
+	if s.Backups {
+		items = append(items, NavItem{
+			Label: "Backups", Href: "/settings/backups", Icon: "archive",
+			Active: hasPrefix(path, "/settings/backups"),
 		})
 	}
 	return items

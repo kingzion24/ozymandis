@@ -41,6 +41,20 @@ func testService(t *testing.T) *Service {
 	// keep this clear of the owner ids the store, app and domain packages use,
 	// because `go test ./...` runs those packages against the same database at
 	// the same time.
+	// This purge is why every package owns an email suffix.
+	//
+	// `go test ./...` runs packages in parallel against one database, and the
+	// DELETE below is unscoped beyond the address: it removes every user
+	// matching '%@example.test', including rows another package inserted a
+	// microsecond ago and is about to reference. That surfaces in the other
+	// package as a foreign key violation naming a table this one never touched,
+	// which is close to unreadable as a failure.
+	//
+	// So @example.test belongs to this package. Other packages use their own —
+	// web uses @web.test, store uses @store.test — and a new package creating
+	// users should pick its own rather than reach for the obvious one. If you
+	// arrived here after a flaky FK error in some other package, that is the
+	// bug, and the fix is on that package's side.
 	purge := func() {
 		// The team the bootstrap gives someone who could not have the configured
 		// one is named after them, so it is found through the same address filter

@@ -45,6 +45,15 @@ type Orchestrator struct {
 	// prerequisite for managing workloads.
 	metrics metricsv.Interface
 
+	// restCfg is kept for the one operation the typed clientset cannot express:
+	// exec, which needs a SPDY connection built from the same credentials
+	// rather than a request/response round trip.
+	//
+	// Nil for an orchestrator built with NewWithClient — which is every test
+	// using the fake clientset — and Exec reports that rather than dereferencing
+	// it. A fake cluster has no API server to dial.
+	restCfg *rest.Config
+
 	log *slog.Logger
 }
 
@@ -67,6 +76,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger) (*Orchestrator, erro
 	}
 
 	o := NewWithClient(client, log)
+	o.restCfg = restCfg
 
 	// Best effort, like the metrics client: a cluster this cannot build a
 	// dynamic client for is still perfectly usable, it just cannot be asked to

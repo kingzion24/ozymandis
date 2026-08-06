@@ -57,11 +57,11 @@ func TestAnUnverifiedDomainIsNotRouted(t *testing.T) {
 		t.Fatalf("RoutableHosts: %v", err)
 	}
 	for _, h := range hosts {
-		if h == "shop.customer.test" {
+		if h.Host == "shop.customer.test" {
 			t.Fatal("an unverified claim is being routed")
 		}
 	}
-	if len(hosts) != 1 || hosts[0] != "web.apps.domain.test" {
+	if len(hosts) != 1 || hosts[0].Host != "web.apps.domain.test" {
 		t.Fatalf("hosts = %v, want only the platform host", hosts)
 	}
 }
@@ -90,12 +90,58 @@ func TestAVerifiedDomainIsRouted(t *testing.T) {
 	}
 	var found bool
 	for _, h := range hosts {
-		if h == "shop.verified.test" {
+		if h.Host == "shop.verified.test" {
 			found = true
 		}
 	}
 	if !found {
 		t.Fatalf("a verified domain is not routed — hosts were %v", hosts)
+	}
+}
+
+// Routing has to say which hostnames the platform issued, because that decides
+// which certificate serves each one. A caller given bare names would have to
+// re-derive it by comparing suffixes against the current app domain — the
+// derivation the managed column exists to replace, and one that reports a
+// customer's domain as platform-issued the moment it happens to sit under it.
+func TestRoutableHostsSayWhichAreManaged(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	a := seedApp(t, pool, "test-custom-prov", "web", "ns-test-custom-prov")
+	q := dbgen.New(pool)
+
+	if _, err := EnsureManaged(ctx, q, ManagedInput{
+		OwnerID: a.OwnerID, AppID: a.ID, AppName: a.Name,
+		AppDomain: "apps.domain.test", TLS: true,
+	}); err != nil {
+		t.Fatalf("EnsureManaged: %v", err)
+	}
+
+	c, err := AddCustom(ctx, q, a.OwnerID, a.ID,
+		"shop.brought.test", "edge.domain.test", "apps.domain.test", nil)
+	if err != nil {
+		t.Fatalf("AddCustom: %v", err)
+	}
+	res := fakeResolver{cname: map[string]string{"shop.brought.test": "edge.domain.test."}}
+	if err := Verify(ctx, q, res, a.OwnerID, c.ID); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+
+	hosts, err := RoutableHosts(ctx, q, a.ID)
+	if err != nil {
+		t.Fatalf("RoutableHosts: %v", err)
+	}
+
+	got := map[string]bool{}
+	for _, h := range hosts {
+		got[h.Host] = h.Managed
+	}
+	if !got["web.apps.domain.test"] {
+		t.Error("the platform hostname did not come back managed")
+	}
+	if got["shop.brought.test"] {
+		t.Error("a domain somebody brought came back managed — it would be served " +
+			"the platform's wildcard certificate")
 	}
 }
 

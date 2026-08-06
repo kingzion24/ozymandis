@@ -343,13 +343,13 @@ func TestRoleCannotBeAssertedByTheClient(t *testing.T) {
 		"team": {rt.teamID}, "user_id": {rt.ownerID.String()},
 	}
 	headers := map[string]string{
-		"X-Role":             "owner",
+		"X-Role":                 "owner",
 		"X-Ozymandis-Role":       "owner",
-		"X-Forwarded-Role":   "owner",
+		"X-Forwarded-Role":       "owner",
 		"X-Ozymandis-Owner":      rt.teamID,
 		"X-Ozymandis-User":       rt.ownerID.String(),
-		"Authorization":      "Bearer owner",
-		"X-Forwarded-Proto":  "https",
+		"Authorization":          "Bearer owner",
+		"X-Forwarded-Proto":      "https",
 		"X-Ozymandis-Session-Id": rt.owner.Value,
 	}
 

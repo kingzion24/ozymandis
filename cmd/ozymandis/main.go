@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kingzion24/ozymandis/internal/account"
+	"github.com/kingzion24/ozymandis/internal/api"
 	"github.com/kingzion24/ozymandis/internal/app"
 	"github.com/kingzion24/ozymandis/internal/cluster"
 	"github.com/kingzion24/ozymandis/internal/config"
@@ -126,7 +127,7 @@ func run() error {
 		Builder:         builder,
 		Images:          images,
 		AppDomain:       cfg.AppDomain,
-		WildcardTLS:     cfg.WildcardTLS,
+		CertResolver:    orchestrator.IssuerRef{Name: cfg.CertResolver},
 		Keeper:          keeper,
 		ReservedDomains: cfg.ReservedDomains,
 		// The standard resolver. Verifying a custom domain is a DNS lookup,
@@ -135,20 +136,27 @@ func run() error {
 		Resolver: domain.NetResolver{},
 	})
 
-	// Ozymandis cannot check that the ingress controller actually has a default
-	// certificate: there is no API for "what will you serve for an unknown
-	// host". Without one, apps are served the wrong certificate rather than
-	// failing, so the one thing available is to say so plainly at startup.
-	if cfg.WildcardTLS {
-		log.Info("wildcard TLS enabled — platform hostnames are served from the "+
-			"ingress controller's default certificate; Ozymandis cannot verify one is "+
-			"configured",
-			slog.String("app_domain", cfg.AppDomain))
-	}
 	if cfg.AppDomain != "" {
 		log.Info("per-app hostnames enabled",
 			slog.String("app_domain", cfg.AppDomain),
 			slog.String("dns", "point *."+cfg.AppDomain+" at this cluster"))
+	}
+
+	// Said at startup because neither branch is verifiable from here and both
+	// land on somebody who is not reading this log.
+	//
+	// With a resolver named, Ozymandis cannot check the controller actually has
+	// one by that name — a wrong name serves the controller's own certificate
+	// to every visitor while every deploy stays green. With none, hostnames are
+	// verified, routed, and then served over plain HTTP. Printing the resolver
+	// is what makes the first case checkable against the controller's config.
+	if cfg.CertResolver != "" {
+		log.Info("hostnames get their own certificates",
+			slog.String("acme_resolver", cfg.CertResolver),
+			slog.String("verify", "the resolver must exist in the ingress controller's configuration"))
+	} else {
+		log.Info("no ACME resolver configured — hostnames are served over plain HTTP; " +
+			"set OZYMANDIS_CERT_RESOLVER to change that")
 	}
 
 	if err := apps.EnsureOwner(ctx, cfg.OwnerID, cfg.OwnerName, ""); err != nil {
@@ -168,7 +176,7 @@ func run() error {
 		Authenticated: cfg.AccountsEnabled() || !cfg.Unauthenticated(),
 		Version:       version,
 		AppDomain:     cfg.AppDomain,
-		WildcardTLS:   cfg.WildcardTLS,
+		CertResolver:  cfg.CertResolver,
 		Logger:        log,
 		Nets:          apps,
 		Logs:          apps,
@@ -187,9 +195,31 @@ func run() error {
 		// push credential, and a credential this install cannot seal is one it
 		// declines to hold.
 		opts.Registries = registry.New(pool, keeper, log)
+
+		// Deploy on push, for the fifth time the same reason: the webhook
+		// secret and the deploy key are both credentials, and an install that
+		// cannot seal them declines to hold them rather than storing them
+		// readable.
+		opts.Pushes = apps
+
+		// Backups, and the same reason a fourth time with more at stake: the
+		// destination holds both a storage credential and the password that
+		// encrypts every snapshot. An install that cannot seal those would be
+		// storing the key to its backups readable in the database those backups
+		// are of.
+		//
+		// Also requires an orchestrator that can run Jobs. Asserted here rather
+		// than assumed, so an orchestrator without that support leaves the
+		// surface off instead of offering a schedule that would never fire.
+		if _, ok := orch.(orchestrator.Runner); ok {
+			opts.Backups = apps
+		} else {
+			log.Info("backups are off — this orchestrator cannot run scheduled jobs")
+		}
 	} else {
-		log.Info("add-node and the image registry are off — " +
-			"set OZYMANDIS_SECRET_KEY to store a cluster join token or registry password")
+		log.Info("add-node, the image registry and backups are off — " +
+			"set OZYMANDIS_SECRET_KEY to store a cluster join token, registry " +
+			"password or backup credentials")
 	}
 
 	if cfg.AccountsEnabled() {
@@ -212,13 +242,74 @@ func run() error {
 		return err
 	}
 
+	handler, err := mount(srv, ident, apps, accounts, cfg, log)
+	if err != nil {
+		return err
+	}
+
 	// Settles builds whose process went away — a restart mid-build, or a
 	// replica that stopped. Level-triggered against the Job rather than driven
 	// by anything this process remembers, so it is correct after a restart and
 	// correct when several replicas run it at once.
 	go apps.RunReconciler(ctx)
 
-	return serve(ctx, cfg, srv.Handler(), log)
+	// Deploy-on-push for installs GitHub cannot reach. The webhook is the
+	// primary path and this is the fallback; an install with a working hook
+	// simply finds nothing new on every pass.
+	go apps.RunPoller(ctx)
+
+	return serve(ctx, cfg, handler, log)
+}
+
+// mount puts the JSON API alongside the dashboard.
+//
+// A root mux rather than the API being routes inside web.Server. The two are
+// different surfaces for different callers — one renders pages and redirects to
+// a sign-in form, the other returns status codes and never redirects anywhere —
+// and mounting them separately is what keeps the dashboard's browser-shaped
+// middleware from ever running on an API request.
+//
+// The pattern is "/api/" rather than "/api/v1/": ServeMux matches the longest
+// pattern, so this claims every future version too, and an unrecognised one
+// gets the API's JSON 404 instead of the dashboard's HTML.
+func mount(
+	srv *web.Server, ident identity.Provider, apps *app.Service,
+	accounts *account.Service, cfg config.Config, log *slog.Logger,
+) (http.Handler, error) {
+	opts := api.Options{
+		Identity: ident,
+		Apps:     apps,
+		Logs:     apps,
+		Nets:     apps,
+		Exec:     apps,
+		Logger:   log,
+	}
+
+	// Roles only exist where accounts do. Left nil, every authenticated caller
+	// acts as the owner — which is the literal truth of a shared-token install
+	// rather than a permissive default, and is what web.roleOf concludes for
+	// the same install.
+	if cfg.AccountsEnabled() {
+		opts.Roles = accounts.RequestRoles(web.SessionCookie)
+	}
+
+	apiSrv, err := api.New(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	root := http.NewServeMux()
+	root.Handle("/api/", apiSrv.Handler())
+
+	// Outside the identity middleware entirely: GitHub carries no credential of
+	// ours, and the delivery's signature is the authentication. Mounted here
+	// rather than inside the API router so it cannot inherit an auth middleware
+	// by accident — a webhook behind a bearer-token gate is a webhook that
+	// never fires.
+	root.Handle("/webhooks/", api.WebhookHandler(apps, log))
+
+	root.Handle("/", srv.Handler())
+	return root, nil
 }
 
 // newOrchestrator connects to a cluster, or falls back to an in-memory stub.
@@ -246,7 +337,7 @@ func newOrchestrator(
 	return orchestrator.NewNoop(), nil
 }
 
-// newIdentity picks which of the three providers resolves an owner.
+// newIdentity picks which of the providers resolves an owner.
 //
 // Which one is active decides who can reach the dashboard and what they see, so
 // each branch says so in the log: an operator must be able to tell from a
@@ -256,8 +347,8 @@ func newIdentity(
 	cfg config.Config, accounts *account.Service, log *slog.Logger,
 ) (identity.Provider, error) {
 	if cfg.AccountsEnabled() {
-		log.Info("accounts enabled — requests are resolved from a session cookie "+
-			"to the team it is acting as",
+		log.Info("accounts enabled — requests are resolved from an API token or a "+
+			"session cookie to the team it is acting as",
 			slog.String("base_url", cfg.BaseURL),
 			slog.String("mail_transport", cfg.MailTransport()),
 			slog.Duration("session_ttl", cfg.SessionTTL),
@@ -270,7 +361,14 @@ func newIdentity(
 				"to this log instead of being sent; set OZYMANDIS_SMTP_ADDR or " +
 				"OZYMANDIS_RESEND_API_KEY to deliver them")
 		}
-		return accounts.Provider(web.SessionCookie), nil
+		// Tokens ahead of sessions. Both resolve to a team and everything
+		// downstream takes the result without asking which arrived, so this is
+		// the only place the two ways in have to be reconciled — and a request
+		// that carries both should be judged on the one it sent deliberately.
+		return identity.First(
+			accounts.TokenProvider(),
+			accounts.Provider(web.SessionCookie),
+		), nil
 	}
 
 	owner := identity.Owner{ID: cfg.OwnerID, DisplayName: cfg.OwnerName}

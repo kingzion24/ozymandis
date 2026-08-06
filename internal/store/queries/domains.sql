@@ -70,12 +70,18 @@ WHERE owner_id = @owner_id AND id = @id AND NOT managed;
 SELECT * FROM domains
 WHERE owner_id = @owner_id AND id = @id AND NOT managed;
 
--- Hostnames that may actually be routed to.
+-- Hostnames that may actually be routed to, and whether the platform issued
+-- each one.
 --
 -- A managed host is routable because the platform issued it; a custom one only
 -- once it is proven. This is the query the Ingress is built from, so the gate
 -- lives here rather than in a caller that might forget it.
+--
+-- managed comes back with the host because it decides which certificate serves
+-- the name, and it is the recorded fact rather than a suffix comparison — see
+-- 00002. A caller that had only the hostname would have to re-derive it from
+-- the current app domain, which is the derivation that column exists to avoid.
 -- name: RoutableHostsForApp :many
-SELECT host FROM domains
+SELECT host, managed FROM domains
 WHERE app_id = @app_id AND (managed OR verified)
 ORDER BY managed DESC, host;

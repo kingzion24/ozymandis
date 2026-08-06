@@ -58,6 +58,12 @@ type Apps interface {
 	SetHealth(ctx context.Context, ownerID, name, healthPath string, liveness bool) error
 	SetCommand(ctx context.Context, ownerID, name, command string) error
 
+	// SetReleaseCommand is what runs against a new image before traffic moves
+	// to it. Not applied on save, unlike the others here: it is an instruction
+	// for the next deploy, and running it when somebody typed it into a form
+	// would execute a migration at the moment of configuring one.
+	SetReleaseCommand(ctx context.Context, ownerID, name, command string) error
+
 	// Links are the dependencies between apps, recorded when a variable naming
 	// another app is written — the only moment a sealed value is readable.
 	Links(ctx context.Context, ownerID string) ([]app.Link, error)
@@ -76,6 +82,17 @@ type Apps interface {
 	// to the team rather than to whoever last dragged something.
 	SetPosition(ctx context.Context, ownerID, name string, x, y int32) error
 	ClearPositions(ctx context.Context, ownerID string, projectID uuid.UUID) error
+}
+
+// Pushes is the deploy-on-push surface.
+type Pushes interface {
+	// SetAutoDeploy turns it on or off, returning a freshly minted webhook
+	// secret when switching on and empty otherwise. The secret is returned once
+	// and never readable again — only its sealed form is stored.
+	SetAutoDeploy(ctx context.Context, ownerID, name string, on bool) (secret string, err error)
+
+	// GenerateDeployKey mints a key pair and returns the public half.
+	GenerateDeployKey(ctx context.Context, ownerID, name string) (app.DeployKey, error)
 }
 
 // Accounts is the sign-in surface's view of the account service.
@@ -160,6 +177,15 @@ type Accounts interface {
 	// own authority and refuse to leave the team without an owner.
 	SetRole(ctx context.Context, actor uuid.UUID, teamID string, target uuid.UUID, role account.Role) error
 	RemoveMember(ctx context.Context, actor uuid.UUID, teamID string, target uuid.UUID) error
+
+	// API tokens are the credential everything outside a browser carries. The
+	// raw value comes back from IssueAPIToken once and is never readable again;
+	// ListAPITokens returns rows with no field it could appear in.
+	IssueAPIToken(
+		ctx context.Context, userID uuid.UUID, teamID, name string, ttl time.Duration,
+	) (raw string, token account.APIToken, err error)
+	ListAPITokens(ctx context.Context, userID uuid.UUID, teamID string) ([]account.APIToken, error)
+	RevokeAPIToken(ctx context.Context, userID uuid.UUID, teamID string, id uuid.UUID) error
 }
 
 // The engine's own implementation, asserted here so that a signature drifting
@@ -185,11 +211,13 @@ type Options struct {
 	Authenticated bool
 	Version       string
 
-	// AppDomain and WildcardTLS describe the platform's hostname policy. The
+	// AppDomain and CertResolver describe the platform's hostname policy. The
 	// dashboard reads them to explain the install on the settings page; the
 	// per-app scheme comes from app.App.TLS, which the app service populates.
-	AppDomain   string
-	WildcardTLS bool
+	//
+	// CertResolver is the ACME resolver name, empty when TLS is off.
+	AppDomain    string
+	CertResolver string
 
 	// Joiner, when set, puts the add-node surface on the router. Left nil the
 	// engine offers no way to add a node, which is right for an install with
@@ -204,6 +232,22 @@ type Options struct {
 
 	// Logs, when set, puts the log surface on the router.
 	Logs Logger
+
+	// Backups, when set, puts the backup surface on the router.
+	//
+	// Nil leaves it off, which is right for two installs: one whose
+	// orchestrator cannot run Jobs, and one with no secret key — the storage
+	// credential has to be sealed, and a form that accepted it without a key
+	// would store the key to every backup readable in the database those
+	// backups are of.
+	Backups Backups
+
+	// Pushes, when set, puts the deploy-on-push surface on the router.
+	//
+	// Nil leaves it off, which is right for an install with no secret key: the
+	// webhook secret and the deploy key are both credentials, and one this
+	// install cannot seal is one it declines to hold.
+	Pushes Pushes
 
 	// Registries, when set, puts the image registry surface on the router.
 	// Nil leaves it off: an install with nowhere to push cannot build, and a
@@ -274,7 +318,7 @@ type Server struct {
 	authn     bool
 	ver       string
 	appDomain string
-	wildcard  bool
+	resolver  string
 	log       *slog.Logger
 
 	// joiner answers how a machine joins this cluster. Nil leaves the add-node
@@ -294,10 +338,14 @@ type Server struct {
 	// registries is where built images go. Nil leaves the Registry surface
 	// off, which is right for an install that cannot build anything.
 	registries Registries
+	pushes     Pushes
 
 	// logs reads container output. Nil leaves the log surface off, which is
 	// right for an install whose orchestrator has no containers to read.
 	logs Logger
+
+	// backups schedules and restores. Nil leaves the backup surface off.
+	backups Backups
 
 	accounts       Accounts
 	mailer         notify.Mailer
@@ -366,14 +414,16 @@ func New(opts Options) (*Server, error) {
 		authn:     opts.Authenticated,
 		ver:       opts.Version,
 		appDomain: opts.AppDomain,
-		wildcard:  opts.WildcardTLS,
+		resolver:  opts.CertResolver,
 		log:       opts.Logger,
 
 		joiner:         opts.Joiner,
 		stacks:         opts.Stacks,
 		nets:           opts.Nets,
 		registries:     opts.Registries,
+		pushes:         opts.Pushes,
 		logs:           opts.Logs,
+		backups:        opts.Backups,
 		accounts:       opts.Accounts,
 		mailer:         opts.Mailer,
 		baseURL:        strings.TrimRight(opts.BaseURL, "/"),
@@ -525,6 +575,10 @@ func (s *Server) Handler() http.Handler {
 				r.Get("/apps/{name}/logs/stream", s.appLogsStream)
 				r.Get("/apps/{name}/deployments/{id}/logs", s.deployLogs)
 			}
+			if s.backups != nil {
+				r.Get("/apps/{name}/backups", s.appBackups)
+			}
+
 			r.Post("/apps/{name}/scale", s.appScale)
 			r.Post("/apps/{name}/redeploy", s.appRedeploy)
 
@@ -535,6 +589,17 @@ func (s *Server) Handler() http.Handler {
 			// actually use, and every one of those is gated on its own route.
 			if s.accounts != nil {
 				r.Get("/team", s.teamPage)
+
+				// Access tokens sit at member, not owner, and act on the viewer's
+				// own credentials only. A token can never carry more authority
+				// than the role its holder already has — it is resolved through
+				// the same membership join a session is — so gating this at admin
+				// would stop a member using the CLI to do things the dashboard
+				// already lets them do, which is a restriction on the tool rather
+				// than on the permission.
+				r.Get("/settings/tokens", s.tokensPage)
+				r.Post("/settings/tokens", s.tokenCreate)
+				r.Post("/settings/tokens/{id}/revoke", s.tokenRevoke)
 			}
 
 			r.Get("/cluster", s.clusterNodes)
@@ -570,6 +635,16 @@ func (s *Server) Handler() http.Handler {
 			// redeploy.
 			r.Post("/apps/{name}/health", s.healthSet)
 			r.Post("/apps/{name}/command", s.commandSet)
+			r.Post("/apps/{name}/release-command", s.releaseCommandSet)
+
+			// Deploy on push. Gated on Pushes being wired, which needs a secret
+			// key: the webhook secret and the deploy key are both credentials,
+			// and an install that cannot seal them declines to hold them rather
+			// than storing them readable.
+			if s.pushes != nil {
+				r.Post("/apps/{name}/auto-deploy", s.autoDeploySet)
+				r.Post("/apps/{name}/deploy-key", s.deployKeyGenerate)
+			}
 			r.Post("/apps/{name}/variables", s.variableSet)
 			r.Post("/apps/{name}/variables/{key}/delete", s.variableDelete)
 
@@ -578,6 +653,19 @@ func (s *Server) Handler() http.Handler {
 				r.Post("/apps/{name}/domains", s.domainAdd)
 				r.Post("/apps/{name}/domains/{id}/verify", s.domainVerify)
 				r.Post("/apps/{name}/domains/{id}/delete", s.domainRemove)
+			}
+
+			// Backups. Grouped with the other writes rather than gated at
+			// owner: what these change is one app's own data, which is the
+			// same thing every other route in this group changes. The
+			// install-wide destination is a different question and is gated
+			// separately, below.
+			if s.backups != nil {
+				r.Post("/apps/{name}/backups/policy", s.backupPolicySet)
+				r.Post("/apps/{name}/backups/disable", s.backupDisable)
+				r.Post("/apps/{name}/backups/run", s.backupNow)
+				r.Post("/apps/{name}/backups/snapshots", s.backupSnapshots)
+				r.Post("/apps/{name}/backups/restore", s.backupRestore)
 			}
 
 			r.Post("/apps/{name}/storage", s.storageAttach)
@@ -615,6 +703,21 @@ func (s *Server) Handler() http.Handler {
 				r.Get("/cluster/nodes/add", s.nodeAdd)
 				r.Get("/cluster/nodes/add/status", s.nodeAddFragment)
 				r.Post("/cluster/join", s.nodeJoinSet)
+			})
+		}
+
+		// The backup destination, gated at owner for the same reason the
+		// registry is: one destination serves every team, and the credential
+		// stored here opens the place every team's backups are kept. Reading
+		// it is as consequential as writing it — the bucket and endpoint tell
+		// somebody where to go looking — so the GET is inside the gate too.
+		if s.backups != nil {
+			r.Group(func(r chi.Router) {
+				r.Use(s.requireRole(account.RoleOwner))
+
+				r.Get("/settings/backups", s.backupDestination)
+				r.Post("/settings/backups", s.backupDestinationSet)
+				r.Post("/settings/backups/clear", s.backupDestinationClear)
 			})
 		}
 
@@ -1057,7 +1160,7 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 		Version:       s.ver,
 		ClusterOK:     s.orch.Ping(r.Context()) == nil,
 		AppDomain:     s.appDomain,
-		WildcardTLS:   s.wildcard,
+		CertResolver:  s.resolver,
 		AccountsOn:    s.accounts != nil,
 		MailTransport: s.mailTransport,
 		SessionTTL:    s.sessionTTL.String(),

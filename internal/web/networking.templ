@@ -8,7 +8,7 @@ type NetworkingData struct {
 	Net app.Networking
 
 	// UntrustedCert means this app is served over https with a certificate
-	// nobody will trust, because the install has no wildcard certificate.
+	// nobody will trust, because the install has no ACME resolver configured.
 	UntrustedCert bool
 
 	Notice string
@@ -41,7 +41,7 @@ templ publicNetworking(d NetworkingData) {
 								rel="noreferrer"
 							>{ d.Net.Managed }</a>
 							<span class="block text-muted-foreground">
-								Issued by the platform &middot; resolves through the wildcard record
+								Issued by the platform &middot; certificate obtained for this exact name
 							</span>
 							if d.UntrustedCert {
 								// Said here rather than left to the browser. The warning
@@ -49,10 +49,11 @@ templ publicNetworking(d NetworkingData) {
 								// that the install has none configured, which is the
 								// part they can do something about.
 								<span class="block text-muted-foreground">
-									Served over https from the ingress controller's default
-									certificate, which browsers will not trust. Configure a
-									wildcard certificate for this app domain, or turn off
-									Enforce HTTPS below to serve it on plain http.
+									Served over https from the ingress controller's own
+									certificate, which browsers will not trust. Set
+									<code class="mono">OZYMANDIS_CERT_RESOLVER</code> to an ACME
+									resolver the controller has, or turn off Enforce HTTPS below
+									to serve it on plain http.
 								</span>
 							}
 						</span>
@@ -94,8 +95,14 @@ templ customDomains(d NetworkingData) {
 										</span>
 									}
 								</span>
-								if c.Verified {
-									<span class="status status-ok">routed</span>
+								if c.Verified && d.Net.CertTLS {
+									<span class="status status-ok">routed &middot; https</span>
+								} else if c.Verified {
+									// Routed, but over plain HTTP, and said here
+									// rather than left to be discovered from a
+									// browser. This install has no ACME resolver,
+									// so nothing can obtain a certificate for it.
+									<span class="status status-warn">routed &middot; http only</span>
 								} else {
 									<span class="status status-warn">not verified</span>
 									<form method="post" action={ templ.URL("/apps/" + d.App + "/domains/" + c.ID.String() + "/verify") }>
@@ -138,6 +145,20 @@ templ customDomains(d NetworkingData) {
 					Nothing is routed until the record resolves. Until then the domain is a
 					claim, and anyone who proves they control it can take it.
 				</p>
+				if !d.Net.CertTLS {
+					// Said before somebody points DNS here and finds out from a
+					// browser warning. Without a resolver there is nothing to
+					// obtain a certificate from, and no shared certificate to
+					// fall back on — a certificate issued for another name is
+					// what a browser reports as impersonation.
+					<p class="mt-2 text-[12.5px] text-muted-foreground">
+						This install has no ACME resolver, so a custom domain is served over
+						plain <code class="mono">http</code>. Set
+						<code class="mono">OZYMANDIS_CERT_RESOLVER</code> to a resolver the
+						ingress controller has, and each verified domain gets a certificate
+						issued for its own name.
+					</p>
+				}
 			}
 		</div>
 	</div>

@@ -130,7 +130,7 @@ func (s *Server) storageFailed(
 
 	w.WriteHeader(status)
 	s.render(w, r, AppDetail(AppDetailData{
-		App: a, Tab: "storage", Error: cause.Error(),
+		App: a, Tab: "storage", Error: cause.Error(), Backups: s.backups != nil,
 	}))
 }
 
@@ -186,7 +186,7 @@ func (s *Server) variableFailed(
 
 	w.WriteHeader(status)
 	s.render(w, r, AppDetail(AppDetailData{
-		App: a, Tab: "variables", Error: cause.Error(),
+		App: a, Tab: "variables", Error: cause.Error(), Backups: s.backups != nil,
 	}))
 }
 
@@ -216,6 +216,68 @@ func (s *Server) commandSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
+}
+
+// releaseCommandSet sets what runs against a new image before traffic moves.
+func (s *Server) releaseCommandSet(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name := chi.URLParam(r, "name")
+
+	err := s.apps.SetReleaseCommand(ctx, owner.ID, name, r.FormValue("release_command"))
+	if err != nil {
+		s.appActionFailed(w, r, name, "settings", err)
+		return
+	}
+	http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
+}
+
+// autoDeploySet turns deploy-on-push on or off.
+//
+// Generating the webhook secret happens here rather than at app creation: a
+// secret minted for an app nobody enabled is a credential sitting in the
+// database for no reason, and the moment somebody switches this on is the
+// moment they are looking at the page that shows it to them.
+func (s *Server) autoDeploySet(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name := chi.URLParam(r, "name")
+
+	on := r.FormValue("auto_deploy") == "on"
+	secret, err := s.pushes.SetAutoDeploy(ctx, owner.ID, name, on)
+	if err != nil {
+		s.appActionFailed(w, r, name, "settings", err)
+		return
+	}
+
+	if secret != "" {
+		// Shown once, on the response that created it — never via a redirect,
+		// which would put a live credential in the browser history and in the
+		// access log of anything in front of this.
+		s.appActionNoticed(w, r, name, "settings",
+			"Deploy on push is on. Add this webhook to your repository, with the "+
+				"secret below — it is shown once.\n"+
+				s.baseURL+"/webhooks/github\nSecret: "+secret)
+		return
+	}
+	http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
+}
+
+// deployKeyGenerate mints a key pair for cloning a private repository.
+func (s *Server) deployKeyGenerate(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name := chi.URLParam(r, "name")
+
+	key, err := s.pushes.GenerateDeployKey(ctx, owner.ID, name)
+	if err != nil {
+		s.appActionFailed(w, r, name, "settings", err)
+		return
+	}
+
+	s.appActionNoticed(w, r, name, "settings",
+		"Add this as a deploy key on your repository. Read access is enough — "+
+			"Ozymandis only clones.\n"+key.Public)
 }
 
 // appActionFailed re-renders a tab with the reason it refused.
@@ -261,7 +323,11 @@ func (s *Server) appActionNoticed(
 func (s *Server) detailWith(
 	r *http.Request, a app.App, tab, notice, fail string,
 ) AppDetailData {
-	d := AppDetailData{App: a, Tab: tab, Notice: notice, Error: fail}
+	d := AppDetailData{
+		CanPush:    s.pushes != nil,
+		WebhookURL: s.baseURL + "/webhooks/github",
+		App:        a, Tab: tab, Notice: notice, Error: fail, Backups: s.backups != nil,
+	}
 	if s.nets != nil {
 		if n, err := s.nets.Networking(r.Context(), a.OwnerID, a.Name); err == nil {
 			d.Net = n

@@ -17,6 +17,7 @@ import (
 type Surfaces struct {
 	DNS      bool
 	Registry bool
+	Backups  bool
 }
 
 // surfacesKey addresses them on the request. An unexported struct type, so
@@ -38,6 +39,7 @@ func (s *Server) withSurfaces(next http.Handler) http.Handler {
 	available := Surfaces{
 		DNS:      s.joiner != nil,
 		Registry: s.registries != nil,
+		Backups:  s.backups != nil,
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(w, r.WithContext(

@@ -219,29 +219,40 @@ func (q *Queries) ListDomainsByApp(ctx context.Context, appID uuid.UUID) ([]Doma
 }
 
 const routableHostsForApp = `-- name: RoutableHostsForApp :many
-SELECT host FROM domains
+SELECT host, managed FROM domains
 WHERE app_id = $1 AND (managed OR verified)
 ORDER BY managed DESC, host
 `
 
-// Hostnames that may actually be routed to.
+type RoutableHostsForAppRow struct {
+	Host    string
+	Managed bool
+}
+
+// Hostnames that may actually be routed to, and whether the platform issued
+// each one.
 //
 // A managed host is routable because the platform issued it; a custom one only
 // once it is proven. This is the query the Ingress is built from, so the gate
 // lives here rather than in a caller that might forget it.
-func (q *Queries) RoutableHostsForApp(ctx context.Context, appID uuid.UUID) ([]string, error) {
+//
+// managed comes back with the host because it decides which certificate serves
+// the name, and it is the recorded fact rather than a suffix comparison — see
+// 00002. A caller that had only the hostname would have to re-derive it from
+// the current app domain, which is the derivation that column exists to avoid.
+func (q *Queries) RoutableHostsForApp(ctx context.Context, appID uuid.UUID) ([]RoutableHostsForAppRow, error) {
 	rows, err := q.db.Query(ctx, routableHostsForApp, appID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []string{}
+	items := []RoutableHostsForAppRow{}
 	for rows.Next() {
-		var host string
-		if err := rows.Scan(&host); err != nil {
+		var i RoutableHostsForAppRow
+		if err := rows.Scan(&i.Host, &i.Managed); err != nil {
 			return nil, err
 		}
-		items = append(items, host)
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

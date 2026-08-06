@@ -822,7 +822,7 @@ func appPanelBody(d AppDetailData) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = appTabs(d.App.Name, d.Tab).Render(ctx, templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = appTabs(d.App.Name, d.Tab, d.Backups).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

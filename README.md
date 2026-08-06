@@ -45,10 +45,18 @@ nothing you build here is locked in.
 | Scale, redeploy, delete | ✅ |
 | Liveness and readiness probes | ✅ |
 | Deployment history, with a log per deployment | ✅ |
+| A release command, run against the new image before traffic shifts | ✅ |
+| Deploy on push, with an HMAC-verified webhook | ✅ |
+| A deploy key per app, so private repositories clone | ✅ |
+| Polling for installs GitHub cannot reach | ✅ |
+| A shell in a running container, from the CLI | ✅ |
+| A JSON API and an `oz` CLI over it | ✅ |
 | App logs, and per-request HTTP logs you can search and page | ✅ |
 | Live logs, streamed as the container writes them | ✅ |
 | Persistent volumes, mounted and expandable | ✅ |
 | Secrets sealed at rest, kept out of the app record | ✅ |
+| Scheduled backups off the machine, encrypted, with retention | ✅ |
+| Restore from a snapshot, from the dashboard | ✅ |
 | Deploy a wired stack from a template in one action | ✅ |
 
 **Reaching it**
@@ -57,7 +65,7 @@ nothing you build here is locked in.
 |---|---|
 | A hostname per app, served the moment it starts | ✅ |
 | Custom domains people bring, with verification | ✅ |
-| TLS from one shared wildcard certificate | ✅ |
+| TLS on every hostname, issued for that name alone and renewed automatically | ✅ |
 
 **Running the cluster**
 
@@ -98,6 +106,23 @@ curl -sSL https://kingzion24.github.io/ozymandis/install.sh | sudo sh
 Debian or Ubuntu, amd64 or arm64. It installs K3s, Postgres, and Ozymandis as a
 systemd service, then prints the dashboard URL and a token to sign in with.
 About ninety seconds on a fresh box.
+
+**It does not install an ingress controller, and it does not set up TLS.** K3s
+is installed with `--disable traefik`, so a fresh box has no edge at all: apps
+you deploy are reachable over plain http, and nothing reports that as a fault.
+Wiring the edge is a separate step, and deliberately so — the controller is one
+piece of cluster infrastructure with one place that configures it, and two
+things configuring one Traefik is how you get a controller that never schedules
+because something else already holds `:80` and `:443`.
+
+What that leaves you to do, once:
+
+1. Install an ingress controller with an ACME resolver. Traefik with a Let's
+   Encrypt resolver over TLS-ALPN-01 is what this is built against.
+2. Set `OZYMANDIS_CERT_RESOLVER` to that resolver's name and restart.
+
+Leave `OZYMANDIS_CERT_RESOLVER` empty until step 1 is done — a name matching no
+resolver fails silently, which [Certificates](#certificates) explains in full.
 
 To upgrade later:
 
@@ -173,13 +198,113 @@ without digging through logs.
 | `OZYMANDIS_OWNER_ID` | `owner-local` | The team every resource belongs to on a fresh install |
 | `OZYMANDIS_OWNER_EMAIL` | — | The one address that may sign in before anybody has an account |
 | `OZYMANDIS_APP_DOMAIN` | — | Apps get `<name>.<this>`. Point `*.<this>` at the cluster |
-| `OZYMANDIS_WILDCARD_TLS` | `false` | Serve those hostnames from the controller's default certificate |
+| `OZYMANDIS_CERT_RESOLVER` | `letsencrypt` | Name of an ACME resolver **the ingress controller already has**. Wrong name = the controller's own certificate, silently. Empty = plain HTTP |
 | `OZYMANDIS_BASE_URL` | — | Public URL. **Setting it switches sign-in on** |
 | `OZYMANDIS_SMTP_ADDR` / `OZYMANDIS_RESEND_API_KEY` | — | How sign-in links are delivered. Neither means they go to the log |
 | `OZYMANDIS_DEBUG` | `false` | Verbose logging |
 
 The full list, with the reasoning behind each, is in
 [`.env.example`](.env.example).
+
+## Backups
+
+K3s stores volumes on `local-path` by default: your data is a directory on one
+node's disk, unreplicated, with nothing between it and that disk failing.
+Everything else here can be rebuilt from configuration. That cannot.
+
+Set a destination once, under **Settings › Backups** — any S3-compatible
+storage: Cloudflare R2, Backblaze B2, Wasabi, S3, or a MinIO you run. There is
+deliberately no option to write to the same machine; a copy on the disk you are
+protecting against is not a backup.
+
+Then switch backups on per app. Each gets a nightly [restic][] repository of its
+own, encrypted before it leaves the machine:
+
+- **A Postgres app** is dumped with `pg_dump`, not copied file by file. Its data
+  directory is only consistent on disk between checkpoints, so a file-level copy
+  of a running server restores into a database that may or may not start — and
+  you find out which at restore time.
+- **Anything else** has each volume copied, mounted read-only.
+
+Retention (`restic forget --prune`) runs in the same job as the backup, so it
+cannot silently stop while backups carry on filling the bucket.
+
+[restic]: https://restic.net
+
+### Restoring
+
+**Backups › Restore** lists what the repository holds and puts one back. Do it
+once on purpose, while nothing is wrong. A backup nobody has restored from is a
+hypothesis, and the moment you need it is the worst moment to test it.
+
+The scripts fail loudly rather than partially — `pipefail` on the dump so a
+truncated `pg_dump` cannot be stored as a complete backup, `ON_ERROR_STOP` on
+the restore so a half-applied one reports as failed.
+
+Two things worth knowing before you start:
+
+- **The repository password cannot be recovered.** It encrypts every snapshot,
+  and it cannot be changed after the first one without starting the repository
+  over. Keep it wherever you keep `OZYMANDIS_SECRET_KEY`.
+- **`OZYMANDIS_SECRET_KEY` is required.** The storage credential and the
+  repository password are sealed with it. Without one they would sit readable in
+  the database — including in the backups this makes of it — so they are refused
+  rather than stored that way.
+
+`make test-backup` runs the real backup and restore against MinIO and Postgres
+in Docker: it seeds a table, backs it up, drops the table, restores, and checks
+the rows and the sequence came back.
+
+### Certificates
+
+Every hostname gets its own certificate, issued for that name and no other.
+Platform hostnames (`<app>.<OZYMANDIS_APP_DOMAIN>`) and domains people bring are
+treated identically — there is one path, not two.
+
+**Ozymandis does not obtain certificates.** It writes one annotation on the
+Ingress naming an ACME resolver, and the ingress controller does the rest. The
+resolver is `OZYMANDIS_CERT_RESOLVER`, and it must name a resolver **the
+controller already has configured**. Setting up that resolver is a cluster
+concern, like installing the controller itself; it is not something this
+installer does.
+
+That division is worth stating plainly, because of how it fails. Ozymandis
+cannot check the resolver exists. Name one that does not and nothing reports an
+error — the annotation is written, the Ingress is accepted, the deploy is green,
+and the controller answers every request with its own built-in certificate.
+Visitors see a browser warning; the dashboard sees a healthy app. **So the check
+that matters is the issuer on the served certificate, not the status code.**
+
+```
+echo | openssl s_client -connect your.app.example:443 \
+  -servername your.app.example 2>/dev/null | openssl x509 -noout -issuer
+```
+
+A real issuer means it works. The controller's own default certificate means the
+resolver name is wrong, and everything else will look fine.
+
+Set `OZYMANDIS_CERT_RESOLVER` empty to serve every hostname over **plain HTTP**
+instead. That is a supported way to run, and the domains page says so on each
+app. It is the honest failure: visibly no TLS, rather than TLS nobody trusts.
+
+**There are no wildcard certificates and no cert-manager.** Both are gone
+deliberately. A wildcard covers the names it was issued for and nothing else, so
+a hostname outside it was still served — under the wrong certificate, which a
+browser reports as impersonation rather than as a misconfiguration. Per-host
+issuance cannot produce that.
+
+The cost of that choice is a real ceiling, and it is worth knowing before you
+commit: Let's Encrypt allows **50 certificates per registered domain per week**.
+Every app under `OZYMANDIS_APP_DOMAIN` spends one, so an install creating more
+than fifty apps a week under a single app domain will start being refused. A
+domain somebody brings is a separate registered domain with its own allowance
+and does not count against yours. If you expect to run at that scale under one
+domain, this build is not shaped for it.
+
+Validation is over TLS-ALPN-01 or HTTP-01 depending on how the controller's
+resolver is configured, and either way a hostname must resolve here before a
+certificate can be obtained for it. Ozymandis requires that anyway — nothing is
+routed until the claim is verified.
 
 ## Security posture
 

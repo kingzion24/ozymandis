@@ -187,6 +187,15 @@ func BlueprintFor(src Source) (Blueprint, error) {
 	return BlueprintForWith(src, Capabilities{})
 }
 
+// ErrSourceUnavailable means this install cannot deploy from that source.
+//
+// A sentinel rather than a bare error because the answer is a fact about the
+// INSTALL, not about the request: a caller asked for something reasonable and
+// this install has not been configured for it. Surfaces need to tell those
+// apart — the API reports it as unavailable rather than as its own fault, and
+// a client that retried a 500 forever would be retrying a missing registry.
+var ErrSourceUnavailable = errors.New("app: that source is not available on this install")
+
 // BlueprintForWith returns the blueprint for a source on this install.
 func BlueprintForWith(src Source, c Capabilities) (Blueprint, error) {
 	if src == SourceTemplate {
@@ -196,7 +205,8 @@ func BlueprintForWith(src Source, c Capabilities) (Blueprint, error) {
 	for _, b := range BlueprintsFor(c) {
 		if b.Source == src {
 			if !b.Available {
-				return Blueprint{}, fmt.Errorf("app: %s is not available — %s", b.Label, b.Because)
+				return Blueprint{}, fmt.Errorf("%w: %s — %s",
+					ErrSourceUnavailable, b.Label, b.Because)
 			}
 			return b, nil
 		}

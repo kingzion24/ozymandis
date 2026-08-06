@@ -11,34 +11,51 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type ApiToken struct {
+	ID         uuid.UUID
+	UserID     uuid.UUID
+	OwnerID    string
+	Name       string
+	TokenHash  []byte
+	LastUsedAt pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+	CreatedAt  time.Time
+}
+
 type App struct {
-	ID             uuid.UUID
-	OwnerID        string
-	Name           string
-	Namespace      string
-	Image          string
-	Replicas       int32
-	Port           int32
-	CpuRequest     string
-	CpuLimit       string
-	MemoryRequest  string
-	MemoryLimit    string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-	HealthPath     string
-	HealthLiveness bool
-	Source         string
-	Internal       bool
-	ProjectID      pgtype.UUID
-	CanvasX        *int32
-	CanvasY        *int32
-	HttpsOnly      bool
-	CnameOnly      bool
-	RepoUrl        string
-	RepoBranch     string
-	RepoSubdir     string
-	RunAsUser      int64
-	Command        string
+	ID              uuid.UUID
+	OwnerID         string
+	Name            string
+	Namespace       string
+	Image           string
+	Replicas        int32
+	Port            int32
+	CpuRequest      string
+	CpuLimit        string
+	MemoryRequest   string
+	MemoryLimit     string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	HealthPath      string
+	HealthLiveness  bool
+	Source          string
+	Internal        bool
+	ProjectID       pgtype.UUID
+	CanvasX         *int32
+	CanvasY         *int32
+	HttpsOnly       bool
+	CnameOnly       bool
+	RepoUrl         string
+	RepoBranch      string
+	RepoSubdir      string
+	RunAsUser       int64
+	Command         string
+	ReleaseCommand  string
+	AutoDeploy      bool
+	WebhookSecret   []byte
+	DeployKey       []byte
+	DeployKeyPublic string
+	LastDeployedSha string
 }
 
 type AppLink struct {
@@ -47,6 +64,32 @@ type AppLink struct {
 	ToAppID   uuid.UUID
 	ViaKey    string
 	CreatedAt time.Time
+}
+
+type BackupDestination struct {
+	OwnerID         string
+	Endpoint        string
+	Bucket          string
+	Prefix          string
+	Region          string
+	AccessKeyID     string
+	SecretAccessKey []byte
+	RepoPassword    []byte
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+type BackupPolicy struct {
+	ID          uuid.UUID
+	OwnerID     string
+	AppID       uuid.UUID
+	Enabled     bool
+	Schedule    string
+	KeepDaily   int32
+	KeepWeekly  int32
+	KeepMonthly int32
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 type Build struct {
@@ -75,15 +118,17 @@ type ClusterJoin struct {
 }
 
 type Deployment struct {
-	ID         uuid.UUID
-	OwnerID    string
-	AppID      uuid.UUID
-	Image      string
-	Revision   string
-	Status     string
-	Message    string
-	StartedAt  time.Time
-	FinishedAt pgtype.Timestamptz
+	ID            uuid.UUID
+	OwnerID       string
+	AppID         uuid.UUID
+	Image         string
+	Revision      string
+	Status        string
+	Message       string
+	StartedAt     time.Time
+	FinishedAt    pgtype.Timestamptz
+	ReleaseLog    string
+	ReleaseStatus string
 }
 
 type Domain struct {
@@ -97,6 +142,20 @@ type Domain struct {
 	Managed      bool
 	VerifiedAt   pgtype.Timestamptz
 	VerifyTarget string
+}
+
+type ExecSession struct {
+	ID        uuid.UUID
+	OwnerID   string
+	AppID     uuid.UUID
+	Actor     string
+	Pod       string
+	Command   string
+	Tty       bool
+	StartedAt time.Time
+	EndedAt   pgtype.Timestamptz
+	Outcome   string
+	ExitCode  *int32
 }
 
 type Invitation struct {

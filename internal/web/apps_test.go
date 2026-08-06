@@ -33,14 +33,16 @@ type fakeApps struct {
 	// commands records what SetCommand was asked for, keyed by app name, so a
 	// handler test can assert the form reached the service rather than only
 	// that it answered 303.
-	commands map[string]string
+	commands        map[string]string
+	releaseCommands map[string]string
 }
 
 func newFakeApps(apps ...app.App) *fakeApps {
 	f := &fakeApps{
-		byOwner:  map[string][]app.App{},
-		scaled:   map[string]int32{},
-		commands: map[string]string{},
+		byOwner:         map[string][]app.App{},
+		scaled:          map[string]int32{},
+		commands:        map[string]string{},
+		releaseCommands: map[string]string{},
 	}
 	for _, a := range apps {
 		f.byOwner[a.OwnerID] = append(f.byOwner[a.OwnerID], a)
@@ -289,8 +291,9 @@ func TestAppDetailShowsTheHostnameAsALink(t *testing.T) {
 	}
 }
 
-// An install without wildcard TLS must not be offered an https link that
-// cannot connect.
+// An install with no certificates must not be offered an https link that
+// cannot connect. The signal is app.App.TLS, which the app service now
+// populates from whether a resolver is configured.
 func TestAppURLSchemeFollowsPlatformTLS(t *testing.T) {
 	a := sampleApp("owner-1", "web")
 	a.Host = "web.apps.example.com"
@@ -331,14 +334,20 @@ func TestAppListShowsTheHostname(t *testing.T) {
 // The settings page is where an operator finds out whether per-app hostnames
 // are on at all, and what DNS record makes them work.
 func TestSettingsShowsTheAppDomain(t *testing.T) {
-	h := testServer(t, Options{AppDomain: "apps.example.com", WildcardTLS: true})
+	h := testServer(t, Options{AppDomain: "apps.example.com", CertResolver: "letsencrypt"})
 	body := get(t, h, "/settings").Body.String()
 
 	if !strings.Contains(body, "*.apps.example.com") {
-		t.Error("settings should show the wildcard app domain")
+		t.Error("settings should show the app domain's DNS record")
 	}
-	if !strings.Contains(body, "Wildcard certificate") {
-		t.Error("settings should report the platform TLS posture")
+	if !strings.Contains(body, "Issued per hostname") {
+		t.Error("settings should report the TLS posture")
+	}
+	// The resolver name by itself, because an operator cannot check it against
+	// their controller's configuration without seeing which name was used —
+	// and a name matching no resolver is the failure nothing else reports.
+	if !strings.Contains(body, "letsencrypt") {
+		t.Error("settings should name the resolver certificates come from")
 	}
 
 	h = testServer(t, Options{})
@@ -624,6 +633,21 @@ func (f *fakeApps) SetCommand(_ context.Context, _, name, command string) error 
 		return err
 	}
 	f.commands[name] = command
+	return nil
+}
+
+// SetReleaseCommand mirrors SetCommand: parsed on the way in, so a bad line is
+// refused where it is typed rather than in the middle of a deploy.
+func (f *fakeApps) SetReleaseCommand(_ context.Context, _, name, command string) error {
+	if f.err != nil {
+		return f.err
+	}
+	if command != "" {
+		if _, err := app.ParseCommand(command); err != nil {
+			return err
+		}
+	}
+	f.releaseCommands[name] = command
 	return nil
 }
 

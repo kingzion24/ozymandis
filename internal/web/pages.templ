@@ -297,6 +297,21 @@ type AppDetailData struct {
 	// Error is a refusal from the action that produced this render, shown with
 	// the form that caused it rather than carried through a redirect.
 	Error string
+
+	// Backups reports that the backup surface is on for this install, which
+	// decides whether the tab is drawn. A tab to a route the router does not
+	// have is a link to a 404, so this is threaded through rather than the tab
+	// being drawn unconditionally.
+	Backups bool
+
+	// CanPush reports that deploy-on-push is available — this install has a
+	// secret key, so it can hold a webhook secret and a deploy key. Threaded
+	// through for the reason Backups is: a panel whose form posts to a route
+	// the router does not have is worse than no panel.
+	CanPush bool
+
+	// WebhookURL is what to paste into a repository's webhook settings.
+	WebhookURL string
 }
 
 // AppDetail is the Railway-shaped view: a rail of every app on the left so you
@@ -313,6 +328,9 @@ templ AppDetail(d AppDetailData) {
 				@appTab(d.App.Name, d.Tab, "variables", "Variables")
 				@appTab(d.App.Name, d.Tab, "metrics", "Metrics")
 				@appTab(d.App.Name, d.Tab, "storage", "Storage")
+				if d.Backups {
+					@appTab(d.App.Name, d.Tab, "backups", "Backups")
+				}
 				@appTab(d.App.Name, d.Tab, "settings", "Settings")
 			</nav>
 			switch d.Tab {
@@ -424,12 +442,15 @@ templ appDetailHeader(a app.App) {
 // renders it too. A panel that covers the app it belongs to has to carry the
 // way out of itself: an open sheet makes the rest of the document inert, so
 // tabs left behind it are not merely hidden — they cannot be clicked.
-templ appTabs(name, active string) {
+templ appTabs(name, active string, backups bool) {
 	<nav class="tabs canvas-sheet-tabs">
 		@appTab(name, active, "", "Deployments")
 		@appTab(name, active, "variables", "Variables")
 		@appTab(name, active, "metrics", "Metrics")
 		@appTab(name, active, "storage", "Storage")
+		if backups {
+			@appTab(name, active, "backups", "Backups")
+		}
 		@appTab(name, active, "settings", "Settings")
 	</nav>
 }
@@ -736,6 +757,109 @@ templ appSettings(d AppDetailData) {
 				arrives as literal text. Quote an argument to keep the spaces inside it,
 				and ask for a shell explicitly when you want one: <code class="mono">sh -c "…"</code>.
 			</p>
+		</div>
+	</div>
+	if d.CanPush && a.Repo.Set() {
+		<div class="panel mb-5">
+			<div class="panel-header"><span class="panel-title">Deploy on push</span></div>
+			<div class="panel-body">
+				<form method="post" action={ templ.SafeURL("/apps/" + a.Name + "/auto-deploy") } class="flex flex-wrap items-center gap-4">
+					<label class="flex items-center gap-2">
+						<input type="checkbox" name="auto_deploy" checked?={ a.AutoDeploy }/>
+						<span>Deploy when somebody pushes to <code class="mono">{ a.Repo.Ref() }</code></span>
+					</label>
+					<button class="btn btn-primary" type="submit">Save</button>
+				</form>
+				<p class="mt-3 text-[12px] text-muted-foreground">
+					Add a webhook to your repository pointing at
+					<code class="mono">{ d.WebhookURL }</code>, content type
+					<code class="mono">application/json</code>, for the
+					<strong>push</strong> event. The secret is shown once, when you turn
+					this on.
+				</p>
+				if a.Repo.Subdir != "" {
+					<p class="mt-2 text-[12px] text-muted-foreground">
+						This app builds from <code class="mono">{ a.Repo.Subdir }</code>, so a
+						push only deploys it when it touches that directory — other services in
+						the same repository are left alone. When GitHub does not say which files
+						changed, which happens on a force-push, it deploys rather than risk
+						skipping a real change.
+					</p>
+				}
+				if a.LastDeployedSHA != "" {
+					<p class="mt-2 text-[12px] text-muted-foreground">
+						Last deployed commit: <code class="mono">{ shortSHA(a.LastDeployedSHA) }</code>
+					</p>
+				}
+			</div>
+		</div>
+		<div class="panel mb-5">
+			<div class="panel-header"><span class="panel-title">Deploy key</span></div>
+			<div class="panel-body">
+				if a.DeployKeyPublic == "" {
+					<p class="mb-3 text-muted-foreground">
+						A private repository needs a key to clone. Generate one and add it to
+						your repository as a deploy key — read access is enough.
+					</p>
+				} else {
+					<p class="mb-3 text-muted-foreground">
+						Add this to your repository as a deploy key. Read access is enough.
+					</p>
+					<pre class="mono select-all break-all rounded border border-border bg-muted p-3 text-[12px]">{ a.DeployKeyPublic }</pre>
+				}
+				<form method="post" action={ templ.SafeURL("/apps/" + a.Name + "/deploy-key") } class="mt-3">
+					<button class="btn" type="submit">
+						if a.DeployKeyPublic == "" {
+							Generate a deploy key
+						} else {
+							Replace it
+						}
+					</button>
+				</form>
+				if a.DeployKeyPublic != "" {
+					<p class="mt-3 text-[12px] text-muted-foreground">
+						Replacing mints a new pair. The old key stops working as soon as you
+						update the repository, which is how a leaked one is revoked.
+					</p>
+				}
+			</div>
+		</div>
+	}
+	<div class="panel mb-5">
+		<div class="panel-header"><span class="panel-title">Release command</span></div>
+		<div class="panel-body">
+			<form method="post" action={ templ.SafeURL("/apps/" + a.Name + "/release-command") } class="flex flex-wrap items-end gap-4">
+				<div class="field grow">
+					<label class="label" for="release_command">Release command</label>
+					<input
+						class="control mono"
+						id="release_command"
+						name="release_command"
+						value={ a.ReleaseCommand }
+						placeholder="./bin/migrate"
+					/>
+					<span class="hint">
+						Runs against the new image before traffic moves to it. Empty means
+						no release step.
+					</span>
+				</div>
+				<button class="btn btn-primary mb-6" type="submit">Save</button>
+			</form>
+			<p class="text-[12px] text-muted-foreground">
+				This is where migrations belong. It runs once per deploy, after the image
+				is built and before any traffic reaches it — so a migration that fails
+				stops the deploy and leaves the previous version serving. Running
+				migrations from your entrypoint instead runs them once per replica, at
+				the same time, on every restart.
+			</p>
+			if len(a.Volumes) > 0 {
+				<p class="text-[12px] text-muted-foreground mt-2">
+					<strong>This app has storage, and a release does not see it.</strong>
+					A release runs beside the app rather than in it, so its volumes are not
+					mounted — attaching them would deadlock against the running app, which
+					holds them. A release command talks to its database over the network.
+				</p>
+			}
 		</div>
 	</div>
 	<div class="panel">
@@ -1418,7 +1542,12 @@ type SettingsData struct {
 	Version       string
 	ClusterOK     bool
 	AppDomain     string
-	WildcardTLS   bool
+
+	// CertResolver is the ACME resolver hostnames are issued from, empty when
+	// TLS is off. Shown by name because Ozymandis cannot verify the ingress
+	// controller actually has a resolver so named — printing it is what lets
+	// somebody check it against the controller's own configuration.
+	CertResolver  string
 
 	// AccountsOn, MailTransport and SessionTTL describe the sign-in posture.
 	// Shown because otherwise the only way to find out whether accounts are on
@@ -1481,15 +1610,20 @@ templ Settings(d SettingsData) {
 						<span class="ml-1 text-muted-foreground">must point at this cluster</span>
 					}
 				</dd>
-				<dt>Platform TLS</dt>
+				<dt>Hostname TLS</dt>
 				<dd>
-					if d.WildcardTLS {
-						@statusDot("Wildcard certificate", "status-ok")
+					if d.CertResolver != "" {
+						@statusDot("Issued per hostname", "status-ok")
 						<span class="ml-1 text-muted-foreground">
-							served by the ingress controller
+							from the <code class="mono">{ d.CertResolver }</code> ACME resolver, which
+							must exist in the ingress controller's configuration
 						</span>
 					} else {
 						@statusDot("Off", "status-neutral")
+						<span class="ml-1 text-muted-foreground">
+							hostnames are served over plain http — set
+							<code class="mono">OZYMANDIS_CERT_RESOLVER</code>
+						</span>
 					}
 				</dd>
 				<dt>Sign-in</dt>

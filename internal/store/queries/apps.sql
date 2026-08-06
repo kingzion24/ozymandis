@@ -124,6 +124,26 @@ SET command    = @command,
 WHERE owner_id = @owner_id AND id = @id
 RETURNING *;
 
+-- Both together, because they are one decision.
+--
+-- A port is what traffic is routed to and internal is whether any is routed at
+-- all; setting one without the other produces states nobody asked for — an
+-- internal app that just acquired a port, or a public app whose port was
+-- cleared and which therefore has a hostname routing to nothing. The caller
+-- passes both and the pair is written atomically.
+--
+-- Narrow rather than reusing UpdateApp, which also carries image and replicas.
+-- Those belong to the deploy and the scale paths respectively, and a query that
+-- can write all five is one that will eventually write a stale image while
+-- changing a port.
+-- name: SetAppService :one
+UPDATE apps
+SET port       = @port,
+    internal   = @internal,
+    updated_at = now()
+WHERE owner_id = @owner_id AND id = @id
+RETURNING *;
+
 -- name: SetAppNetworking :execrows
 UPDATE apps
 SET https_only = @https_only, cname_only = @cname_only, updated_at = now()
@@ -157,3 +177,53 @@ RETURNING *;
 -- Recorded by a build, which is the only thing that can discover it.
 UPDATE apps SET run_as_user = @run_as_user, updated_at = now()
 WHERE owner_id = @owner_id AND id = @id;
+
+-- name: SetAppReleaseCommand :one
+UPDATE apps
+SET release_command = @release_command,
+    updated_at      = now()
+WHERE owner_id = @owner_id AND id = @id
+RETURNING *;
+
+-- Written whether the release passed or failed.
+--
+-- A failed release's reason is in its log, and dropping the log on failure is
+-- how a vetoed deploy becomes impossible to explain — which is the one case
+-- somebody actually needs it.
+-- name: SetDeploymentRelease :exec
+UPDATE deployments
+SET release_status = @release_status,
+    release_log    = @release_log
+WHERE owner_id = @owner_id AND id = @id;
+
+-- name: SetAppAutoDeploy :one
+UPDATE apps
+SET auto_deploy = @auto_deploy, updated_at = now()
+WHERE owner_id = @owner_id AND id = @id
+RETURNING *;
+
+-- name: SetAppWebhookSecret :exec
+UPDATE apps SET webhook_secret = @webhook_secret, updated_at = now()
+WHERE owner_id = @owner_id AND id = @id;
+
+-- name: SetAppDeployKey :exec
+UPDATE apps
+SET deploy_key = @deploy_key, deploy_key_public = @deploy_key_public, updated_at = now()
+WHERE owner_id = @owner_id AND id = @id;
+
+-- name: SetAppLastDeployedSHA :exec
+UPDATE apps SET last_deployed_sha = @last_deployed_sha, updated_at = now()
+WHERE owner_id = @owner_id AND id = @id;
+
+-- Candidates a push might affect.
+--
+-- Deliberately NOT filtered by repository URL in SQL. The URL in a webhook
+-- payload is attacker-controlled — anybody can POST a body naming any
+-- repository — so it must never be the thing that selects which app is
+-- deployed. The signature does that: every candidate is tried and only the one
+-- whose secret verifies is acted on, which is why this returns them all.
+-- name: ListAutoDeployApps :many
+SELECT * FROM apps WHERE auto_deploy AND webhook_secret IS NOT NULL;
+
+-- name: ListAutoDeployAppsForOwner :many
+SELECT * FROM apps WHERE owner_id = @owner_id AND auto_deploy;

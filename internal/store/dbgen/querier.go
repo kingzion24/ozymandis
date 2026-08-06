@@ -29,6 +29,7 @@ type Querier interface {
 	ConsumeMagicLink(ctx context.Context, tokenHash []byte) (User, error)
 	CountApps(ctx context.Context, ownerID string) (int64, error)
 	CountOwnersOfTeam(ctx context.Context, ownerID string) (int64, error)
+	CreateAPIToken(ctx context.Context, arg CreateAPITokenParams) (ApiToken, error)
 	CreateApp(ctx context.Context, arg CreateAppParams) (App, error)
 	CreateAppLink(ctx context.Context, arg CreateAppLinkParams) error
 	// Builds. Owner-scoped in the row rather than through the deployment, because
@@ -60,8 +61,20 @@ type Querier interface {
 	// query: a handler that forgets to scope produces no rows here rather than
 	// another team's storage.
 	CreateVolume(ctx context.Context, arg CreateVolumeParams) (Volume, error)
+	// Deleted by id, scoped by user and team so that holding an id from somewhere
+	// else is not enough to revoke somebody's credential.
+	DeleteAPIToken(ctx context.Context, arg DeleteAPITokenParams) error
 	DeleteApp(ctx context.Context, arg DeleteAppParams) error
+	// Removes the destination.
+	//
+	// Policies are left in place on purpose. They describe what an owner wants
+	// backed up, which does not stop being true because the storage was
+	// reconfigured; deleting them would mean re-entering every schedule after
+	// rotating a bucket credential.
+	DeleteBackupDestination(ctx context.Context, ownerID string) error
+	DeleteBackupPolicy(ctx context.Context, arg DeleteBackupPolicyParams) (int64, error)
 	DeleteCustomDomain(ctx context.Context, arg DeleteCustomDomainParams) (int64, error)
+	DeleteExpiredAPITokens(ctx context.Context) error
 	DeleteExpiredInvitations(ctx context.Context) error
 	DeleteExpiredMagicLinks(ctx context.Context) error
 	DeleteExpiredSessions(ctx context.Context) error
@@ -93,10 +106,45 @@ type Querier interface {
 	// Days with no deploys are absent from this result. The caller fills them in;
 	// see app.DeployActivity for why that cannot be skipped.
 	DeployActivity(ctx context.Context, arg DeployActivityParams) ([]DeployActivityRow, error)
+	// Written on a detached, bounded context at teardown.
+	//
+	// Scoped by owner as well as id: an audit row is not something a caller should
+	// be able to close on somebody else's behalf by holding an id.
+	EndExecSession(ctx context.Context, arg EndExecSessionParams) error
 	FinishBuild(ctx context.Context, arg FinishBuildParams) (Build, error)
 	FinishDeployment(ctx context.Context, arg FinishDeploymentParams) (Deployment, error)
+	// Resolves a token only while the membership behind it still exists, and
+	// returns the role in the same row.
+	//
+	// This is GetSessionByHash with a different credential, and it is deliberately
+	// the same shape in all three respects that matter:
+	//
+	// The join to memberships is the security boundary, not decoration. A token
+	// outlives the browser that minted it by design, so "revoke the credential when
+	// someone leaves" is a step that will be missed — here it cannot be, because a
+	// departed member's token stops resolving the instant the membership row goes,
+	// by whatever route it went, including cascade.
+	//
+	// The row is deleted by that same cascade rather than merely orphaned; the
+	// schema carries a composite foreign key onto memberships to ensure it. This
+	// join is therefore defence in depth rather than the whole mechanism, which is
+	// the right way round: were it the only mechanism, removing somebody would
+	// suspend their tokens rather than revoke them, and re-adding them would bring
+	// every one of those credentials back.
+	//
+	// The role comes back with the credential because the query that proves the
+	// token is live is the query that says what it may do. Looking the role up
+	// separately gives two answers that can disagree, and the window between them
+	// is the one where a demoted member still writes.
+	//
+	// Expiry is filtered in SQL rather than in Go so that an expired row can never
+	// be treated as valid by a caller that forgets to check. NULL means no expiry,
+	// which is the common case for a credential living in CI.
+	GetAPITokenByHash(ctx context.Context, tokenHash []byte) (GetAPITokenByHashRow, error)
 	GetApp(ctx context.Context, arg GetAppParams) (App, error)
 	GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, error)
+	GetBackupDestination(ctx context.Context, ownerID string) (BackupDestination, error)
+	GetBackupPolicy(ctx context.Context, appID uuid.UUID) (BackupPolicy, error)
 	GetBuild(ctx context.Context, arg GetBuildParams) (Build, error)
 	GetBuildForDeployment(ctx context.Context, arg GetBuildForDeploymentParams) (Build, error)
 	// The join settings are install-wide, so unlike every other query here these
@@ -147,6 +195,10 @@ type Querier interface {
 	// and comparing in Go: a check the caller performs is one a caller can skip,
 	// and Kubernetes cannot shrink a claim afterwards to undo it.
 	GrowVolume(ctx context.Context, arg GrowVolumeParams) (int64, error)
+	// The list a person prunes from. Scoped by both user and team: a token is a
+	// credential of one person acting as one team, and listing another person's is
+	// neither useful nor theirs to see.
+	ListAPITokens(ctx context.Context, arg ListAPITokensParams) ([]ApiToken, error)
 	ListAppLinks(ctx context.Context, ownerID string) ([]ListAppLinksRow, error)
 	ListApps(ctx context.Context, ownerID string) ([]App, error)
 	ListAppsInProject(ctx context.Context, arg ListAppsInProjectParams) ([]App, error)
@@ -156,11 +208,48 @@ type Querier interface {
 	// because assigning one is a write and a read should not have side effects
 	// that a caller cannot see.
 	ListAppsWithoutProject(ctx context.Context, ownerID string) ([]App, error)
+	// Candidates a push might affect.
+	//
+	// Deliberately NOT filtered by repository URL in SQL. The URL in a webhook
+	// payload is attacker-controlled — anybody can POST a body naming any
+	// repository — so it must never be the thing that selects which app is
+	// deployed. The signature does that: every candidate is tried and only the one
+	// whose secret verifies is acted on, which is why this returns them all.
+	ListAutoDeployApps(ctx context.Context) ([]App, error)
+	ListAutoDeployAppsForOwner(ctx context.Context, ownerID string) ([]App, error)
+	// Every policy an owner has, with the app it belongs to.
+	//
+	// Joined rather than returning app ids for the caller to look up one at a
+	// time: the settings page lists these together, and the n+1 is the whole of
+	// what that page does.
+	ListBackupPolicies(ctx context.Context, ownerID string) ([]ListBackupPoliciesRow, error)
+	// Policies that are switched on, for reconciling schedules into the cluster
+	// at startup. A disabled one is reconciled too — as a schedule to remove —
+	// which is why this does not filter on enabled.
+	ListBackupPoliciesForReconcile(ctx context.Context) ([]ListBackupPoliciesForReconcileRow, error)
 	ListCustomDomains(ctx context.Context, arg ListCustomDomainsParams) ([]Domain, error)
 	ListDeployments(ctx context.Context, arg ListDeploymentsParams) ([]Deployment, error)
 	ListDomainsByApp(ctx context.Context, appID uuid.UUID) ([]Domain, error)
+	ListExecSessions(ctx context.Context, arg ListExecSessionsParams) ([]ListExecSessionsRow, error)
 	ListMembersOfTeam(ctx context.Context, ownerID string) ([]ListMembersOfTeamRow, error)
 	ListMembershipsForUser(ctx context.Context, userID uuid.UUID) ([]ListMembershipsForUserRow, error)
+	// The sessions that have not ended.
+	//
+	// The signal this table exists to carry, and it needs a query or it is a signal
+	// nobody can read. Two different situations land here and both are worth
+	// seeing:
+	//
+	//   * somebody is in a container RIGHT NOW, which is what an incident asks
+	//   * a session ended in a way this process never observed — it was killed
+	//     with the process, or the machine went away — so nothing ever closed it
+	//
+	// They are deliberately not distinguished, because nothing observed the
+	// difference. A row that has been open for four seconds is somebody working; a
+	// row open for four days is a session nobody will ever account for, and the
+	// started_at is what tells them apart.
+	//
+	// Backed by the partial index on (owner_id) WHERE ended_at IS NULL.
+	ListOpenExecSessions(ctx context.Context, ownerID string) ([]ListOpenExecSessionsRow, error)
 	// The columns are named rather than starred, and token_hash is not among them.
 	// This list feeds the team page, and a hash that never leaves the database
 	// cannot be rendered into it by a template that innocently prints a struct.
@@ -183,36 +272,85 @@ type Querier interface {
 	MoveAppsWithoutProject(ctx context.Context, arg MoveAppsWithoutProjectParams) (int64, error)
 	RenameProject(ctx context.Context, arg RenameProjectParams) (Project, error)
 	ReplaceAppLinks(ctx context.Context, arg ReplaceAppLinksParams) error
-	// Hostnames that may actually be routed to.
+	// Hostnames that may actually be routed to, and whether the platform issued
+	// each one.
 	//
 	// A managed host is routable because the platform issued it; a custom one only
 	// once it is proven. This is the query the Ingress is built from, so the gate
 	// lives here rather than in a caller that might forget it.
-	RoutableHostsForApp(ctx context.Context, appID uuid.UUID) ([]string, error)
+	//
+	// managed comes back with the host because it decides which certificate serves
+	// the name, and it is the recorded fact rather than a suffix comparison — see
+	// 00002. A caller that had only the hostname would have to re-derive it from
+	// the current app domain, which is the derivation that column exists to avoid.
+	RoutableHostsForApp(ctx context.Context, appID uuid.UUID) ([]RoutableHostsForAppRow, error)
+	SetAppAutoDeploy(ctx context.Context, arg SetAppAutoDeployParams) (App, error)
 	SetAppCommand(ctx context.Context, arg SetAppCommandParams) (App, error)
+	SetAppDeployKey(ctx context.Context, arg SetAppDeployKeyParams) error
 	SetAppHealth(ctx context.Context, arg SetAppHealthParams) (App, error)
 	// The image a build produced. Separate from UpdateApp because a build sets
 	// only this: the replicas and limits a person configured are not a build's to
 	// overwrite, and passing them through would make every build a chance to.
 	SetAppImage(ctx context.Context, arg SetAppImageParams) (App, error)
+	SetAppLastDeployedSHA(ctx context.Context, arg SetAppLastDeployedSHAParams) error
 	SetAppNetworking(ctx context.Context, arg SetAppNetworkingParams) (int64, error)
 	SetAppPosition(ctx context.Context, arg SetAppPositionParams) (int64, error)
 	SetAppProject(ctx context.Context, arg SetAppProjectParams) (int64, error)
+	SetAppReleaseCommand(ctx context.Context, arg SetAppReleaseCommandParams) (App, error)
 	SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) (App, error)
 	// Recorded by a build, which is the only thing that can discover it.
 	SetAppRunAsUser(ctx context.Context, arg SetAppRunAsUserParams) error
+	// Both together, because they are one decision.
+	//
+	// A port is what traffic is routed to and internal is whether any is routed at
+	// all; setting one without the other produces states nobody asked for — an
+	// internal app that just acquired a port, or a public app whose port was
+	// cleared and which therefore has a hostname routing to nothing. The caller
+	// passes both and the pair is written atomically.
+	//
+	// Narrow rather than reusing UpdateApp, which also carries image and replicas.
+	// Those belong to the deploy and the scale paths respectively, and a query that
+	// can write all five is one that will eventually write a stale image while
+	// changing a port.
+	SetAppService(ctx context.Context, arg SetAppServiceParams) (App, error)
+	SetAppWebhookSecret(ctx context.Context, arg SetAppWebhookSecretParams) error
 	SetBuildJob(ctx context.Context, arg SetBuildJobParams) error
 	SetClusterJoin(ctx context.Context, arg SetClusterJoinParams) (ClusterJoin, error)
+	// Written whether the release passed or failed.
+	//
+	// A failed release's reason is in its log, and dropping the log on failure is
+	// how a vetoed deploy becomes impossible to explain — which is the one case
+	// somebody actually needs it.
+	SetDeploymentRelease(ctx context.Context, arg SetDeploymentReleaseParams) error
 	SetPlatformDNS(ctx context.Context, arg SetPlatformDNSParams) (PlatformDn, error)
 	SetPlatformRegistry(ctx context.Context, arg SetPlatformRegistryParams) (PlatformRegistry, error)
 	SetSessionTeam(ctx context.Context, arg SetSessionTeamParams) error
+	// Written BEFORE the stream opens, so a session that dies during attach has
+	// already been recorded. See 00025 for why the ordering is load-bearing.
+	StartExecSession(ctx context.Context, arg StartExecSessionParams) (ExecSession, error)
 	// Retires the deployments a new one replaces.
 	//
 	// Only rows that never reached a terminal state: a finished deployment already
 	// says what happened to it, and rewriting that would lose the difference
 	// between one that was replaced and one that failed.
 	SupersedeDeployments(ctx context.Context, arg SupersedeDeploymentsParams) (int64, error)
+	// Best-effort bookkeeping on a hot path. Separate from GetAPITokenByHash rather
+	// than folded into it with a CTE: resolving a credential is a read, and making
+	// it a write puts every authenticated API request into a row lock on the same
+	// token. A CI job running twenty parallel deploys would serialise on it.
+	TouchAPIToken(ctx context.Context, id uuid.UUID) error
 	UpdateApp(ctx context.Context, arg UpdateAppParams) (App, error)
+	// Where an owner's backups go, and what gets backed up.
+	//
+	// What is absent: any record of the snapshots themselves. Those live in the
+	// restic repository, which is the only thing that knows what it actually holds
+	// — the same split the rest of this engine keeps between the database, which
+	// says what should exist, and the runtime, which says how it is doing. A table
+	// of snapshot rows would be a cache that disagrees with the repository the
+	// first time a job is killed between writing a snapshot and reporting it, and
+	// it would disagree in the direction that matters: claiming a backup exists.
+	UpsertBackupDestination(ctx context.Context, arg UpsertBackupDestinationParams) (BackupDestination, error)
+	UpsertBackupPolicy(ctx context.Context, arg UpsertBackupPolicyParams) (BackupPolicy, error)
 	// Re-inviting replaces the pending invitation rather than adding a second one,
 	// so the token in the older mail stops working. Two live tokens for one address
 	// would mean revoking the invitation on screen leaves the other one usable.

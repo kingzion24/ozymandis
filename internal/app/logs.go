@@ -59,6 +59,7 @@ func (s *Service) Deployment(
 		ID: row.ID, AppID: row.AppID, Image: row.Image,
 		Revision: row.Revision, Status: row.Status,
 		Message: row.Message, StartedAt: row.StartedAt,
+		ReleaseStatus: row.ReleaseStatus, ReleaseLog: row.ReleaseLog,
 	}
 	if row.FinishedAt.Valid {
 		finished := row.FinishedAt.Time
@@ -294,14 +295,19 @@ func (s *Service) DeploymentHTTPLogs(
 	if err != nil {
 		return HTTPLogs{}, err
 	}
-	out := HTTPLogs{Hosts: hosts}
+	names := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		names = append(names, h.Host)
+	}
+
+	out := HTTPLogs{Hosts: names}
 	if len(hosts) == 0 {
 		out.Note = "This app has no hostname, so nothing reaches it through the " +
 			"ingress controller and there is nothing to record."
 		return out, nil
 	}
 
-	got, err := logger.HTTPLogs(ctx, orchestrator.HTTPLogOptions{Hosts: hosts})
+	got, err := logger.HTTPLogs(ctx, orchestrator.HTTPLogOptions{Hosts: names})
 	if err != nil {
 		return HTTPLogs{}, fmt.Errorf("app: read http logs: %w", err)
 	}

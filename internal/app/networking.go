@@ -27,6 +27,16 @@ type Networking struct {
 	// install has not been told, which is the state the page has to explain
 	// rather than show an input that cannot work.
 	Target string
+
+	// CertTLS reports whether this install can obtain a certificate for the
+	// hostnames it routes.
+	//
+	// Surfaced because the answer decides what a verified domain is worth: with
+	// an ACME resolver it is served over https on a certificate issued for that
+	// exact name, and without one it is served over plain http. A page that
+	// leaves this out lets somebody point their DNS here and discover the
+	// difference from a browser warning.
+	CertTLS bool
 }
 
 // Networking returns an app's routing.
@@ -41,6 +51,7 @@ func (s *Service) Networking(ctx context.Context, ownerID, name string) (Network
 		HTTPSOnly: a.HTTPSOnly,
 		CNAMEOnly: a.CNAMEOnly,
 		Target:    s.cnameTarget(ctx),
+		CertTLS:   s.opts.CertResolver.Set(),
 	}
 	if out.Custom, err = domain.ListCustom(ctx, s.q, ownerID, a.ID); err != nil {
 		return Networking{}, err

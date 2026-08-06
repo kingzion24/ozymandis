@@ -1,0 +1,431 @@
+package web
+
+import (
+	"fmt"
+
+	"github.com/kingzion24/ozymandis/internal/web/ui/selectbox"
+)
+
+// AppBackups is an app's backup schedule, its recent runs, and the restore path.
+templ AppBackups(d BackupsData) {
+	@pageHead("Backups",
+		"What is copied off this machine, how often, and how to put it back.", nil)
+	// The same strip the other tabs carry, so this page is somewhere you
+	// arrive at and leave rather than a dead end reached by URL.
+	<nav class="tabs mb-5">
+		@appTab(d.App, "backups", "", "Deployments")
+		@appTab(d.App, "backups", "variables", "Variables")
+		@appTab(d.App, "backups", "metrics", "Metrics")
+		@appTab(d.App, "backups", "storage", "Storage")
+		@appTab(d.App, "backups", "backups", "Backups")
+		@appTab(d.App, "backups", "settings", "Settings")
+	</nav>
+	@backupMessages(d.Notice, d.Error)
+	if !d.Data.Available || !d.Data.Configured || len(d.Data.Targets) == 0 {
+		@backupUnavailable(d)
+	} else {
+		@backupPolicyPanel(d)
+		@backupRunsPanel(d)
+		@backupRestorePanel(d)
+	}
+	if d.Log != "" {
+		@backupLogPanel(d.Log)
+	}
+}
+
+templ backupMessages(notice, fail string) {
+	if fail != "" {
+		<div class="callout callout-err mb-5">
+			<div class="min-w-0">
+				<div class="font-medium">That did not work</div>
+				<p class="mt-0.5 text-muted-foreground">{ fail }</p>
+			</div>
+		</div>
+	}
+	if notice != "" {
+		<div class="callout mb-5">
+			<div class="min-w-0">{ notice }</div>
+		</div>
+	}
+}
+
+// backupUnavailable says why there is nothing to configure, rather than showing
+// a form that could not do anything.
+templ backupUnavailable(d BackupsData) {
+	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">Backups</span>
+			<span class="status status-warn">unavailable</span>
+		</div>
+		<div class="panel-body">
+			<div class="empty">
+				<p class="font-medium text-foreground">Nothing to back up here yet</p>
+				<p>{ d.Data.Because }</p>
+				if d.Data.Available && !d.Data.Configured {
+					<p class="mt-2">
+						An owner sets the destination once for the whole install, under
+						<a href="/settings/backups">Settings &rsaquo; Backups</a>.
+					</p>
+				}
+			</div>
+		</div>
+	</div>
+}
+
+templ backupPolicyPanel(d BackupsData) {
+	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">Schedule</span>
+			if d.Data.HasPolicy && d.Data.Policy.Enabled {
+				<span class="status status-ok">on</span>
+			} else if d.Data.HasPolicy {
+				<span class="status status-warn">paused</span>
+			} else {
+				<span class="status status-warn">off</span>
+			}
+		</div>
+		<div class="panel-body">
+			<p class="mb-4 text-[12.5px] text-muted-foreground">
+				This app is copied to the install's backup storage. What gets copied:
+				for _, t := range d.Data.Targets {
+					<code class="mono">{ string(t.Kind) }/{ t.Name }</code>
+				}
+			</p>
+			<form method="post" action={ templ.URL("/apps/" + d.App + "/backups/policy") } class="flex flex-col gap-4">
+				<label class="flex items-start gap-2.5">
+					<input
+						type="checkbox"
+						name="enabled"
+						checked?={ !d.Data.HasPolicy || d.Data.Policy.Enabled }
+					/>
+					<span class="min-w-0">
+						<span class="block font-medium">Back this app up on a schedule</span>
+						<span class="block text-[12.5px] text-muted-foreground">
+							Unchecking pauses it and keeps the settings. Nothing already
+							written is deleted.
+						</span>
+					</span>
+				</label>
+				<div class="field max-w-[240px]">
+					<label class="label" for="schedule">When</label>
+					<input
+						class="control mono"
+						id="schedule"
+						name="schedule"
+						value={ d.Data.Policy.Schedule }
+						placeholder="17 3 * * *"
+					/>
+					<p class="mt-1 text-[12.5px] text-muted-foreground">
+						A cron expression, in the cluster's timezone.
+					</p>
+				</div>
+				<div class="flex flex-wrap gap-3">
+					@keepField("keep_daily", "Keep daily", d.Data.Policy.KeepDaily)
+					@keepField("keep_weekly", "Keep weekly", d.Data.Policy.KeepWeekly)
+					@keepField("keep_monthly", "Keep monthly", d.Data.Policy.KeepMonthly)
+				</div>
+				<p class="text-[12.5px] text-muted-foreground">
+					Older snapshots outside every band are removed after each run. At
+					least one band has to keep something — keeping none would delete
+					every backup on the next run, so it is refused.
+				</p>
+				<div class="flex flex-wrap gap-2">
+					<button class="btn btn-primary" type="submit">Save schedule</button>
+					if d.Data.HasPolicy {
+						<button
+							class="btn btn-ghost"
+							type="submit"
+							formaction={ templ.URL("/apps/" + d.App + "/backups/disable") }
+						>Switch off</button>
+					}
+				</div>
+			</form>
+		</div>
+	</div>
+}
+
+templ keepField(name, label string, value int) {
+	<div class="field w-[130px]">
+		<label class="label" for={ name }>{ label }</label>
+		<input
+			class="control"
+			id={ name }
+			name={ name }
+			type="number"
+			min="0"
+			value={ fmt.Sprint(value) }
+		/>
+	</div>
+}
+
+templ backupRunsPanel(d BackupsData) {
+	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">Recent runs</span>
+		</div>
+		<div class="panel-body">
+			if len(d.Data.Runs) > 0 {
+				<div class="rows mb-4 rounded-md border border-border">
+					for _, run := range d.Data.Runs {
+						<div class="row-item">
+							@icon("archive")
+							<span class="min-w-0 flex-1">
+								<span class="mono block truncate">{ run.Name }</span>
+								<span class="block text-muted-foreground">
+									{ run.StartedAt.Format("2 Jan 15:04") }
+								</span>
+							</span>
+							if !run.Finished() {
+								<span class="status status-warn">running</span>
+							} else if *run.Succeeded {
+								<span class="status status-ok">ok</span>
+							} else {
+								<span class="status status-err">failed</span>
+							}
+						</div>
+					}
+				</div>
+			} else {
+				<div class="empty mb-4">
+					<p class="font-medium text-foreground">Nothing has run yet</p>
+					<p>
+						A schedule that has never succeeded is not yet a backup. Take one
+						now to find out whether the destination works.
+					</p>
+				</div>
+			}
+			<form method="post" action={ templ.URL("/apps/" + d.App + "/backups/run") } class="flex flex-wrap items-end gap-3">
+				@targetPicker(d)
+				<button class="btn" type="submit">Back up now</button>
+			</form>
+		</div>
+	</div>
+}
+
+// targetPicker only appears when there is a choice to make. An app with one
+// thing to back up should not be asked which one.
+templ targetPicker(d BackupsData) {
+	if len(d.Data.Targets) > 1 {
+		<div class="field min-w-[200px]">
+			<label class="label" for="target">What</label>
+			@selectbox.SelectBox() {
+				@selectbox.Trigger(selectbox.TriggerProps{Name: "target", ID: "target"}) {
+					@selectbox.Value(selectbox.ValueProps{Placeholder: "Choose"})
+				}
+				@selectbox.Content(selectbox.ContentProps{NoSearch: true}) {
+					for i, t := range d.Data.Targets {
+						@selectbox.Item(selectbox.ItemProps{Value: t.Name, Selected: i == 0}) {
+							{ t.Name }
+						}
+					}
+				}
+			}
+		</div>
+	}
+}
+
+templ backupRestorePanel(d BackupsData) {
+	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">Restore</span>
+		</div>
+		<div class="panel-body">
+			<p class="mb-4 text-[12.5px] text-muted-foreground">
+				A restore overwrites this app's live data with what the snapshot holds.
+				It is worth doing once on purpose, while nothing is wrong — a backup
+				nobody has restored from is a guess.
+			</p>
+			<form method="post" action={ templ.URL("/apps/" + d.App + "/backups/snapshots") } class="mb-4">
+				<button class="btn" type="submit">List snapshots</button>
+			</form>
+			if d.Listed && len(d.Snapshots) > 0 {
+				<div class="rows mb-4 rounded-md border border-border">
+					for _, snap := range d.Snapshots {
+						<div class="row-item">
+							@icon("storage")
+							<span class="min-w-0 flex-1">
+								<span class="mono block truncate">{ snap.ID }</span>
+								<span class="block text-muted-foreground">
+									{ snap.Time.Format("2 Jan 2006 15:04") }
+									if snap.Target() != "" {
+										&middot; { snap.Target() }
+									}
+								</span>
+							</span>
+							<form
+								method="post"
+								action={ templ.URL("/apps/" + d.App + "/backups/restore") }
+								data-confirm="This replaces the app's live data with this snapshot. It cannot be undone."
+								data-confirm-title="Restore this snapshot?"
+								data-confirm-label="Restore"
+							>
+								<input type="hidden" name="snapshot" value={ snap.ID }/>
+								<input type="hidden" name="target" value={ snap.Target() }/>
+								<button class="btn btn-sm" type="submit">Restore</button>
+							</form>
+						</div>
+					}
+				</div>
+			} else if d.Listed {
+				<div class="empty">
+					<p class="font-medium text-foreground">No snapshots</p>
+					<p>The repository is reachable and holds nothing for this app yet.</p>
+				</div>
+			}
+		</div>
+	</div>
+}
+
+templ backupLogPanel(log string) {
+	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">Output</span>
+		</div>
+		<div class="panel-body">
+			<pre class="mono max-h-[420px] overflow-auto whitespace-pre-wrap text-[12px] leading-relaxed">{ log }</pre>
+		</div>
+	</div>
+}
+
+// BackupDestination is the install-wide storage every app's backups are
+// written to.
+templ BackupDestination(d DestinationData) {
+	@pageHead("Backup storage",
+		"Where this install writes its backups. Somewhere other than this machine.", nil)
+	@backupMessages(d.Notice, d.Error)
+	if d.KeyRequired {
+		<div class="callout callout-err mb-5">
+			<div class="min-w-0">
+				<div class="font-medium">No encryption key is configured</div>
+				<p class="mt-0.5 text-muted-foreground">
+					These credentials are sealed with <code class="mono">OZYMANDIS_SECRET_KEY</code>
+					before they are stored. Without one they would sit readable in the
+					database — including in the backups this feature makes of it — so
+					they are refused rather than kept that way.
+				</p>
+			</div>
+		</div>
+	}
+	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">Destination</span>
+			if d.Configured {
+				<span class="status status-ok">configured</span>
+			} else {
+				<span class="status status-warn">not set</span>
+			}
+		</div>
+		<div class="panel-body">
+			<p class="mb-4 text-[12.5px] text-muted-foreground">
+				Any S3-compatible storage: Cloudflare R2, Backblaze B2, Wasabi, S3, or
+				a MinIO you run. There is deliberately no option to write to this
+				machine — a copy on the disk you are protecting against is not a backup.
+			</p>
+			<form method="post" action="/settings/backups" class="flex flex-col gap-4">
+				<div class="field">
+					<label class="label" for="endpoint">Endpoint</label>
+					<input
+						class="control mono"
+						id="endpoint"
+						name="endpoint"
+						value={ d.Destination.Endpoint }
+						placeholder="https://account.r2.cloudflarestorage.com"
+						required
+					/>
+				</div>
+				<div class="flex flex-wrap gap-3">
+					<div class="field min-w-[200px] flex-1">
+						<label class="label" for="bucket">Bucket</label>
+						<input
+							class="control mono"
+							id="bucket"
+							name="bucket"
+							value={ d.Destination.Bucket }
+							required
+						/>
+					</div>
+					<div class="field min-w-[160px]">
+						<label class="label" for="prefix">Prefix</label>
+						<input
+							class="control mono"
+							id="prefix"
+							name="prefix"
+							value={ d.Destination.Prefix }
+							placeholder="optional"
+						/>
+					</div>
+					<div class="field w-[130px]">
+						<label class="label" for="region">Region</label>
+						<input
+							class="control mono"
+							id="region"
+							name="region"
+							value={ d.Destination.Region }
+							placeholder="auto"
+						/>
+					</div>
+				</div>
+				<div class="flex flex-wrap gap-3">
+					<div class="field min-w-[220px] flex-1">
+						<label class="label" for="access_key_id">Access key ID</label>
+						<input
+							class="control mono"
+							id="access_key_id"
+							name="access_key_id"
+							value={ d.Destination.AccessKeyID }
+							required
+						/>
+					</div>
+					<div class="field min-w-[220px] flex-1">
+						<label class="label" for="secret_access_key">Secret access key</label>
+						<input
+							class="control mono"
+							id="secret_access_key"
+							name="secret_access_key"
+							type="password"
+							placeholder="•••••••••"
+							required
+						/>
+					</div>
+				</div>
+				<div class="field">
+					<label class="label" for="repo_password">Repository password</label>
+					<input
+						class="control mono"
+						id="repo_password"
+						name="repo_password"
+						type="password"
+						placeholder="•••••••••"
+						required
+					/>
+					<p class="mt-1 text-[12.5px] text-muted-foreground">
+						Backups are encrypted before they leave this machine, and this is
+						the key. <strong>Losing it loses every snapshot</strong>, with no
+						recovery path — keep it wherever you keep
+						<code class="mono">OZYMANDIS_SECRET_KEY</code>. It cannot be changed once
+						the first snapshot exists without starting the repository over.
+					</p>
+				</div>
+				if d.Configured {
+					<p class="text-[12.5px] text-muted-foreground">
+						Both secrets are stored sealed and are never shown again. Saving
+						replaces them, and reapplies every schedule that uses them.
+					</p>
+				}
+				<div class="flex flex-wrap gap-2">
+					<button class="btn btn-primary" type="submit">Save destination</button>
+					if d.Configured {
+						<button
+							class="btn btn-ghost"
+							type="submit"
+							formaction="/settings/backups/clear"
+							data-confirm="Every backup schedule is removed with it. What is already in the bucket is untouched."
+							data-confirm-title="Remove the destination?"
+							data-confirm-label="Remove"
+						>Remove</button>
+					}
+				</div>
+			</form>
+		</div>
+	</div>
+}

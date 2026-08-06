@@ -145,6 +145,78 @@ func (l ResourceLimits) OrDefaults() ResourceLimits {
 	return l
 }
 
+// Certificate says whether a hostname is served over TLS.
+//
+// Two values, because this build issues per host and has no notion of a
+// certificate covering names other than the one it was requested for. An
+// earlier version had a third, for names served from a wildcard the ingress
+// controller already held, and it is worth recording why that is gone: a
+// wildcard covers the names it was issued for and nothing else, so routing a
+// name outside it still completed the request under the wrong certificate,
+// which a browser reports as the site being impersonated. That is worse than
+// no TLS, because no TLS at least fails honestly.
+type Certificate string
+
+const (
+	// CertNone serves the hostname over plain HTTP. No TLS block is written
+	// for it at all.
+	CertNone Certificate = ""
+
+	// CertIssued gets a certificate for this hostname specifically, from the
+	// ACME resolver named by AppSpec.Issuer.
+	//
+	// Every routed hostname takes this when the install has a resolver
+	// configured — a platform subdomain exactly as much as a domain somebody
+	// brought. There is no shared certificate to fall back to and no case where
+	// one name is served under another's certificate.
+	CertIssued Certificate = "issued"
+)
+
+// HostSpec is one hostname routed to a workload, and how it is served.
+//
+// A pair rather than a hostname list beside a certificate list. The two are
+// only meaningful together — a name whose certificate is decided somewhere
+// else is a name that gets served under whatever certificate happened to be
+// nearest, which is the bug this type exists to make unrepresentable.
+type HostSpec struct {
+	Name string
+	Cert Certificate
+}
+
+// Host is a hostname served over plain HTTP.
+func Host(name string) HostSpec { return HostSpec{Name: name, Cert: CertNone} }
+
+// HostNames returns just the names, for the callers that route rather than
+// terminate — HTTP log filters, Ingress rules.
+func HostNames(hosts []HostSpec) []string {
+	names := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		names = append(names, h.Name)
+	}
+	return names
+}
+
+// IssuerRef names the ACME resolver the ingress controller obtains
+// certificates from — a Traefik certificatesResolvers entry, such as
+// "letsencrypt".
+//
+// A struct around one string rather than a bare string, so that "no resolver
+// configured" is asked for by name at every call site instead of being spelled
+// as a comparison against "" that a reader has to interpret.
+//
+// The resolver is configured on the controller, not here. Nothing in this
+// package can check that a resolver by this name exists: naming one that does
+// not produces an Ingress that is accepted, never issued against, and served
+// under the controller's own default certificate. That failure is silent by
+// construction, which is why the name is install-level configuration rather
+// than anything a tenant can set.
+type IssuerRef struct {
+	Name string
+}
+
+// Set reports whether a resolver is configured.
+func (i IssuerRef) Set() bool { return i.Name != "" }
+
 // AppSpec is the desired state of a long-running workload.
 //
 // Note what is absent: there is no field for privileged execution, host
@@ -198,10 +270,12 @@ type AppSpec struct {
 	// Hosts are the hostnames routed to this workload. Empty means the
 	// workload is reachable only inside the cluster.
 	//
-	// Plain strings rather than a richer type: the orchestrator's job is to
-	// route a name, and which names are legitimate — platform-issued or
-	// customer-claimed — is a decision that belongs above this seam.
-	Hosts []string
+	// Each carries where its certificate comes from, not who owns the name.
+	// Whether a hostname is platform-issued or customer-claimed is still a
+	// decision above this seam; what reaches the seam is the consequence —
+	// this name is covered by a certificate the runtime already holds, or it
+	// needs one of its own. See Certificate.
+	Hosts []HostSpec
 
 	// Internal keeps the workload off the public internet: no hostname, and a
 	// Service on the port it actually listens on rather than the fixed one.
@@ -261,13 +335,10 @@ type AppSpec struct {
 	// claim mounts on one node at a time. See VolumeSpec.
 	Volumes []VolumeSpec
 
-	// TLS requests terminated TLS for Hosts.
-	//
-	// It carries no certificate reference. Platform hostnames are served from
-	// the ingress controller's own default certificate, so the workload's
-	// routing never names a Secret — an Ingress's TLS Secret must live in the
-	// Ingress's own namespace, and every app has its own namespace.
-	TLS bool
+	// Issuer names the ACME resolver that CertIssued hosts are issued from.
+	// Empty means the install has none configured, and a host asking for a
+	// certificate cannot be served one — see Validate.
+	Issuer IssuerRef
 
 	// CNAMETarget, when set, becomes the ExternalDNS target annotation, so that
 	// controller publishes a CNAME rather than the nodes' own addresses as A
@@ -322,10 +393,8 @@ func (s AppSpec) Validate() error {
 	if len(s.Hosts) > 0 && s.Port == 0 {
 		return errors.New("app spec: hosts require a port to route to")
 	}
-	for _, h := range s.Hosts {
-		if !hostRE.MatchString(h) {
-			return fmt.Errorf("app spec: %q is not a valid hostname", h)
-		}
+	if err := s.validateHosts(); err != nil {
+		return err
 	}
 	if err := s.validateVolumes(); err != nil {
 		return err
@@ -468,6 +537,53 @@ type ClusterInspector interface {
 	Volumes(ctx context.Context, owner OwnerID) ([]VolumeInfo, error)
 }
 
+// validateHosts checks the hostnames and that each one can actually be served
+// the way it asks to be.
+//
+// The issuer check is the substantive one. A host asking for its own
+// certificate on an install with no issuer configured is refused rather than
+// quietly downgraded to the controller's default, because the downgrade is
+// invisible: the deploy succeeds, the Ingress routes, and the failure surfaces
+// as a certificate warning to whoever brought the domain. Refusing here puts
+// it in front of the person who can fix it.
+func (s AppSpec) validateHosts() error {
+	seen := make(map[string]bool, len(s.Hosts))
+	for _, h := range s.Hosts {
+		if !hostRE.MatchString(h.Name) {
+			return fmt.Errorf("app spec: %q is not a valid hostname", h.Name)
+		}
+		if seen[h.Name] {
+			return fmt.Errorf("app spec: %q is routed twice", h.Name)
+		}
+		seen[h.Name] = true
+
+		switch h.Cert {
+		case CertNone:
+		case CertIssued:
+			if !s.Issuer.Set() {
+				return fmt.Errorf(
+					"app spec: %q needs a certificate and no ACME resolver is configured", h.Name)
+			}
+		default:
+			return fmt.Errorf("app spec: %q has unknown certificate source %q", h.Name, h.Cert)
+		}
+	}
+	return nil
+}
+
+// IssuedHosts returns the hostnames the resolver obtains a certificate for.
+func (s AppSpec) IssuedHosts() []string { return s.hostsWithCert(CertIssued) }
+
+func (s AppSpec) hostsWithCert(c Certificate) []string {
+	var out []string
+	for _, h := range s.Hosts {
+		if h.Cert == c {
+			out = append(out, h.Name)
+		}
+	}
+	return out
+}
+
 // validateVolumes checks the storage attached to a workload.
 func (s AppSpec) validateVolumes() error {
 	if len(s.Volumes) == 0 {
@@ -539,7 +655,7 @@ func (s AppSpec) validateHealth() error {
 // ErrNotStarted means a container exists but has not run yet.
 //
 // Its own error because it is not a failure to read: there is genuinely no log
-//, and the reason is on the pod rather than in the log. Reported as a failure
+// , and the reason is on the pod rather than in the log. Reported as a failure
 // it reads as "the log is broken" for a container whose problem is that it
 // never started — which is the more useful thing to say and is already on
 // screen a few lines above.
@@ -579,6 +695,16 @@ type BuildRequest struct {
 	// the one package allowed to unseal it and crosses this seam only when a
 	// build actually needs it.
 	RegistryAuth []byte
+
+	// SSHKey is an OpenSSH private key for cloning a private repository, or
+	// nil for a public one.
+	//
+	// Passed per build for the same reason RegistryAuth is: it is unsealed in
+	// the one package allowed to, and crosses this seam only when a clone
+	// actually needs it. An implementation must put it somewhere the clone can
+	// read and nowhere the built image can — a key baked into a layer is a key
+	// published with the image.
+	SSHKey []byte
 
 	// Log receives output as it arrives. A build that only reported at the end
 	// would be silent for the several minutes it is most worth watching.

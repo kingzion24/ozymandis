@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/kingzion24/ozymandis/internal/app"
+	"github.com/kingzion24/ozymandis/internal/backup"
 	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
@@ -160,7 +161,7 @@ func galleryPages() []galleryPage {
 		`Back-off pulling image "ghcr.io/codeblocktz/mailer:v9": ErrImagePull`)
 
 	// Hostnames on some apps and not others, over both schemes: an install
-	// without wildcard TLS is a state that must look right too.
+	// with no ACME resolver is a state that must look right too.
 	running.Host, running.TLS = "web.apps.example.com", true
 	degraded.Host = "api.apps.example.com"
 
@@ -247,6 +248,92 @@ func galleryPages() []galleryPage {
 				Deployments: deployments[2:],
 			}),
 		},
+		// The states that rot fastest here: a schedule that has never run, one
+		// whose last run failed, and the two ways there is nothing to
+		// configure. None of them is reachable in a dev environment without a
+		// destination, a cluster, and a night passing.
+		{
+			file: "states-backups.html", path: "/apps/db/backups",
+			crumbs: []Crumb{{Label: "Apps", Href: "/apps"}, {Label: "db"}},
+			page: stack(
+				section("Scheduled, with runs", "the ordinary state — one failure among successes",
+					AppBackups(BackupsData{
+						App: "db",
+						Data: app.Backups{
+							Available: true, Configured: true, HasPolicy: true,
+							Policy:  backup.DefaultPolicy(),
+							Targets: []backup.Target{{Kind: backup.KindPostgres, Name: "ozymandis"}},
+							Runs: []orchestrator.RunInfo{
+								{Name: "db-backup-29011601", StartedAt: now.Add(-3 * time.Hour),
+									Succeeded: boolp(true)},
+								{Name: "db-backup-29010161", StartedAt: now.Add(-27 * time.Hour),
+									Succeeded: boolp(false)},
+								{Name: "db-backup-29008721", StartedAt: now.Add(-51 * time.Hour),
+									Succeeded: boolp(true)},
+							},
+						},
+					})),
+				section("Never run", "a schedule nobody has seen succeed is not yet a backup",
+					AppBackups(BackupsData{
+						App: "db",
+						Data: app.Backups{
+							Available: true, Configured: true, HasPolicy: true,
+							Policy:  backup.DefaultPolicy(),
+							Targets: []backup.Target{{Kind: backup.KindPostgres, Name: "ozymandis"}},
+						},
+					})),
+				section("No destination", "the install has nowhere to write to",
+					AppBackups(BackupsData{
+						App: "db",
+						Data: app.Backups{
+							Available: true,
+							Because:   "no backup destination is configured for this install",
+						},
+					})),
+				section("Nothing to copy", "a stateless app",
+					AppBackups(BackupsData{
+						App: "web",
+						Data: app.Backups{
+							Available: true, Configured: true,
+							Because: "this app has no database and no volumes, so there is nothing to copy",
+						},
+					})),
+				section("A failed run's output", "the log is the only place the reason appears",
+					AppBackups(BackupsData{
+						App: "db",
+						Data: app.Backups{
+							Available: true, Configured: true, HasPolicy: true,
+							Policy:  backup.DefaultPolicy(),
+							Targets: []backup.Target{{Kind: backup.KindPostgres, Name: "ozymandis"}},
+						},
+						Error: "The backup did not finish. The log below says why.",
+						Log: "Initialising the repository at s3:https://x/ozymandis-backups/db\n" +
+							"pg_dump: error: connection to server at \"db\" (10.43.0.9), " +
+							"port 5432 failed: FATAL:  password authentication failed\n",
+					})),
+			),
+		},
+		{
+			file: "states-backup-destination.html", path: "/settings/backups",
+			crumbs: []Crumb{{Label: "Settings", Href: "/settings"}, {Label: "Backups"}},
+			page: stack(
+				section("Not configured", "the first time somebody opens it",
+					BackupDestination(DestinationData{})),
+				section("Configured", "secrets are never shown again",
+					BackupDestination(DestinationData{
+						Configured: true,
+						Destination: backup.Destination{
+							Endpoint:    "https://account.r2.cloudflarestorage.com",
+							Bucket:      "ozymandis-backups",
+							Prefix:      "prod",
+							Region:      "auto",
+							AccessKeyID: "0a1b2c3d4e5f",
+						},
+					})),
+				section("No encryption key", "credentials cannot be sealed, so they are refused",
+					BackupDestination(DestinationData{KeyRequired: true})),
+			),
+		},
 		{
 			file: "states-cluster.html", path: "/cluster/nodes",
 			crumbs: []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "Cluster"}},
@@ -278,7 +365,7 @@ func galleryPages() []galleryPage {
 			page: Settings(SettingsData{
 				OwnerID: "owner-local", OwnerName: "Eric", Authenticated: true,
 				Version: "v0.1.0", ClusterOK: true,
-				AppDomain: "apps.example.com", WildcardTLS: true,
+				AppDomain: "apps.example.com", CertResolver: "letsencrypt",
 			}),
 		},
 		{
@@ -407,3 +494,8 @@ func panelWrap(inner templ.Component) templ.Component {
 		return err
 	})
 }
+
+// boolp is for RunInfo.Succeeded, which is a pointer because nil is a third
+// state: the run has not finished, and reporting that as failure or as success
+// would both be wrong.
+func boolp(b bool) *bool { return &b }

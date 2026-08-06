@@ -16,6 +16,7 @@ import (
 
 	"github.com/kingzion24/ozymandis/internal/orchestrator"
 	"github.com/kingzion24/ozymandis/internal/store"
+	"github.com/kingzion24/ozymandis/internal/store/dbgen"
 )
 
 func testService(t *testing.T, opts Options) (*Service, *recordingOrchestrator, *pgxpool.Pool) {
@@ -38,6 +39,36 @@ func testService(t *testing.T, opts Options) (*Service, *recordingOrchestrator, 
 
 	orch := &recordingOrchestrator{Noop: orchestrator.NewNoop()}
 	return NewService(pool, orch, log, opts), orch, pool
+}
+
+// okResolver answers every lookup with the platform's target, so a test can
+// get past verification and assert on what happens after it.
+//
+// Verification itself is tested against a resolver that says no, over in the
+// domain package. What is under test here is the certificate a proven domain
+// is then served with.
+type okResolver struct{}
+
+func (okResolver) LookupCNAME(context.Context, string) (string, error) {
+	return testCNAMETarget, nil
+}
+
+func (okResolver) LookupHost(context.Context, string) ([]string, error) {
+	return []string{"203.0.113.10"}, nil
+}
+
+const testCNAMETarget = "edge.example.com"
+
+// withCNAMETarget records the install's ExternalDNS target, without which a
+// claim cannot be verified at all — AddCustom stores the target in force at
+// the moment of the claim, and an empty one is refused rather than checked.
+func withCNAMETarget(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := dbgen.New(pool).SetPlatformDNS(context.Background(),
+		dbgen.SetPlatformDNSParams{CnameTarget: testCNAMETarget, TxtPrefix: "extdns-"},
+	); err != nil {
+		t.Fatalf("set platform dns: %v", err)
+	}
 }
 
 // recordingOrchestrator keeps the last spec it was asked to apply, so a test
@@ -270,7 +301,7 @@ func TestListToleratesUnreachableCluster(t *testing.T) {
 
 func TestCreateIssuesAManagedHostname(t *testing.T) {
 	ctx := context.Background()
-	s, _, pool := testService(t, Options{AppDomain: "apps.example.com", WildcardTLS: true})
+	s, _, pool := testService(t, Options{AppDomain: "apps.example.com", CertResolver: letsencrypt})
 	id := owner(t, s, pool, "svc-host")
 
 	created, err := s.Create(ctx, id, CreateInput{
@@ -292,7 +323,7 @@ func TestCreateIssuesAManagedHostname(t *testing.T) {
 		t.Errorf("Host on read = %q, want web.apps.example.com", got.Host)
 	}
 	if got.URLScheme() != "https" {
-		t.Errorf("URLScheme = %q, want https when wildcard TLS is on", got.URLScheme())
+		t.Errorf("URLScheme = %q, want https when a resolver is configured", got.URLScheme())
 	}
 }
 
@@ -341,9 +372,70 @@ func TestApplyReissuesWhenTheAppDomainChanges(t *testing.T) {
 	}
 }
 
+// letsencrypt is the resolver the tests configure. Named once so that the
+// thing under test is "a resolver is configured", not a string literal.
+var letsencrypt = orchestrator.IssuerRef{Name: "letsencrypt"}
+
+// The branch that did not exist.
+//
+// A managed hostname — one the platform minted under the app domain — must
+// reach CertIssued. Until this change it could not: the selection ran
+// `h.Managed && WildcardTLS` first, so a platform hostname was either served
+// from a wildcard the operator had to supply or served over plain HTTP, and no
+// input reached the issued branch for one.
+//
+// That is why this asserts on a MANAGED host specifically. A test using a
+// brought domain passes against the old code and the new one alike, and would
+// have reported this whole area as working while every platform subdomain on a
+// per-host-issuing controller was served a self-signed certificate.
+func TestAManagedHostnameGetsItsOwnCertificate(t *testing.T) {
+	ctx := context.Background()
+	s, orch, pool := testService(t, Options{
+		AppDomain:    "apps.example.com",
+		CertResolver: letsencrypt,
+	})
+	id := owner(t, s, pool, "svc-managed-cert")
+
+	if _, err := s.Create(ctx, id, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	hosts := orch.lastAppSpec().Hosts
+	if len(hosts) != 1 || hosts[0].Name != "web.apps.example.com" {
+		t.Fatalf("spec.Hosts = %v, want the one managed hostname", hosts)
+	}
+	if hosts[0].Cert != orchestrator.CertIssued {
+		t.Fatalf("managed host cert = %q, want %q — a platform hostname must be "+
+			"issued for on its own name, not served from something else's certificate",
+			hosts[0].Cert, orchestrator.CertIssued)
+	}
+}
+
+// The other half of the same rule: no resolver, no certificate, for a managed
+// host as much as a brought one. Paired with the test above so that "always
+// CertIssued" cannot pass by ignoring configuration.
+func TestAManagedHostnameGetsNoCertificateWithoutAResolver(t *testing.T) {
+	ctx := context.Background()
+	s, orch, pool := testService(t, Options{AppDomain: "apps.example.com"})
+	id := owner(t, s, pool, "svc-managed-nocert")
+
+	if _, err := s.Create(ctx, id, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	hosts := orch.lastAppSpec().Hosts
+	if len(hosts) != 1 || hosts[0].Cert != orchestrator.CertNone {
+		t.Fatalf("hosts = %v, want the managed host on plain HTTP with no resolver", hosts)
+	}
+}
+
 func TestApplyPassesHostsToTheOrchestrator(t *testing.T) {
 	ctx := context.Background()
-	s, orch, pool := testService(t, Options{AppDomain: "apps.example.com", WildcardTLS: true})
+	s, orch, pool := testService(t, Options{AppDomain: "apps.example.com", CertResolver: letsencrypt})
 	id := owner(t, s, pool, "svc-host-spec")
 
 	if _, err := s.Create(ctx, id, CreateInput{
@@ -353,11 +445,93 @@ func TestApplyPassesHostsToTheOrchestrator(t *testing.T) {
 	}
 
 	spec := orch.lastAppSpec()
-	if len(spec.Hosts) != 1 || spec.Hosts[0] != "web.apps.example.com" {
+	if len(spec.Hosts) != 1 || spec.Hosts[0].Name != "web.apps.example.com" {
 		t.Fatalf("spec.Hosts = %v, want [web.apps.example.com]", spec.Hosts)
 	}
-	if !spec.TLS {
-		t.Fatal("spec.TLS = false, want true when wildcard TLS is on")
+	if spec.Hosts[0].Cert != orchestrator.CertIssued {
+		t.Fatalf("cert = %q, want issued — a platform hostname is issued for like any other",
+			spec.Hosts[0].Cert)
+	}
+}
+
+// Both hostnames on one Ingress get a certificate, each issued for its own
+// name. Serving a brought domain under anything else was the bug: the
+// connection succeeds, under a certificate issued for a name the visitor never
+// asked for.
+func TestApplyGivesACustomDomainItsOwnCertificate(t *testing.T) {
+	ctx := context.Background()
+	s, orch, pool := testService(t, Options{
+		AppDomain:    "apps.example.com",
+		CertResolver: letsencrypt,
+		Resolver:     okResolver{},
+	})
+	id := owner(t, s, pool, "svc-host-issued")
+	withCNAMETarget(t, pool)
+
+	if _, err := s.Create(ctx, id, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := s.AddDomain(ctx, id, "web", "shop.brought.test"); err != nil {
+		t.Fatalf("AddDomain: %v", err)
+	}
+	n, err := s.Networking(ctx, id, "web")
+	if err != nil {
+		t.Fatalf("Networking: %v", err)
+	}
+	if len(n.Custom) != 1 {
+		t.Fatalf("custom domains = %v, want one", n.Custom)
+	}
+	if err := s.VerifyDomain(ctx, id, "web", n.Custom[0].ID); err != nil {
+		t.Fatalf("VerifyDomain: %v", err)
+	}
+
+	certs := map[string]orchestrator.Certificate{}
+	for _, h := range orch.lastAppSpec().Hosts {
+		certs[h.Name] = h.Cert
+	}
+	if got := certs["web.apps.example.com"]; got != orchestrator.CertIssued {
+		t.Errorf("platform host cert = %q, want one issued for it", got)
+	}
+	if got := certs["shop.brought.test"]; got != orchestrator.CertIssued {
+		t.Errorf("brought domain cert = %q, want one issued for it", got)
+	}
+}
+
+// Without a resolver the brought domain is served over plain HTTP. Deliberate:
+// the alternative is a certificate issued for another name, which is a
+// browser-level impersonation warning rather than a working site.
+func TestACustomDomainWithNoResolverIsServedPlainHTTP(t *testing.T) {
+	ctx := context.Background()
+	s, orch, pool := testService(t, Options{
+		AppDomain: "apps.example.com",
+		Resolver:  okResolver{},
+	})
+	id := owner(t, s, pool, "svc-host-noissuer")
+	withCNAMETarget(t, pool)
+
+	if _, err := s.Create(ctx, id, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := s.AddDomain(ctx, id, "web", "shop.brought.test"); err != nil {
+		t.Fatalf("AddDomain: %v", err)
+	}
+	n, err := s.Networking(ctx, id, "web")
+	if err != nil {
+		t.Fatalf("Networking: %v", err)
+	}
+	if err := s.VerifyDomain(ctx, id, "web", n.Custom[0].ID); err != nil {
+		t.Fatalf("VerifyDomain: %v", err)
+	}
+
+	for _, h := range orch.lastAppSpec().Hosts {
+		if h.Name == "shop.brought.test" && h.Cert != orchestrator.CertNone {
+			t.Fatalf("brought domain cert = %q, want none — there is no resolver "+
+				"to obtain one from", h.Cert)
+		}
 	}
 }
 
@@ -452,7 +626,7 @@ func (failingOrchestrator) AppStatus(
 // the feature on would make every background worker uncreatable.
 func TestCreatePortlessAppWithAnAppDomain(t *testing.T) {
 	ctx := context.Background()
-	s, orch, pool := testService(t, Options{AppDomain: "apps.example.com", WildcardTLS: true})
+	s, orch, pool := testService(t, Options{AppDomain: "apps.example.com", CertResolver: letsencrypt})
 	id := owner(t, s, pool, "svc-portless")
 
 	created, err := s.Create(ctx, id, CreateInput{

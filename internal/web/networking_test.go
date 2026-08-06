@@ -89,7 +89,7 @@ func TestTheSettingsTabOffersDomainControls(t *testing.T) {
 		`action="/apps/web/networking"`, // the toggles
 		"web.apps.test",                 // the platform hostname
 		"shop.example.com",              // the claim itself
-		"edge.ozymandis.test",               // what to point it at
+		"edge.ozymandis.test",           // what to point it at
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the Settings tab does not offer %q", want)
