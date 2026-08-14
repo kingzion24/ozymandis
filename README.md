@@ -328,15 +328,20 @@ the intended behaviour. Most official images already ship a non-root user.
 
 ## Architecture
 
+The shape is below. [ARCHITECTURE.md](ARCHITECTURE.md) has the mechanism: the
+request path, the deploy and build pipelines, how routing and TLS are decided,
+and what each step does when it fails.
+
 Ozymandis is built to be wrapped. Anything that needs to differ for a hosted,
-multi-tenant deployment goes through one of three seams, so a larger
+multi-tenant deployment goes through one of four seams, so a larger
 application can build on this module rather than fork it:
 
 | Seam | Interface | Engine ships | A wrapper supplies |
 |---|---|---|---|
 | Orchestration | `orchestrator.Orchestrator` | single cluster | multi-cluster placement |
-| Identity | `identity.Provider` | single owner, bearer token | tokens resolved to an account |
+| Identity | `identity.Provider` | single owner, bearer token, sessions | tokens resolved to an account |
 | Dashboard chrome | `web.SlotProvider` | plain navigation | account switcher, usage, billing |
+| Notification | `notify.Mailer` | SMTP, Resend, log | whatever sends the org's mail |
 
 Two rules keep the seams honest:
 
