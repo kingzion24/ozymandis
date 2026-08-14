@@ -64,11 +64,24 @@ require_root() {
 
 require_platform() {
 	[ -r /etc/os-release ] || die "cannot read /etc/os-release — unsupported system"
+
+	# Sourced in a subshell, and that is load-bearing rather than tidy.
+	#
+	# /etc/os-release defines VERSION — which is also this script's own flag
+	# variable. Sourcing it here overwrote the empty VERSION with the
+	# distribution's, and resolve_version starts by returning early when VERSION
+	# is already set. The one-liner install therefore skipped resolving the
+	# latest release and asked GitHub for a tarball named after Ubuntu, failing
+	# with a 404 that says nothing about the cause. --binary showed the same bug
+	# harmlessly, as "Ozymandis 24.04.4 LTS (Noble Numbat) is running".
+	#
+	# Only the two fields actually wanted come back out, so nothing else in that
+	# file — NAME, ID, PRETTY_NAME — can collide with a variable here either.
 	# shellcheck disable=SC1091
-	. /etc/os-release
-	case "${ID:-}:${ID_LIKE:-}" in
+	os_id=$( . /etc/os-release; printf '%s:%s' "${ID:-}" "${ID_LIKE:-}" )
+	case "$os_id" in
 		debian*|ubuntu*|*:*debian*|*:*ubuntu*) ;;
-		*) die "only Debian and Ubuntu are supported, found '${ID:-unknown}'" ;;
+		*) die "only Debian and Ubuntu are supported, found '${os_id%%:*}'" ;;
 	esac
 
 	case "$(uname -m)" in
@@ -421,8 +434,6 @@ configure() {
 	else
 		auth_token=$(env_get OZYMANDIS_AUTH_TOKEN || rand_hex 24)
 	fi
-	owner_email=$(env_get OZYMANDIS_OWNER_EMAIL || printf '')
-
 	# Preserved across re-runs like every other value, so an operator who named
 	# their controller's resolver by hand does not lose it by upgrading.
 	cert_resolver=$(env_get OZYMANDIS_CERT_RESOLVER || printf '')
@@ -439,7 +450,6 @@ configure() {
 		OZYMANDIS_ADDR=:${PORT}
 		OZYMANDIS_AUTH_TOKEN=${auth_token}
 		OZYMANDIS_SECRET_KEY=${secret_key}
-		OZYMANDIS_OWNER_EMAIL=${owner_email}
 
 		# The ACME resolver the ingress controller obtains certificates from — a
 		# name from its own certificatesResolvers configuration, such as

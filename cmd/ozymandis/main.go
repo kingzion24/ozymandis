@@ -423,11 +423,13 @@ func newIdentity(
 	return identity.NewStaticToken(owner, cfg.AuthToken)
 }
 
-// newMailer builds the transport sign-in links are delivered through.
+// newMailer builds the transport the install sends mail through.
 //
-// The logging transport is the fallback rather than an error: with no relay
-// configured the link goes to the log, which is the only way back in when mail
-// breaks after accounts are switched on.
+// The logging transport is the fallback rather than an error, and no longer
+// warns about it. It used to carry sign-in links, so an install with no relay
+// was one whose credentials sat in a log file — worth saying loudly. Sign-in is
+// a password now and sends nothing, so an install with no transport is complete
+// rather than half-configured.
 func newMailer(cfg config.Config, log *slog.Logger) (notify.Mailer, error) {
 	switch {
 	case cfg.SMTPAddr != "":
@@ -440,8 +442,6 @@ func newMailer(cfg config.Config, log *slog.Logger) (notify.Mailer, error) {
 	case cfg.ResendAPIKey != "":
 		return notify.NewResend(cfg.ResendAPIKey, cfg.ResendFrom)
 	default:
-		log.Warn("no mail transport configured — sign-in links will be written to " +
-			"this log, where anyone who can read it can use them")
 		return notify.NewLog(log), nil
 	}
 }
