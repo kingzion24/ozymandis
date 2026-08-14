@@ -27,11 +27,23 @@ KUBECONFIG_DST="${CONF_DIR}/kubeconfig"
 UNIT_FILE="/etc/systemd/system/ozymandis.service"
 SVC_USER="ozymandis"
 
+# The Postgres role and database created for this install.
+#
+# Underscores rather than spaces, and the reason is not style. A database name
+# is carried inside a connection URL, where a space has to arrive
+# percent-encoded — "ozymandis%20command%20center" — and every psql, createdb,
+# pg_dump and restore that ever touches it then needs the identifier quoted as
+# well. The one that gets it wrong reports the database as not existing, which
+# is a long way from the actual cause.
+DB_ROLE="ozymandis"
+DB_NAME="ozymandis_command_center"
+
 VERSION=""
 PORT="8080"
 ROTATE_TOKEN="no"
 SKIP_K3S="no"
 DATABASE_URL=""
+BINARY=""
 
 # ---------------------------------------------------------------- output ----
 
@@ -93,6 +105,7 @@ usage() {
 
 		Flags (when piped, pass them after 'sh -s --'):
 		  --version vX.Y.Z    install a specific release rather than the latest
+		  --binary PATH       install a binary you already have, no download
 		  --port N            listen port, default 8080
 		  --rotate-token      issue a new dashboard token instead of keeping it
 		  --skip-k3s          use the kubeconfig already present
@@ -105,6 +118,7 @@ parse_flags() {
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--version)      VERSION="${2:-}"; shift 2 ;;
+			--binary)       BINARY="${2:-}"; shift 2 ;;
 			--port)         PORT="${2:-}"; shift 2 ;;
 			--database-url) DATABASE_URL="${2:-}"; shift 2 ;;
 			--rotate-token) ROTATE_TOKEN="yes"; shift ;;
@@ -116,6 +130,15 @@ parse_flags() {
 	case "$PORT" in
 		''|*[!0-9]*) die "--port must be a number, got '$PORT'" ;;
 	esac
+	if [ -n "$BINARY" ]; then
+		[ -f "$BINARY" ] || die "--binary '${BINARY}' is not a file"
+		# Two sources for one binary is not a fallback chain, it is an
+		# unanswered question about which one gets installed. Say so rather
+		# than picking.
+		if [ -n "$VERSION" ]; then
+			die "--binary and --version name two different things to install — pass one"
+		fi
+	fi
 }
 
 # ----------------------------------------------------------------- secrets --
@@ -194,6 +217,50 @@ install_binary() {
 	trap - EXIT INT TERM
 }
 
+# install_local_binary puts a binary you already have in place, skipping the
+# release download and everything that depends on one.
+#
+# What it exists for is the install that cannot use a release: a build from a
+# working tree, or a first install before anything has been published.
+#
+# It does not verify a checksum, and that is not an omission. The download path
+# compares what arrived over the network against what the publisher signed for;
+# a file handed over on the command line has no such counterparty, and a
+# checksum the operator computes over their own file proves only that the disk
+# read it back correctly. What is worth checking here is different, and cheap:
+# that the file could actually run on this machine. A binary for another
+# architecture installs perfectly, starts, and dies — surfacing at wait_healthy
+# as "ozymandis exited", which reads as the service being broken rather than as
+# the wrong file having been handed over.
+install_local_binary() {
+	VERSION="${VERSION:-local}"
+	step "Installing ozymandis from ${BINARY} (${ARCH})"
+
+	[ "$(od -An -tx1 -N4 "$BINARY" | tr -d ' \n')" = "7f454c46" ] \
+		|| die "${BINARY} is not an ELF binary"
+
+	# e_machine, two bytes at offset 18, little-endian: 0x3e is x86-64,
+	# 0xb7 is aarch64.
+	case "${ARCH}:$(od -An -tx1 -j18 -N2 "$BINARY" | tr -d ' \n')" in
+		amd64:3e00|arm64:b700) ;;
+		*) die "${BINARY} is not built for ${ARCH} — build it with GOOS=linux GOARCH=${ARCH}" ;;
+	esac
+
+	install -m 0755 "$BINARY" "${INSTALL_DIR}/ozymandis.new"
+	mv -f "${INSTALL_DIR}/ozymandis.new" "${INSTALL_DIR}/ozymandis"
+	say "${INSTALL_DIR}/ozymandis"
+
+	# oz beside it, on the same terms the release tarball offers it: present is
+	# installed, absent is not an error. `make build` leaves both in the same
+	# directory, so this is the ordinary case rather than a clever one.
+	oz_src="$(dirname "$BINARY")/oz"
+	if [ -f "$oz_src" ]; then
+		install -m 0755 "$oz_src" "${INSTALL_DIR}/oz.new"
+		mv -f "${INSTALL_DIR}/oz.new" "${INSTALL_DIR}/oz"
+		say "${INSTALL_DIR}/oz"
+	fi
+}
+
 # -------------------------------------------------------------------- k3s ---
 
 install_k3s() {
@@ -249,6 +316,26 @@ install_k3s() {
 
 # --------------------------------------------------------------- postgres ---
 
+# psql_as_postgres runs psql as the database superuser.
+#
+# `su -c` takes one string, so every argument is quoted here rather than at each
+# call site. Done once, in one place: a value carrying a quote would otherwise
+# close the string early and hand the rest to the shell as a command of its own.
+psql_as_postgres() {
+	cmd="psql"
+	for a in "$@"; do
+		cmd="${cmd} '$(printf '%s' "$a" | sed "s/'/'\\\\''/g")'"
+	done
+	su - postgres -c "$cmd"
+}
+
+# pg_answers reports whether a local Postgres server is running and reachable.
+pg_answers() {
+	need_cmd psql || return 1
+	id -u postgres >/dev/null 2>&1 || return 1
+	psql_as_postgres -tAc "SELECT 1" >/dev/null 2>&1
+}
+
 install_postgres() {
 	if [ -n "$DATABASE_URL" ]; then
 		step "Using the Postgres given on the command line"
@@ -263,34 +350,51 @@ install_postgres() {
 		return 0
 	fi
 
-	step "Installing Postgres"
-	if ! need_cmd psql; then
+	step "Postgres"
+
+	# Whether a server answers, not whether a client binary exists.
+	#
+	# psql is packaged separately from the server, so a box can carry the client
+	# for a database that lives somewhere else entirely. Taking that as proof of
+	# a local server installs nothing, and the install then fails at the first
+	# connection — which reads as Ozymandis being broken rather than as Postgres
+	# being absent.
+	if pg_answers; then
+		say "already installed and running"
+	else
+		say "installing"
 		DEBIAN_FRONTEND=noninteractive apt-get update -qq
 		DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql \
 			|| die "could not install postgresql"
-	else
-		say "already present"
+		# Outside the branch above rather than inside it, because a server that
+		# is installed but stopped reaches here too, and that case needs
+		# starting rather than installing.
+		systemctl enable --now postgresql >/dev/null 2>&1 || true
+		pg_answers || die "postgres is installed but not answering — check \`systemctl status postgresql\`"
 	fi
-	systemctl enable --now postgresql >/dev/null 2>&1 || true
 
 	pw=$(rand_hex 24)
-	role_exists=$(su - postgres -c \
-		"psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='ozymandis'\"" 2>/dev/null || true)
+	role_exists=$(psql_as_postgres -tAc \
+		"SELECT 1 FROM pg_roles WHERE rolname='${DB_ROLE}'" 2>/dev/null || true)
 	if [ "$role_exists" = "1" ]; then
-		su - postgres -c "psql -qc \"ALTER ROLE ozymandis WITH LOGIN PASSWORD '${pw}'\"" >/dev/null \
-			|| die "could not reset the ozymandis role password"
+		psql_as_postgres -qc "ALTER ROLE \"${DB_ROLE}\" WITH LOGIN PASSWORD '${pw}'" >/dev/null \
+			|| die "could not reset the ${DB_ROLE} role password"
 	else
-		su - postgres -c "psql -qc \"CREATE ROLE ozymandis WITH LOGIN PASSWORD '${pw}'\"" >/dev/null \
-			|| die "could not create the ozymandis role"
+		psql_as_postgres -qc "CREATE ROLE \"${DB_ROLE}\" WITH LOGIN PASSWORD '${pw}'" >/dev/null \
+			|| die "could not create the ${DB_ROLE} role"
 	fi
 
-	db_exists=$(su - postgres -c \
-		"psql -tAc \"SELECT 1 FROM pg_database WHERE datname='ozymandis'\"" 2>/dev/null || true)
-	if [ "$db_exists" != "1" ]; then
-		su - postgres -c "createdb -O ozymandis ozymandis" || die "could not create the ozymandis database"
+	db_exists=$(psql_as_postgres -tAc \
+		"SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" 2>/dev/null || true)
+	if [ "$db_exists" = "1" ]; then
+		say "database ${DB_NAME} already exists"
+	else
+		su - postgres -c "createdb -O \"${DB_ROLE}\" \"${DB_NAME}\"" \
+			|| die "could not create the ${DB_NAME} database"
+		say "database ${DB_NAME} created"
 	fi
 
-	DATABASE_URL="postgres://ozymandis:${pw}@127.0.0.1:5432/ozymandis?sslmode=disable"
+	DATABASE_URL="postgres://${DB_ROLE}:${pw}@127.0.0.1:5432/${DB_NAME}?sslmode=disable"
 	say "database ready"
 }
 
@@ -486,8 +590,12 @@ main() {
 
 	printf '\n\033[1mOzymandis installer\033[0m — %s/%s\n' "$(uname -s)" "$ARCH"
 
-	resolve_version
-	install_binary
+	if [ -n "$BINARY" ]; then
+		install_local_binary
+	else
+		resolve_version
+		install_binary
+	fi
 	install_k3s
 	install_postgres
 	configure

@@ -107,6 +107,33 @@ Debian or Ubuntu, amd64 or arm64. It installs K3s, Postgres, and Ozymandis as a
 systemd service, then prints the dashboard URL and a token to sign in with.
 About ninety seconds on a fresh box.
 
+**Before there is a release** — which is where this repository stands today —
+the same installer will take a binary you built yourself. Everything else it
+does is unchanged:
+
+```bash
+make build                      # leaves bin/ozymandis and bin/oz
+scp bin/ozymandis bin/oz install.sh root@your-box:/tmp/
+ssh root@your-box 'sh /tmp/install.sh --binary /tmp/ozymandis'
+```
+
+`--binary` skips the download and, with it, the checksum: a file handed over on
+the command line has no publisher to check it against, and a checksum you
+compute over your own file proves only that the disk read it back. What is
+checked instead is that the binary could run here at all — an ELF built for
+another architecture installs perfectly, then dies at startup as `ozymandis
+exited`, which reads as the service being broken rather than as the wrong file
+having been copied. An `oz` sitting beside it is installed too, which is why
+the `scp` above carries both. Add `--skip-k3s` on a box that already has a
+cluster.
+
+Postgres comes from the distribution's own `postgresql` package — **16** on
+Ubuntu 24.04. The installer creates the role `ozymandis` and an *empty*
+database, `ozymandis_command_center`; the schema is not its business. Ozymandis
+migrates itself at startup, before it opens a pool, so the tables and columns
+appear on first run and a hand-written schema would only collide with the
+migrator.
+
 **It does not install an ingress controller, and it does not set up TLS.** K3s
 is installed with `--disable traefik`, so a fresh box has no edge at all: apps
 you deploy are reachable over plain http, and nothing reports that as a fault.
@@ -160,8 +187,12 @@ To remove it all:
 sudo systemctl disable --now ozymandis
 sudo rm -rf /etc/ozymandis /etc/systemd/system/ozymandis.service /usr/local/bin/ozymandis
 sudo /usr/local/bin/k3s-uninstall.sh          # only if you want the cluster gone too
-sudo -u postgres dropdb ozymandis && sudo -u postgres dropuser ozymandis
+sudo -u postgres dropdb ozymandis_command_center && sudo -u postgres dropuser ozymandis
 ```
+
+`ozymandis_command_center` is the database the installer creates; the role is
+`ozymandis`. The Quick start below builds its own database by hand and names it
+whatever its connection string says, so the two need not match.
 
 ## Quick start
 
