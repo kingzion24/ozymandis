@@ -441,6 +441,27 @@ echo "No Dockerfile — detecting what this is with buildpacks."
 # to guess where. They go on the shared volume rather than the image's own
 # filesystem, which is read-only to a non-root user.
 mkdir -p /workspace/layers /workspace/cache /workspace/platform/env
+
+# Tell git the checkout is trustworthy, through the platform directory.
+#
+# The clone runs as a different uid to this step, and git refuses to read a
+# repository owned by another user — "dubious ownership", exit 128. Nothing
+# here runs git directly; a buildpack does. Go stamps VCS information into a
+# binary by default, shells out to git for it, and turns that refusal into
+# "error obtaining VCS status" — failing the build after detection has passed
+# and the toolchain is already installed.
+#
+# Written as files rather than set on the container, because that is the only
+# environment a buildpack sees: the lifecycle builds the build environment from
+# this directory and does not forward its own. Setting them as container
+# variables looks right, changes nothing, and was tried first.
+#
+# Trusting the path rather than passing -buildvcs=false keeps the commit in the
+# built binary, which is the reason the stamping exists.
+printf '%s' '1'              > /workspace/platform/env/GIT_CONFIG_COUNT
+printf '%s' 'safe.directory' > /workspace/platform/env/GIT_CONFIG_KEY_0
+printf '%s' '*'              > /workspace/platform/env/GIT_CONFIG_VALUE_0
+
 /cnb/lifecycle/creator \
   -app="/workspace/src/$SUBDIR" \
   -layers=/workspace/layers \
