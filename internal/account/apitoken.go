@@ -58,7 +58,7 @@ type APIToken struct {
 
 	// Username and TeamName describe who and what the token acts as, so
 	// `oz auth whoami` can answer without a second call.
-	Username string
+	Username  string
 	UserName  string
 	TeamName  string
 	TeamEmail string
