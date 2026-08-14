@@ -15,13 +15,17 @@ jobs:
     # Store tests skip themselves without a database, so CI supplies one.
     # The schema invariant they check — every resource table is owner-scoped —
     # only has to be forgotten once to be expensive.
+    #
+    # 16 because that is what `apt-get install postgresql` gives on the Debian
+    # and Ubuntu releases install.sh supports, and testing against a version
+    # nobody runs is how a migration that only works on a newer server ships.
     services:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_USER: yacht
-          POSTGRES_PASSWORD: yacht
-          POSTGRES_DB: yacht
+          POSTGRES_USER: ozymandis
+          POSTGRES_PASSWORD: ozymandis
+          POSTGRES_DB: ozymandis
         ports: ["5432:5432"]
         options: >-
           --health-cmd pg_isready
@@ -30,7 +34,7 @@ jobs:
           --health-retries 5
 
     env:
-      YACHT_TEST_DATABASE_URL: postgres://yacht:yacht@localhost:5432/yacht?sslmode=disable
+      OZYMANDIS_TEST_DATABASE_URL: postgres://ozymandis:ozymandis@localhost:5432/ozymandis?sslmode=disable
 
     steps:
       - uses: actions/checkout@v4
@@ -64,6 +68,33 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+      # A database test with no database does not fail, it skips — and a skip
+      # reports as a pass. This workflow went on setting YACHT_TEST_DATABASE_URL
+      # after the tests were renamed to read OZYMANDIS_TEST_DATABASE_URL, so
+      # every store, account and cluster test quietly did not run while CI
+      # stayed green. Nothing about that looks wrong from the outside, which is
+      # why it needs a step of its own.
+      #
+      # The variable's name is read out of the test source rather than written
+      # here a second time, because a second copy of it is precisely what
+      # drifted.
+      - name: The database tests must be able to run
+        run: |
+          set -eu
+          names=$(grep -rhoE '"[A-Z_]+TEST_DATABASE_URL"' --include='*_test.go' ./internal \
+                  | tr -d '"' | sort -u)
+          count=$(printf '%s\n' "$names" | grep -c . || true)
+          if [ "$count" -ne 1 ]; then
+            echo "::error::expected exactly one test DSN variable, found: ${names:-none}"
+            exit 1
+          fi
+          eval "value=\${${names}:-}"
+          if [ -z "$value" ]; then
+            echo "::error::the tests read ${names}, which this workflow does not set"
+            exit 1
+          fi
+          echo "database tests will run against ${names}"
 
       - name: Test
         run: go test ./... -race -count=1
