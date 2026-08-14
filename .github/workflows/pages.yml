@@ -1,15 +1,21 @@
 name: pages
 
-# Publishes the install and upgrade scripts at codeblocktz.github.io/yacht/.
+# Publishes the install and upgrade scripts at kingzion24.github.io/ozymandis/.
+#
+# That URL is the one site/index.html hands out and the one REPO in both scripts
+# resolves releases from. All three name the same repository, and they have to:
+# a script served from one account that downloads its tarball from another fails
+# as "could not resolve the latest release", which is also what an unpublished
+# release looks like.
 #
 # The scripts are served straight from the repository root rather than kept as a
 # second copy under site/, so what the URL hands to a shell is the file that was
 # reviewed on main and nothing else.
 #
-# No CNAME file: this is a project site on the organisation's own Pages domain,
-# which needs no DNS and cannot be taken over by a dangling record. Adding a
-# custom domain later means writing a CNAME here and verifying the domain at the
-# organisation level first.
+# No CNAME file: this is a project site on the account's own Pages domain, which
+# needs no DNS and cannot be taken over by a dangling record. Adding a custom
+# domain later means writing a CNAME here and verifying the domain at the
+# account level first.
 
 on:
   push:
