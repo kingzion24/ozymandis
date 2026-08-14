@@ -33,6 +33,19 @@ jobs:
       - name: Test
         run: go test ./... -count=1
 
+      # Every name here is load-bearing, because install.sh checks all of them:
+      # it downloads ozymandis_<num>_linux_<arch>.tar.gz, looks that exact name
+      # up in checksums.txt, and dies unless the archive contains a file called
+      # `ozymandis`. A release that builds but names its output differently
+      # publishes successfully and cannot be installed.
+      #
+      # Both binaries ship in one archive. install.sh installs `oz` when the
+      # tarball carries it and skips it silently when it does not, so leaving it
+      # out is not an error anywhere — it is a release where the CLI simply
+      # never appears.
+      #
+      # Only the server takes -X main.version; cmd/oz declares no such variable
+      # and the linker would drop the flag on the floor either way.
       - name: Build
         run: |
           set -eu
@@ -42,12 +55,37 @@ jobs:
           for arch in amd64 arm64; do
             CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
               go build -trimpath -ldflags "-s -w -X main.version=${version}" \
-              -o "dist/yacht" ./cmd/yacht
-            tar -czf "dist/yacht_${num}_linux_${arch}.tar.gz" -C dist yacht
-            rm dist/yacht
+              -o "dist/ozymandis" ./cmd/ozymandis
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
+              go build -trimpath -ldflags "-s -w" \
+              -o "dist/oz" ./cmd/oz
+            tar -czf "dist/ozymandis_${num}_linux_${arch}.tar.gz" -C dist ozymandis oz
+            rm dist/ozymandis dist/oz
           done
           cd dist && sha256sum ./*.tar.gz | sed 's| \./| |' > checksums.txt
           cat checksums.txt
+
+      # The installer's contract, asserted here rather than discovered by the
+      # first person to run the one-liner. A tag is published once and the
+      # artifacts cannot be quietly corrected afterwards.
+      - name: Verify the artifacts are what install.sh expects
+        run: |
+          set -eu
+          num="${GITHUB_REF_NAME#v}"
+          for arch in amd64 arm64; do
+            tarball="ozymandis_${num}_linux_${arch}.tar.gz"
+            [ -f "dist/${tarball}" ] || { echo "::error::missing dist/${tarball}"; exit 1; }
+            # The same shape install.sh matches with, so this fails here rather
+            # than as "no checksum published" on somebody's machine.
+            grep -qE "^[0-9a-f]{64}[[:space:]]+\*?${tarball}\$" dist/checksums.txt \
+              || { echo "::error::${tarball} has no usable line in checksums.txt"; exit 1; }
+            contents=$(tar -tzf "dist/${tarball}")
+            for want in ozymandis oz; do
+              printf '%s\n' "$contents" | grep -qx "$want" \
+                || { echo "::error::${tarball} does not contain ${want}"; exit 1; }
+            done
+          done
+          echo "artifacts match the names install.sh downloads and unpacks"
 
       - name: Publish
         env:
