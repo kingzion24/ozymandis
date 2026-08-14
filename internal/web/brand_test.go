@@ -55,7 +55,10 @@ func TestTheSidebarSpellsTheBrandName(t *testing.T) {
 // the opposite case, which is why they are separate components.
 func TestTheMarkKeepsItsOwnColours(t *testing.T) {
 	mark := renderToString(t, brandMark("x"))
-	for _, want := range []string{"fill:rgb(33,149,132)", "fill:rgb(74,168,154)"} {
+	// The two values, however they are applied — they are a flat fill in one
+	// design and gradient stops in another, and what matters is that they are
+	// the brand's own rather than the page's text colour.
+	for _, want := range []string{"rgb(33,149,132)", "rgb(74,168,154)"} {
 		if !strings.Contains(mark, want) {
 			t.Errorf("the mark lost %s", want)
 		}
@@ -75,7 +78,7 @@ func TestTheFaviconIsTheMark(t *testing.T) {
 		t.Error("the embedded icon is not the brand mark")
 	}
 	// A favicon with no intrinsic size is one a browser has to guess at.
-	if !bytes.Contains(b, []byte(`width="215"`)) || !bytes.Contains(b, []byte(`viewBox=`)) {
+	if !bytes.Contains(b, []byte(`width="256"`)) || !bytes.Contains(b, []byte(`viewBox=`)) {
 		t.Error("the icon has no intrinsic size for a browser to draw a tab from")
 	}
 
@@ -118,7 +121,7 @@ func TestTheBrandLinkIsStillNamed(t *testing.T) {
 // The source files in assets/brand are the reference: their box starts at the
 // origin, so any frame outside it is looking somewhere the artwork is not.
 func TestEveryMarkIsFramedOnItsArtwork(t *testing.T) {
-	source := struct{ w, h float64 }{885, 292} // assets/brand/logo.svg
+	source := struct{ w, h float64 }{256, 256} // assets/brand/icon.svg
 
 	for name, markup := range map[string]string{
 		"mark": renderToString(t, brandMark("x")),
@@ -148,7 +151,7 @@ func TestTheFaviconIsFramedOnItsArtwork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read icon: %v", err)
 	}
-	if !bytes.Contains(b, []byte(`viewBox="0 0 215 292"`)) {
+	if !bytes.Contains(b, []byte(`viewBox="0 0 256 256"`)) {
 		t.Errorf("the favicon is not framed on its artwork: %s",
 			regexp.MustCompile(`viewBox="[^"]*"`).Find(b))
 	}
@@ -203,9 +206,13 @@ func TestTheSVGFaviconIsNotTranslatedOffItsCanvas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read icon: %v", err)
 	}
-	if n := bytes.Count(raw, []byte("matrix(1,0,0,1,-958.482024,-1596.092892)")); n != 1 {
-		t.Fatalf("the outer translate appears %d times, want exactly 1 — "+
-			"twice moves the artwork off the canvas while the viewBox still looks right", n)
+	// It used to count a specific translate, because the artwork was exported
+	// from a drawing tool inside two nested transforms and applying the outer
+	// one twice moved it off the canvas while the viewBox still read correctly.
+	// The mark is drawn by hand now, in the viewBox's own coordinates, so the
+	// stronger statement is available: there is no transform to get wrong.
+	if bytes.Contains(raw, []byte("transform")) || bytes.Contains(raw, []byte("matrix(")) {
+		t.Error("the favicon carries a transform — it can be translated off its own canvas")
 	}
 }
 

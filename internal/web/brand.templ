@@ -11,28 +11,35 @@ package web
 // The two teals in the mark are the brand's own, and --brand is set from the
 // same values, so the interface and the logo cannot drift apart.
 
-// brandMark is the mark: the sidebar, and anywhere too small for a name.
+// brandMark is the letter O, drawn.
 //
-// The wordmark that used to sit beside it is gone. It drew the name as vector
-// letterforms, which is a way of writing a name that no search can find — and
-// it still spelled Yacht long after the rename. The name is text now.
+// A ring rather than a glyph. A font cannot be relied on to be installed, and
+// an outlined glyph is a name nothing can read — which is how the wordmark
+// that used to sit here went on spelling "Yacht" for months after the rename.
+// This one is a shape that happens to be a letter; the name itself is text
+// beside it, so nothing here has to be read to know it.
+//
+// The counter is an ellipse, 64 across and 66 down. Equal radii look wrong at
+// this weight: a stroke of constant thickness reads heavier where it runs
+// horizontally, so the top and bottom are thinned. Every geometric typeface
+// makes the same correction to its O.
+//
+// Two teals in a vertical gradient rather than one flat fill, because they are
+// the brand's own and --brand is set from the same values — the interface and
+// the logo cannot drift apart.
 //
 // width and height are on the element, not only in the viewBox. Without an
 // intrinsic size a `w-auto` has nothing to resolve against, and an SVG in a
 // flex row collapses to zero — which is what the text it replaced never did.
 templ brandMark(class string) {
-	<svg class={ class } width="215" height="292" viewBox="0 0 215 292" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Ozymandis">
-		<g transform="matrix(1,0,0,1,-958.482024,-1596.092892)">
-			<g transform="matrix(0.508174,0,0,0.48621,221.930828,929.700086)">
-				<path d="M1870.593,1721.574L1790.154,1969.141L1529.846,1969.141L1449.407,1721.574L1660,1568.569L1870.593,1721.574ZM1692.973,1910.195L1747.327,1910.195L1801.298,1744.09L1660,1641.431L1518.702,1744.09L1572.673,1910.195L1627.027,1910.195L1660,1753.544L1692.973,1910.195Z" style="fill:rgb(33,149,132);"></path>
-			</g>
-			<g transform="matrix(0.553013,0,0,0.736836,224.367075,528.603688)">
-				<path d="M1380,1587.606L1380,1635.684L1521,1562.122L1662,1635.684L1662,1587.606L1521,1514.043L1380,1587.606Z" style="fill:rgb(74,168,154);"></path>
-			</g>
-			<g transform="matrix(0.553013,0,0,0.529111,223.814062,870.10361)">
-				<path d="M1438,1500.076L1438,1433.122L1522,1372.093L1606,1433.122L1606,1500.076L1522,1439.047L1438,1500.076Z" style="fill:rgb(74,168,154);"></path>
-			</g>
-		</g>
+	<svg class={ class } width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Ozymandis">
+		<defs>
+			<linearGradient id="ozymandis-o" x1="0" y1="0" x2="0" y2="1">
+				<stop offset="0" style="stop-color:rgb(74,168,154)"></stop>
+				<stop offset="1" style="stop-color:rgb(33,149,132)"></stop>
+			</linearGradient>
+		</defs>
+		<path fill-rule="evenodd" style="fill:url(#ozymandis-o)" d="M 16,128 a 112,112 0 1,0 224,0 a 112,112 0 1,0 -224,0 Z M 64,128 a 64,66 0 1,0 128,0 a 64,66 0 1,0 -128,0 Z"></path>
 	</svg>
 }
 

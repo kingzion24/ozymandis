@@ -1,13 +1,21 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="215" height="292" viewBox="0 0 215 292">
-<g transform="matrix(1,0,0,1,-958.482024,-1596.092892)">
-        <g transform="matrix(0.508174,0,0,0.48621,221.930828,929.700086)">
-            <path d="M1870.593,1721.574L1790.154,1969.141L1529.846,1969.141L1449.407,1721.574L1660,1568.569L1870.593,1721.574ZM1692.973,1910.195L1747.327,1910.195L1801.298,1744.09L1660,1641.431L1518.702,1744.09L1572.673,1910.195L1627.027,1910.195L1660,1753.544L1692.973,1910.195Z" style="fill:rgb(33,149,132);"/>
-        </g>
-        <g transform="matrix(0.553013,0,0,0.736836,224.367075,528.603688)">
-            <path d="M1380,1587.606L1380,1635.684L1521,1562.122L1662,1635.684L1662,1587.606L1521,1514.043L1380,1587.606Z" style="fill:rgb(74,168,154);"/>
-        </g>
-        <g transform="matrix(0.553013,0,0,0.529111,223.814062,870.10361)">
-            <path d="M1438,1500.076L1438,1433.122L1522,1372.093L1606,1433.122L1606,1500.076L1522,1439.047L1438,1500.076Z" style="fill:rgb(74,168,154);"/>
-        </g>
-    </g>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Ozymandis">
+    <!--
+      The mark is the letter O, drawn.
+      A ring rather than a glyph, because a font cannot be relied on to be
+      installed and an outlined glyph is a name no search can read — which is
+      how the previous wordmark went on saying "Yacht" for months. The name
+      itself is text beside this, so nothing here has to be read to know it.
+
+      The counter is an ellipse, not a circle: 64 across and 66 down. Equal
+      radii look wrong at this weight, because a stroke of constant thickness
+      reads heavier where it runs horizontally. Thinning the top and bottom by
+      four units is the correction every geometric typeface makes to its O.
+    -->
+    <defs>
+        <linearGradient id="ozymandis-o" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" style="stop-color:rgb(74,168,154)"/>
+            <stop offset="1" style="stop-color:rgb(33,149,132)"/>
+        </linearGradient>
+    </defs>
+    <path fill-rule="evenodd" style="fill:url(#ozymandis-o)" d="M 16,128 a 112,112 0 1,0 224,0 a 112,112 0 1,0 -224,0 Z M 64,128 a 64,66 0 1,0 128,0 a 64,66 0 1,0 -128,0 Z"/>
 </svg>

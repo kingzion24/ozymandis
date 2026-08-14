@@ -214,8 +214,22 @@ func cloneStep(req orchestrator.BuildRequest, sshSecret string) corev1.Container
 		},
 		Command: []string{"/bin/sh", "-euc"},
 		Args: []string{`
+# The checkout has to be group-writable, and that is not tidiness.
+#
+# This step runs as ` + itoa(buildUID) + ` and the buildpack step runs as ` + itoa(cnbUID) + `,
+# sharing only the group. A default umask leaves the tree drwxr-xr-x, so the
+# buildpack can read the source and cannot write beside it — and several
+# buildpacks do exactly that: "go mod vendor", "npm install", anything that
+# materialises dependencies into the source tree. The failure lands after
+# detection has already passed and the toolchain has been installed, as a bare
+# "permission denied" from a command the operator never typed.
+#
+# umask covers what the clone creates; the chmod covers what git sets modes on
+# itself.
+umask 002
 echo "Cloning $REPO_URL at $REPO_REF"
 git clone --depth 1 --branch "$REPO_REF" --single-branch "$REPO_URL" /workspace/src
+chmod -R g+w /workspace/src
 echo "` + commitMarker + `$(git -C /workspace/src rev-parse HEAD)"
 echo "Cloned $(git -C /workspace/src rev-parse --short HEAD)"
 `},
