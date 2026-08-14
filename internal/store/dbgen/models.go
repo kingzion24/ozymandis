@@ -158,27 +158,6 @@ type ExecSession struct {
 	ExitCode  *int32
 }
 
-type Invitation struct {
-	ID         uuid.UUID
-	OwnerID    string
-	Email      string
-	Role       string
-	TokenHash  []byte
-	InvitedBy  pgtype.UUID
-	ExpiresAt  time.Time
-	AcceptedAt pgtype.Timestamptz
-	CreatedAt  time.Time
-}
-
-type MagicLink struct {
-	ID         uuid.UUID
-	UserID     uuid.UUID
-	TokenHash  []byte
-	ExpiresAt  time.Time
-	ConsumedAt pgtype.Timestamptz
-	CreatedAt  time.Time
-}
-
 type Membership struct {
 	UserID    uuid.UUID
 	OwnerID   string
@@ -234,12 +213,15 @@ type Team struct {
 
 type User struct {
 	ID            uuid.UUID
-	Email         string
+	Email         *string
 	DisplayName   string
 	TotpSecret    *string
 	TotpConfirmed bool
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+	Username      string
+	PasswordHash  []byte
+	IsSuperuser   bool
 }
 
 type Variable struct {

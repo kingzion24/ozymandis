@@ -371,16 +371,14 @@ func galleryPages() []galleryPage {
 		{
 			file: "states-sign-in.html", path: "/sign-in",
 			page: stack(
-				section("Sign in", "the form, and the same form after a rejected address",
+				section("Sign in", "the form, and the same form after a refusal",
 					stack(
 						SignIn(SignInData{}),
 						SignIn(SignInData{
-							Email: "not an address",
-							Error: "That does not look like an email address.",
+							Username: "batman",
+							Error:    "Incorrect username or password.",
 						}),
 					)),
-				section("Check your mail", "the same page whether or not the address is registered",
-					CheckMail()),
 			),
 		},
 		{

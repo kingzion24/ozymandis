@@ -56,9 +56,9 @@ type APIToken struct {
 	// answer to.
 	Role Role
 
-	// UserEmail and TeamName describe who and what the token acts as, so
+	// Username and TeamName describe who and what the token acts as, so
 	// `oz auth whoami` can answer without a second call.
-	UserEmail string
+	Username string
 	UserName  string
 	TeamName  string
 	TeamEmail string
@@ -193,7 +193,7 @@ func (s *Service) ResolveAPIToken(ctx context.Context, raw string) (APIToken, er
 		OwnerID:    row.OwnerID,
 		Name:       row.Name,
 		Role:       Role(row.MemberRole),
-		UserEmail:  row.UserEmail,
+		Username:   row.UserUsername,
 		UserName:   row.UserName,
 		TeamName:   row.TeamName,
 		TeamEmail:  row.TeamEmail,

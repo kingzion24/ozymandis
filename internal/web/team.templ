@@ -5,17 +5,22 @@ import (
 	"github.com/kingzion24/ozymandis/internal/web/ui/selectbox"
 )
 
-// TeamPage lists who is in the team and who has been invited.
+// TeamPage lists who is in the team and, for a superuser, everyone on the
+// install.
 //
-// Note what is not here: an invitation token, or anything it could be derived
-// from. account.Invitation has no such field, so a template cannot print one
-// even by accident — an invitation link on this page would let any reader join
-// as the invitee.
+// Note what is not here: a password, or anything one could be derived from.
+// account.User carries no such field, so a template cannot print one even by
+// accident — the hash exists in the database and nowhere else.
 templ TeamPage(d TeamPageData) {
 	@pageHead("Team", d.TeamName, nil)
 	if d.Error != "" {
 		<div class="callout callout-err mb-5">
 			<div class="min-w-0">{ d.Error }</div>
+		</div>
+	}
+	if d.Notice != "" {
+		<div class="callout mb-5">
+			<div class="min-w-0">{ d.Notice }</div>
 		</div>
 	}
 	<div class="panel mb-5">
@@ -29,7 +34,7 @@ templ TeamPage(d TeamPageData) {
 				for _, m := range d.Members {
 					<tr>
 						<td>
-							<span class="mono">{ m.Email }</span>
+							<span class="mono">{ m.Username }</span>
 							if m.Name != "" {
 								<span class="text-muted-foreground">{ m.Name }</span>
 							}
@@ -73,43 +78,61 @@ templ TeamPage(d TeamPageData) {
 		</table>
 		</div>
 	</div>
-	if d.Viewer.CanAdminister() {
+	if d.ViewerIsSuperuser {
 		<div class="panel mb-5">
-			<div class="panel-header"><span class="panel-title">Pending invitations</span></div>
-			if len(d.Invitations) == 0 {
-				<div class="panel-body"><p class="text-muted-foreground">Nobody is waiting to join.</p></div>
-			} else {
-				<div class="table-scroll">
-				<table class="dtable min-w-[480px]">
-					<thead>
-						<tr><th>Address</th><th>Role</th><th class="text-right">Actions</th></tr>
-					</thead>
-					<tbody>
-						for _, inv := range d.Invitations {
-							<tr>
-								<td><span class="mono">{ inv.Email }</span></td>
-								<td>
-									@statusDot(string(inv.Role), roleTone(inv.Role))
-								</td>
-								<td class="text-right">
-									<form method="post" action={ templ.SafeURL("/team/invitations/" + inv.ID.String() + "/revoke") } class="inline">
-										<button class="btn btn-sm" type="submit">Revoke</button>
+			<div class="panel-header"><span class="panel-title">People on this install</span></div>
+			<div class="table-scroll">
+			<table class="dtable min-w-[560px]">
+				<thead>
+					<tr><th>Username</th><th>Name</th><th class="text-right">Actions</th></tr>
+				</thead>
+				<tbody>
+					for _, u := range d.Users {
+						<tr>
+							<td>
+								<span class="mono">{ u.Username }</span>
+								if u.IsSuperuser {
+									<span class="text-muted-foreground">superuser</span>
+								}
+							</td>
+							<td>{ u.DisplayName }</td>
+							<td class="text-right">
+								<div class="flex gap-2 justify-end">
+									<form method="post" action={ templ.SafeURL("/team/users/" + u.ID.String() + "/password") } class="inline flex gap-2">
+										<input class="control h-8 w-[168px] text-[12px]" name="password" type="password" autocomplete="new-password" required placeholder="new password"/>
+										<button class="btn btn-sm" type="submit">Set password</button>
 									</form>
-								</td>
-							</tr>
-						}
-					</tbody>
-				</table>
-				</div>
-			}
+									// A superuser is not offered here at all: the query
+									// behind it refuses to delete one, and a button that
+									// always fails is worse than no button.
+									if !u.IsSuperuser {
+										<form method="post" action={ templ.SafeURL("/team/users/" + u.ID.String() + "/delete") } class="inline">
+											<button class="btn btn-sm btn-danger" type="submit">Delete</button>
+										</form>
+									}
+								</div>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+			</div>
 		</div>
 		<div class="panel mb-5">
-			<div class="panel-header"><span class="panel-title">Invite someone</span></div>
+			<div class="panel-header"><span class="panel-title">Add someone</span></div>
 			<div class="panel-body">
-				<form method="post" action="/team/invite" class="flex flex-col gap-4 sm:flex-row sm:items-end">
+				<form method="post" action="/team/users" class="flex flex-col gap-4 sm:flex-row sm:items-end">
 					<div class="field grow">
-						<label class="label" for="email">Email</label>
-						<input class="control" id="email" name="email" type="email" required placeholder="colleague@example.com"/>
+						<label class="label" for="username">Username</label>
+						<input class="control mono" id="username" name="username" type="text" autocapitalize="none" autocorrect="off" spellcheck="false" required placeholder="robin"/>
+					</div>
+					<div class="field grow">
+						<label class="label" for="display_name">Name</label>
+						<input class="control" id="display_name" name="display_name" type="text" placeholder="optional"/>
+					</div>
+					<div class="field grow">
+						<label class="label" for="password">Password</label>
+						<input class="control" id="password" name="password" type="password" autocomplete="new-password" required/>
 					</div>
 					<div class="field">
 						<label class="label" for="role">Role</label>
@@ -124,9 +147,6 @@ templ TeamPage(d TeamPageData) {
 								@selectbox.Item(selectbox.ItemProps{Value: "admin"}) {
 									admin
 								}
-								// Only an owner may appoint one. The server checks this
-								// again; leaving it out here is so the form does not
-								// offer something it will refuse.
 								if d.Viewer.CanOwn() {
 									@selectbox.Item(selectbox.ItemProps{Value: "owner"}) {
 										owner
@@ -135,8 +155,12 @@ templ TeamPage(d TeamPageData) {
 							}
 						}
 					</div>
-					<button class="btn btn-primary" type="submit">Send invitation</button>
+					<button class="btn btn-primary" type="submit">Create user</button>
 				</form>
+				<p class="mt-3 text-[12.5px] text-muted-foreground">
+					You choose the password and pass it on yourself. It is stored only as a
+					hash, so it cannot be shown again after this.
+				</p>
 			</div>
 		</div>
 	}

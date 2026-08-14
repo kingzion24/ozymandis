@@ -81,8 +81,9 @@ nothing you build here is locked in.
 
 | | |
 |---|---|
-| Magic-link sign-in, sessions, sign-out everywhere | ✅ |
-| Teams with Owner / Admin / Member and invitations | ✅ |
+| Username and password sign-in, sessions, sign-out everywhere | ✅ |
+| A superuser who creates and removes every other account | ✅ |
+| Teams with Owner / Admin / Member | ✅ |
 | Identity seam — single owner, bearer token, or session | ✅ |
 | Dashboard with pluggable chrome, light and dark | ✅ |
 | Postgres schema + embedded migrations | ✅ |
@@ -227,11 +228,12 @@ without digging through logs.
 | `OZYMANDIS_KUBE_IN_CLUSTER` | `false` | Use the mounted service account instead |
 | `OZYMANDIS_AUTH_TOKEN` | — | Bearer token. Unset, and with no accounts, means **no authentication** |
 | `OZYMANDIS_OWNER_ID` | `owner-local` | The team every resource belongs to on a fresh install |
-| `OZYMANDIS_OWNER_EMAIL` | — | The one address that may sign in before anybody has an account |
+| `OZYMANDIS_SUPERUSER_NAME` | `batman` | The built-in administrator, seeded at every startup |
+| `OZYMANDIS_SUPERUSER_PASSWORD` | *(a published default)* | **Change this.** The default is a constant in this repository |
 | `OZYMANDIS_APP_DOMAIN` | — | Apps get `<name>.<this>`. Point `*.<this>` at the cluster |
 | `OZYMANDIS_CERT_RESOLVER` | `letsencrypt` | Name of an ACME resolver **the ingress controller already has**. Wrong name = the controller's own certificate, silently. Empty = plain HTTP |
-| `OZYMANDIS_BASE_URL` | — | Public URL. **Setting it switches sign-in on** |
-| `OZYMANDIS_SMTP_ADDR` / `OZYMANDIS_RESEND_API_KEY` | — | How sign-in links are delivered. Neither means they go to the log |
+| `OZYMANDIS_BASE_URL` | — | Public URL the dashboard is reached at. Optional; sign-in no longer depends on it |
+| `OZYMANDIS_SMTP_ADDR` / `OZYMANDIS_RESEND_API_KEY` | — | Mail transport, for whatever the install sends. Sign-in sends nothing |
 | `OZYMANDIS_DEBUG` | `false` | Verbose logging |
 
 The full list, with the reasoning behind each, is in
@@ -386,7 +388,7 @@ Two rules keep the seams honest:
 ```
 cmd/ozymandis             entrypoint and wiring
 internal/app          workload lifecycle — keeps database and cluster agreeing
-internal/account      people: users, teams, roles, invitations
+internal/account      people: users, passwords, teams, roles
 internal/cluster      how a machine joins this cluster
 internal/config       environment configuration
 internal/domain       hostnames — the one we issue, and the ones people bring

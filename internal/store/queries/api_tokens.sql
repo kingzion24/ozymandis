@@ -31,7 +31,7 @@ RETURNING *;
 -- be treated as valid by a caller that forgets to check. NULL means no expiry,
 -- which is the common case for a credential living in CI.
 -- name: GetAPITokenByHash :one
-SELECT t.*, u.email AS user_email, u.display_name AS user_name,
+SELECT t.*, u.username AS user_username, u.display_name AS user_name,
        m.role AS member_role, tm.display_name AS team_name, tm.email AS team_email
 FROM api_tokens t
 JOIN users u ON u.id = t.user_id

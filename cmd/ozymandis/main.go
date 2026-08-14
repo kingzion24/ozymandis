@@ -89,6 +89,16 @@ func run() error {
 		if mailer, err = newMailer(cfg, log); err != nil {
 			return err
 		}
+
+		// The one account that exists before anybody creates one.
+		//
+		// Seeded at every startup and idempotent: the upsert behind it does not
+		// touch an existing password, so restarting the process cannot put the
+		// built-in default back over one somebody has changed. Without this a
+		// fresh install has a sign-in form and nobody to type into it.
+		if err := seedSuperuser(ctx, cfg, accounts, log); err != nil {
+			return err
+		}
 	}
 
 	ident, err := newIdentity(cfg, accounts, log)
@@ -234,7 +244,6 @@ func run() error {
 		opts.BootstrapTeamID = cfg.OwnerID
 		opts.BootstrapTeamName = cfg.OwnerName
 		opts.MailTransport = cfg.MailTransport()
-		opts.BootstrapEmail = cfg.OwnerEmail
 	}
 
 	srv, err := web.New(opts)
@@ -343,6 +352,40 @@ func newOrchestrator(
 // each branch says so in the log: an operator must be able to tell from a
 // startup line whether the install signs people in, guards a shared token, or
 // trusts everyone who can reach the port.
+// seedSuperuser creates the built-in administrator and gives them the team the
+// install runs as.
+//
+// Two steps, because they answer different questions: EnsureSuperuser decides
+// who may sign in, BootstrapOwner decides what they own once they have. A
+// superuser with no membership resolves to no owner and meets a dashboard they
+// cannot use, which looks exactly like a broken install.
+//
+// The warning is not decoration. The default password is a constant in a public
+// repository, so an install still running it can be signed into by anyone who
+// has read the source — and the only place that fact can reach the operator is
+// the log they are already watching at startup.
+func seedSuperuser(
+	ctx context.Context, cfg config.Config, accounts *account.Service, log *slog.Logger,
+) error {
+	user, err := accounts.EnsureSuperuser(ctx, cfg.SuperuserName(), cfg.SuperuserPassword())
+	if err != nil {
+		return fmt.Errorf("seed the superuser: %w", err)
+	}
+	if err := accounts.BootstrapOwner(ctx, cfg.OwnerID, cfg.OwnerName, user); err != nil {
+		return fmt.Errorf("give the superuser an owner to act as: %w", err)
+	}
+
+	if cfg.UsingDefaultSuperuserPassword() {
+		log.Warn("the superuser is using the built-in default password — "+
+			"anybody who has read the source can sign in. Change it on the team "+
+			"page, or set OZYMANDIS_SUPERUSER_PASSWORD",
+			slog.String("username", user.Username))
+	} else {
+		log.Info("superuser ready", slog.String("username", user.Username))
+	}
+	return nil
+}
+
 func newIdentity(
 	cfg config.Config, accounts *account.Service, log *slog.Logger,
 ) (identity.Provider, error) {
@@ -353,14 +396,11 @@ func newIdentity(
 			slog.String("mail_transport", cfg.MailTransport()),
 			slog.Duration("session_ttl", cfg.SessionTTL),
 		)
-		// With no mail transport configured, sign-in links go to the log. That
-		// is the documented break-glass path rather than an accident, but an
-		// operator who does not know it will wait for mail that is never sent.
-		if cfg.MailTransport() == "log" {
-			log.Warn("no mail transport configured — sign-in links will be written " +
-				"to this log instead of being sent; set OZYMANDIS_SMTP_ADDR or " +
-				"OZYMANDIS_RESEND_API_KEY to deliver them")
-		}
+		// No warning about the mail transport any more. Sign-in used to be a
+		// link, so an install with nowhere to send one was an install nobody
+		// could enter, and saying so at startup was the difference between that
+		// and waiting for mail forever. A password needs no transport at all, so
+		// an install with none is complete rather than half-configured.
 		// Tokens ahead of sessions. Both resolve to a team and everything
 		// downstream takes the result without asking which arrived, so this is
 		// the only place the two ways in have to be reconciled — and a request

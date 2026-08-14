@@ -18,7 +18,7 @@ func TestAPITokenRoundTrip(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
 
-	u, _ := s.EnsureUser(ctx, "token@example.test", "T")
+	u := mustUser(t, s, "token", "T")
 	if _, err := s.CreateTeam(ctx, "team-token", "Team", u.ID); err != nil {
 		t.Fatalf("CreateTeam: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestAPITokenIsStoredAsAHash(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
 
-	u, _ := s.EnsureUser(ctx, "tokenhash@example.test", "H")
+	u := mustUser(t, s, "tokenhash", "H")
 	_, _ = s.CreateTeam(ctx, "team-tokenhash", "Team", u.ID)
 	raw, _, err := s.IssueAPIToken(ctx, u.ID, "team-tokenhash", "ci", 0)
 	if err != nil {
@@ -78,8 +78,8 @@ func TestAPITokenDiesWithItsMembership(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
 
-	owner, _ := s.EnsureUser(ctx, "keeps@example.test", "K")
-	leaver, _ := s.EnsureUser(ctx, "leaves@example.test", "L")
+	owner := mustUser(t, s, "keeps", "K")
+	leaver := mustUser(t, s, "leaves", "L")
 	if _, err := s.CreateTeam(ctx, "team-leaver", "Team", owner.ID); err != nil {
 		t.Fatalf("CreateTeam: %v", err)
 	}
@@ -118,8 +118,8 @@ func TestRemovingAMemberDeletesTheirTokens(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
 
-	owner, _ := s.EnsureUser(ctx, "readd-owner@example.test", "O")
-	member, _ := s.EnsureUser(ctx, "readd-member@example.test", "M")
+	owner := mustUser(t, s, "readdowner", "O")
+	member := mustUser(t, s, "readdmember", "M")
 	_, _ = s.CreateTeam(ctx, "team-readd", "Team", owner.ID)
 	if err := s.SetRole(ctx, owner.ID, "team-readd", member.ID, RoleAdmin); err != nil {
 		t.Fatalf("SetRole: %v", err)
@@ -163,7 +163,7 @@ func TestDeletingATeamDeletesItsTokens(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
 
-	u, _ := s.EnsureUser(ctx, "teamgone@example.test", "T")
+	u := mustUser(t, s, "teamgone", "T")
 	_, _ = s.CreateTeam(ctx, "team-gone", "Team", u.ID)
 	raw, _, err := s.IssueAPIToken(ctx, u.ID, "team-gone", "ci", 0)
 	if err != nil {
@@ -183,8 +183,8 @@ func TestAPITokenCarriesTheCurrentRole(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
 
-	owner, _ := s.EnsureUser(ctx, "demoter@example.test", "D")
-	member, _ := s.EnsureUser(ctx, "demoted@example.test", "M")
+	owner := mustUser(t, s, "demoter", "D")
+	member := mustUser(t, s, "demoted", "M")
 	_, _ = s.CreateTeam(ctx, "team-demote", "Team", owner.ID)
 	if err := s.SetRole(ctx, owner.ID, "team-demote", member.ID, RoleAdmin); err != nil {
 		t.Fatalf("SetRole: %v", err)
@@ -216,7 +216,7 @@ func TestAPITokenExpires(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
 
-	u, _ := s.EnsureUser(ctx, "expiring@example.test", "E")
+	u := mustUser(t, s, "expiring", "E")
 	_, _ = s.CreateTeam(ctx, "team-expiring", "Team", u.ID)
 
 	raw, _, err := s.IssueAPIToken(ctx, u.ID, "team-expiring", "short", -time.Second)
@@ -246,7 +246,7 @@ func TestAPITokenNameIsUniquePerUserAndTeam(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
 
-	u, _ := s.EnsureUser(ctx, "dupe@example.test", "D")
+	u := mustUser(t, s, "dupe", "D")
 	_, _ = s.CreateTeam(ctx, "team-dupe", "Team", u.ID)
 
 	if _, _, err := s.IssueAPIToken(ctx, u.ID, "team-dupe", "ci", 0); err != nil {
@@ -263,8 +263,8 @@ func TestIssueAPITokenRefusesANonMember(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
 
-	owner, _ := s.EnsureUser(ctx, "insider@example.test", "I")
-	outsider, _ := s.EnsureUser(ctx, "outsider@example.test", "O")
+	owner := mustUser(t, s, "insider", "I")
+	outsider := mustUser(t, s, "outsider", "O")
 	_, _ = s.CreateTeam(ctx, "team-closed", "Team", owner.ID)
 
 	if _, _, err := s.IssueAPIToken(ctx, outsider.ID, "team-closed", "sneaky", 0); err == nil {
@@ -277,8 +277,8 @@ func TestRevokeAPITokenIsScopedToItsHolder(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
 
-	a, _ := s.EnsureUser(ctx, "holder@example.test", "A")
-	b, _ := s.EnsureUser(ctx, "thief@example.test", "B")
+	a := mustUser(t, s, "holder", "A")
+	b := mustUser(t, s, "thief", "B")
 	_, _ = s.CreateTeam(ctx, "team-revoke", "Team", a.ID)
 	if err := s.SetRole(ctx, a.ID, "team-revoke", b.ID, RoleAdmin); err != nil {
 		t.Fatalf("SetRole: %v", err)
@@ -309,7 +309,7 @@ func TestListAPITokensNeverReturnsAHash(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
 
-	u, _ := s.EnsureUser(ctx, "lister@example.test", "L")
+	u := mustUser(t, s, "lister", "L")
 	_, _ = s.CreateTeam(ctx, "team-list", "Team", u.ID)
 	if _, _, err := s.IssueAPIToken(ctx, u.ID, "team-list", "one", 0); err != nil {
 		t.Fatalf("IssueAPIToken: %v", err)
@@ -333,7 +333,7 @@ func TestAPITokensProviderResolvesToTheTeam(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
 
-	u, _ := s.EnsureUser(ctx, "provider@example.test", "P")
+	u := mustUser(t, s, "provider", "P")
 	_, _ = s.CreateTeam(ctx, "team-provider", "Team", u.ID)
 	raw, _, err := s.IssueAPIToken(ctx, u.ID, "team-provider", "cli", 0)
 	if err != nil {
@@ -408,7 +408,7 @@ func TestResolveAPITokenRejectsAnUnprefixedValue(t *testing.T) {
 	// A session token is a valid credential of a different kind. Presenting one
 	// as a bearer token must not resolve: the prefix check is what stops the
 	// two credential spaces from overlapping.
-	u, _ := s.EnsureUser(ctx, "crossed@example.test", "C")
+	u := mustUser(t, s, "crossed", "C")
 	_, _ = s.CreateTeam(ctx, "team-crossed", "Team", u.ID)
 	sess, err := s.CreateSession(ctx, u.ID, "team-crossed", "", "", time.Hour)
 	if err != nil {
@@ -423,7 +423,7 @@ func TestIssueAPITokenRefusesABlankName(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
 
-	u, _ := s.EnsureUser(ctx, "unnamed@example.test", "U")
+	u := mustUser(t, s, "unnamed", "U")
 	_, _ = s.CreateTeam(ctx, "team-unnamed", "Team", u.ID)
 
 	for _, name := range []string{"", "   ", "\t"} {

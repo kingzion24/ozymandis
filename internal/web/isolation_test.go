@@ -19,7 +19,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/kingzion24/ozymandis/internal/account"
 	"github.com/kingzion24/ozymandis/internal/app"
@@ -54,39 +53,49 @@ func TestIsolationCrossTeamMemberRemoval(t *testing.T) {
 	}
 }
 
-// cross-team invitation revocation by id.
-func TestIsolationCrossTeamInvitationRevoke(t *testing.T) {
+// user management by somebody who is not a superuser.
+//
+// The replacement for a cross-team invitation test: invitations are gone, and
+// the account surface they guarded is now the user list. An ordinary member
+// holding a perfectly valid session must not be able to remove anybody, and the
+// check has to be the server's rather than the page's — the form is simply not
+// rendered for them, which proves nothing about the route.
+func TestIsolationUserManagementNeedsSuperuser(t *testing.T) {
 	ctx := context.Background()
 	h := newLiveHarness(t, "web-adv2-a")
 
-	attacker := h.user(t, "attacker2-adv@web.test")
-	_ = attacker
-	attackerCookie := sessionCookie(h.signIn(t, "attacker2-adv@web.test"))
+	// h.user creates through the harness superuser, so this one is ordinary.
+	attacker := h.user(t, "attacker2-adv")
+	attackerCookie := sessionCookie(h.signIn(t, "attacker2-adv"))
 
-	bOwner := h.user(t, "b2-owner-adv@web.test")
-	if _, err := h.accounts.CreateTeam(ctx, "web-adv2-b", "B", bOwner.ID); err != nil {
-		t.Fatalf("create team B: %v", err)
-	}
-	if _, err := h.accounts.Invite(ctx, bOwner.ID, "web-adv2-b", "pending2@web.test",
-		account.RoleMember, time.Hour); err != nil {
-		t.Fatalf("invite in B: %v", err)
-	}
-	pending, err := h.accounts.ListPendingInvitations(ctx, "web-adv2-b")
-	if err != nil || len(pending) != 1 {
-		t.Fatalf("team B invitations = %v (%v)", pending, err)
-	}
+	victim := h.user(t, "victim2-adv")
 
 	rec := h.postFormAs(t,
-		"/team/invitations/"+pending[0].ID.String()+"/revoke", attackerCookie, url.Values{})
-	t.Logf("cross-team revoke -> %d", rec.Code)
+		"/team/users/"+victim.ID.String()+"/delete", attackerCookie, url.Values{})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("delete by a non-superuser = %d, want 403", rec.Code)
+	}
 
-	after, err := h.accounts.ListPendingInvitations(ctx, "web-adv2-b")
-	if err != nil {
-		t.Fatalf("list after: %v", err)
+	// And they are still there.
+	var n int
+	if err := h.pool.QueryRow(ctx,
+		`SELECT count(*) FROM users WHERE id = $1`, victim.ID).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
 	}
-	if len(after) != 1 {
-		t.Fatal("EXPLOIT: an owner of team A revoked team B's invitation")
+	if n != 1 {
+		t.Fatal("EXPLOIT: a non-superuser deleted another account")
 	}
+
+	// The same for handing somebody a new password.
+	rec = h.postFormAs(t, "/team/users/"+victim.ID.String()+"/password", attackerCookie,
+		url.Values{"password": {"attacker-chosen-1"}})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("set password by a non-superuser = %d, want 403", rec.Code)
+	}
+	if _, err := h.accounts.Authenticate(ctx, "attacker-chosen-1", "attacker-chosen-1"); err == nil {
+		t.Fatal("EXPLOIT: a non-superuser set another account's password")
+	}
+	_ = attacker
 }
 
 // does the role follow a team switch? Owner of A, mere member of B.
@@ -154,25 +163,25 @@ func TestIsolationTeamPageDoesNotLeakAnotherTeam(t *testing.T) {
 // session id in advance and then wait for the victim to authenticate it.
 func TestIsolationSignInDoesNotAdoptAPresentedToken(t *testing.T) {
 	h := newLiveHarness(t, "web-iso5")
-	h.user(t, "fixation-iso@web.test")
+	h.user(t, "fixation-iso")
 
 	planted := &http.Cookie{Name: SessionCookie, Value: "attacker-chosen-token-value"}
 
-	before := len(h.mailer.messages())
 	req := httptest.NewRequest(http.MethodPost, "/sign-in",
-		strings.NewReader(url.Values{"email": {"fixation-iso@web.test"}}.Encode()))
+		strings.NewReader(url.Values{
+			"username": {"fixation-iso"}, "password": {testPassword},
+		}.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(planted)
 	rec := httptest.NewRecorder()
 	h.handler.ServeHTTP(rec, req)
 
-	sent := h.mailer.messages()
-	if len(sent) != before+1 {
-		t.Fatalf("no sign-in mail: %d", len(sent))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST /sign-in = %d, want 303", rec.Code)
 	}
-	c := sessionCookie(h.follow(t, linkIn(t, sent[len(sent)-1].TextBody)))
+	c := sessionCookie(rec)
 	if c == nil {
-		t.Fatal("the callback issued no cookie")
+		t.Fatal("sign-in issued no cookie")
 	}
 	if c.Value == planted.Value {
 		t.Fatal("sign-in adopted the token the caller presented — session fixation")

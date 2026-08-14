@@ -101,20 +101,31 @@ type Pushes interface {
 // one: the sign-in page has to be testable without a database, and this package
 // has no business knowing how a person is stored.
 type Accounts interface {
-	// IssueMagicLink mints a sign-in link, reporting whether the address
-	// belongs to anyone. Nothing is mailed when it does not, and nothing about
-	// the difference reaches the visitor.
-	IssueMagicLink(
-		ctx context.Context, email string, ttl time.Duration,
-	) (raw string, user account.User, existed bool, err error)
+	// Authenticate resolves a username and password to a person. Every way of
+	// failing comes back as account.ErrBadCredentials, so the form cannot be
+	// used to discover which names exist.
+	Authenticate(ctx context.Context, username, password string) (account.User, error)
 
-	// EnsureUser creates a person, or returns the one already there. Used only
-	// to bootstrap the configured owner of a fresh install.
-	EnsureUser(ctx context.Context, email, displayName string) (account.User, error)
+	// CreateUser adds somebody who can sign in. Superuser-only, checked there
+	// against the database rather than against anything the session carries.
+	CreateUser(
+		ctx context.Context, actor uuid.UUID, username, password, displayName string, superuser bool,
+	) (account.User, error)
 
-	// ConsumeMagicLink spends a link and returns the person it proves. Unknown,
-	// expired and already-spent links all come back as account.ErrTokenInvalid.
-	ConsumeMagicLink(ctx context.Context, raw string) (account.User, error)
+	// ListUsers is what the people page shows. Superuser-only.
+	ListUsers(ctx context.Context, actor uuid.UUID) ([]account.User, error)
+
+	// SetPassword changes a password. Anyone may change their own; changing
+	// somebody else's requires being a superuser.
+	SetPassword(ctx context.Context, actor, target uuid.UUID, password string) error
+
+	// DeleteUser removes a person, their sessions and their memberships.
+	DeleteUser(ctx context.Context, actor, target uuid.UUID) error
+
+	// IsSuperuser gates the people page. Read per request rather than carried
+	// in the session, so authority taken away takes effect on the next click
+	// rather than at the next sign-in.
+	IsSuperuser(ctx context.Context, id uuid.UUID) (bool, error)
 
 	// TeamsFor lists the teams a person may act as.
 	TeamsFor(ctx context.Context, userID uuid.UUID) ([]account.Membership, error)
@@ -146,32 +157,9 @@ type Accounts interface {
 	// answer to a cookie that has been copied off a machine.
 	RevokeAllSessions(ctx context.Context, userID uuid.UUID) error
 
-	// InvitationFor reads an invitation without spending it, so a visitor who
-	// is not signed in can be sent a link to the address it names instead of
-	// being let in on the strength of holding the token.
-	InvitationFor(ctx context.Context, raw string) (account.Invitation, error)
-
-	// AcceptInvitation spends one. It checks the address itself, so a
-	// signed-in stranger holding the token is refused there rather than here.
-	AcceptInvitation(ctx context.Context, raw string, userID uuid.UUID) (string, account.Role, error)
-
-	// ListMembers and ListPendingInvitations are what the team page shows.
-	// Both are scoped by team, and the team comes from the caller's session
-	// rather than from the request.
+	// ListMembers is what the people page shows for a team. Scoped by team, and
+	// the team comes from the caller's session rather than from the request.
 	ListMembers(ctx context.Context, teamID string) ([]account.Member, error)
-	ListPendingInvitations(ctx context.Context, teamID string) ([]account.Invitation, error)
-
-	// Invite issues an invitation and returns the token to mail. The token is
-	// returned rather than stored anywhere readable, so the message is the only
-	// place it exists.
-	Invite(
-		ctx context.Context, actor uuid.UUID, teamID, email string,
-		role account.Role, ttl time.Duration,
-	) (string, error)
-
-	// RevokeInvitation withdraws one. The mail cannot be recalled, so deleting
-	// the row is the only way to take an invitation back.
-	RevokeInvitation(ctx context.Context, actor uuid.UUID, teamID string, id uuid.UUID) error
 
 	// SetRole and RemoveMember change who may do what. Both check the actor's
 	// own authority and refuse to leave the team without an owner.
@@ -282,15 +270,6 @@ type Options struct {
 	// the settings page can show whether links are actually being sent.
 	MailTransport string
 
-	// BootstrapEmail is the address allowed to create itself on first sign-in.
-	//
-	// A link is only ever issued to an address that already has an account,
-	// which is what stops the sign-in form filling the user table. On a fresh
-	// install that leaves nobody able to get in at all: no user, so no link, so
-	// no user. This names the one address exempt from that, and only while it
-	// has no account — once it does, it is an ordinary person like anyone else.
-	BootstrapEmail string
-
 	// BootstrapTeamID and BootstrapTeamName are the install's configured owner
 	// — OZYMANDIS_OWNER_ID and OZYMANDIS_OWNER_NAME. The first person to sign in
 	// inherits that team, so the apps an install already deployed under it stay
@@ -347,14 +326,13 @@ type Server struct {
 	// backups schedules and restores. Nil leaves the backup surface off.
 	backups Backups
 
-	accounts       Accounts
-	mailer         notify.Mailer
-	baseURL        string
-	magicTTL       time.Duration
-	sessionTTL     time.Duration
-	bootstrapID    string
-	bootstrapName  string
-	bootstrapEmail string
+	accounts      Accounts
+	mailer        notify.Mailer
+	baseURL       string
+	magicTTL      time.Duration
+	sessionTTL    time.Duration
+	bootstrapID   string
+	bootstrapName string
 
 	// mailTransport names how links are delivered, purely so the settings page
 	// can say. "log" means nothing is actually sent.
@@ -380,12 +358,12 @@ func New(opts Options) (*Server, error) {
 		opts.Version = "dev"
 	}
 	if opts.Accounts != nil {
-		if opts.BaseURL == "" {
-			return nil, errors.New(
-				"web: a BaseURL is required with Accounts — sign-in links cannot be " +
-					"built from the request without letting a Host header decide where " +
-					"they point")
-		}
+		// BaseURL is not required any more. It existed because sign-in was a
+		// link that had to be built from a configured address rather than from a
+		// Host header an attacker chooses. A password is typed into a form on
+		// the page it was served from, so there is no link to build and nothing
+		// for a header to redirect.
+		//
 		// Refused rather than defaulted: without it the first person to sign in
 		// lands in a fresh empty team, and the apps the install already deployed
 		// belong to an owner nobody can authenticate as. That failure is silent
@@ -417,23 +395,22 @@ func New(opts Options) (*Server, error) {
 		resolver:  opts.CertResolver,
 		log:       opts.Logger,
 
-		joiner:         opts.Joiner,
-		stacks:         opts.Stacks,
-		nets:           opts.Nets,
-		registries:     opts.Registries,
-		pushes:         opts.Pushes,
-		logs:           opts.Logs,
-		backups:        opts.Backups,
-		accounts:       opts.Accounts,
-		mailer:         opts.Mailer,
-		baseURL:        strings.TrimRight(opts.BaseURL, "/"),
-		magicTTL:       opts.MagicLinkTTL,
-		sessionTTL:     opts.SessionTTL,
-		bootstrapID:    opts.BootstrapTeamID,
-		bootstrapName:  opts.BootstrapTeamName,
-		bootstrapEmail: strings.TrimSpace(opts.BootstrapEmail),
-		mailTransport:  cmp.Or(opts.MailTransport, "log"),
-		signInLimit:    newAttemptLimiter(signInWindow),
+		joiner:        opts.Joiner,
+		stacks:        opts.Stacks,
+		nets:          opts.Nets,
+		registries:    opts.Registries,
+		pushes:        opts.Pushes,
+		logs:          opts.Logs,
+		backups:       opts.Backups,
+		accounts:      opts.Accounts,
+		mailer:        opts.Mailer,
+		baseURL:       strings.TrimRight(opts.BaseURL, "/"),
+		magicTTL:      opts.MagicLinkTTL,
+		sessionTTL:    opts.SessionTTL,
+		bootstrapID:   opts.BootstrapTeamID,
+		bootstrapName: opts.BootstrapTeamName,
+		mailTransport: cmp.Or(opts.MailTransport, "log"),
+		signInLimit:   newAttemptLimiter(signInWindow),
 	}, nil
 }
 
@@ -474,18 +451,6 @@ func (s *Server) Handler() http.Handler {
 	if s.accounts != nil {
 		r.Get("/sign-in", s.signInPage)
 		r.Post("/sign-in", s.signInRequest)
-		// The callback is a GET because it is a link in a mail message and
-		// nothing else can be, which is the one exception to every mutating
-		// route being a POST. What makes it tolerable is that the token is
-		// single-use and short-lived: a mail client that prefetches links spends
-		// one its own recipient asked for, and a crawler has nothing to guess.
-		r.Get("/auth/{token}", s.signInCallback)
-
-		// Outside the authenticated group because the point of an invitation is
-		// that the person following it may not have an account yet. The handler
-		// establishes who they are before spending anything — the token is not
-		// treated as proof of identity.
-		r.Get("/invitations/{token}", s.acceptInvitation)
 
 		// Sign-out is POST only. A GET that ends a session is one a prefetching
 		// browser, a crawler or an <img> tag on another site can fire, and being
@@ -673,8 +638,9 @@ func (s *Server) Handler() http.Handler {
 			r.Post("/apps/{name}/storage/{volume}/delete", s.storageDelete)
 
 			if s.accounts != nil {
-				r.Post("/team/invite", s.teamInvite)
-				r.Post("/team/invitations/{id}/revoke", s.teamRevokeInvitation)
+				r.Post("/team/users", s.teamCreateUser)
+				r.Post("/team/users/{id}/delete", s.teamDeleteUser)
+				r.Post("/team/users/{id}/password", s.teamSetPassword)
 				r.Post("/team/members/{id}/remove", s.teamRemoveMember)
 			}
 		})

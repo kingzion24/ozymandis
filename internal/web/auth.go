@@ -11,10 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
 	"github.com/kingzion24/ozymandis/internal/account"
-	"github.com/kingzion24/ozymandis/internal/notify"
 )
 
 // SessionCookie is the name of the cookie carrying a session token.
@@ -108,103 +105,69 @@ func (s *Server) signInPage(w http.ResponseWriter, r *http.Request) {
 	s.renderSignedOut(w, r, http.StatusOK, "Sign in", SignIn(SignInData{}))
 }
 
-// signInRequest mails a link to the address, if it belongs to anyone.
+// signInRequest checks a username and password and opens a session.
 //
-// The visitor is answered identically either way — same page, same status, and,
-// through the floor, near enough the same time. Everything that differs between
-// a registered and an unregistered address happens inside the floor and is
-// visible only in the mailbox of whoever owns the address.
+// Every way of failing is answered identically — same page, same status, and
+// through the floor, near enough the same time. A wrong password and a name
+// that belongs to nobody must not be distinguishable, or the form becomes a way
+// to discover who has an account on this install.
 func (s *Server) signInRequest(w http.ResponseWriter, r *http.Request) {
-	email, err := parseEmail(r.FormValue("email"))
-	if err != nil {
-		// Answered without the floor on purpose: malformed input is a mistake
-		// the visitor can already see, not a fact about who has an account.
+	username := strings.TrimSpace(r.FormValue("username"))
+	password := r.FormValue("password")
+
+	if username == "" || password == "" {
+		// Answered without the floor on purpose: an empty field is a mistake the
+		// visitor can already see, not a fact about who has an account.
 		s.renderSignedOut(w, r, http.StatusUnprocessableEntity, "Sign in", SignIn(SignInData{
-			Email: r.FormValue("email"),
-			Error: err.Error(),
+			Username: username,
+			Error:    "Enter your username and password.",
 		}))
 		return
 	}
 
-	// Both counters are asked, not short-circuited, so an address already over
-	// its limit still counts against the client that keeps trying it.
-	// Lowercased for the counter because the lookup is case-insensitive: without
-	// it, alternating the capitalisation of one address buys an unlimited budget.
-	addressOK := s.signInLimit.allow("address:"+strings.ToLower(email), signInAttemptsPerAddress)
+	// Both counters are asked, not short-circuited, so a name already over its
+	// limit still counts against the client that keeps trying it. Lowercased
+	// for the counter because the lookup is case-insensitive: without it,
+	// alternating the capitalisation of one name buys an unlimited budget.
+	userOK := s.signInLimit.allow("user:"+strings.ToLower(username), signInAttemptsPerAddress)
 	clientOK := s.signInLimit.allow("client:"+clientIP(r), signInAttemptsPerIP)
-	if !addressOK || !clientOK {
-		// Refusal depends on the attempt count and never on whether the address
+	if !userOK || !clientOK {
+		// Refusal depends on the attempt count and never on whether the name
 		// exists, so saying so plainly leaks nothing.
 		s.renderSignedOut(w, r, http.StatusTooManyRequests, "Sign in", SignIn(SignInData{
-			Email: email,
-			Error: "Too many sign-in attempts. Try again in a few minutes.",
+			Username: username,
+			Error:    "Too many sign-in attempts. Try again in a few minutes.",
 		}))
 		return
 	}
 
-	withFloor(signInFloor, func() { s.mailSignInLink(r.Context(), email) })
-
-	s.renderSignedOut(w, r, http.StatusOK, "Check your mail", CheckMail())
-}
-
-// mailSignInLink issues a link and delivers it, or does neither.
-//
-// Every failure here is swallowed into the log. The caller renders the same
-// page regardless: a lookup error or a refused relay that changed the response
-// would be an oracle in its own right, answering "is this address registered?"
-// with "the server behaved differently".
-func (s *Server) mailSignInLink(ctx context.Context, email string) {
-	// A fresh install has nobody, and a link is only issued to somebody — so
-	// without this the first person can never get in. Creating the account is
-	// confined to the one configured address, and only while it has none: after
-	// that this does nothing and the address is ordinary.
-	s.bootstrapAccount(ctx, email)
-
-	raw, user, existed, err := s.accounts.IssueMagicLink(ctx, email, s.magicTTL)
+	var (
+		user account.User
+		err  error
+	)
+	withFloor(signInFloor, func() {
+		user, err = s.accounts.Authenticate(r.Context(), username, password)
+	})
 	if err != nil {
-		s.log.Error("issue sign-in link", slog.String("error", err.Error()))
-		return
-	}
-	if !existed {
-		return
-	}
-
-	// Built from the configured base URL, never from the Host header: a link
-	// built from a header is a link an attacker can point at their own server
-	// and have Ozymandis mail to a real person.
-	link := s.baseURL + "/auth/" + raw
-
-	if err := s.mailer.Send(ctx, notify.Message{
-		To:       user.Email,
-		Subject:  "Your Ozymandis sign-in link",
-		TextBody: signInBody(link, s.magicTTL),
-	}); err != nil {
-		s.log.Error("send sign-in link",
-			slog.String("to", user.Email), slog.String("error", err.Error()))
-	}
-}
-
-// signInCallback spends a magic link and opens a session on it.
-//
-// The link is the whole credential, so everything downstream follows from
-// ConsumeMagicLink succeeding: the person is who the address says, and the
-// cookie is issued for them and for a team they are proven to belong to.
-func (s *Server) signInCallback(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	user, err := s.accounts.ConsumeMagicLink(ctx, chi.URLParam(r, "token"))
-	if err != nil {
-		if !errors.Is(err, account.ErrTokenInvalid) {
-			s.log.Error("consume sign-in link", slog.String("error", err.Error()))
+		if !errors.Is(err, account.ErrBadCredentials) {
+			s.log.Error("authenticate", slog.String("error", err.Error()))
 		}
-		// Unknown, expired and already-spent links are answered alike, because
-		// "this link has already been used" tells whoever is holding a guessed
-		// token that they guessed a real one.
 		s.renderSignedOut(w, r, http.StatusUnauthorized, "Sign in", SignIn(SignInData{
-			Error: "That sign-in link is no longer valid. Ask for a new one.",
+			Username: username,
+			Error:    "Incorrect username or password.",
 		}))
 		return
 	}
+
+	s.openSession(w, r, user)
+}
+
+// openSession finds a team for the person and issues the cookie.
+//
+// Shared by sign-in and by a password change that re-establishes the session,
+// so that "which team does this person act as" is decided in one place.
+func (s *Server) openSession(w http.ResponseWriter, r *http.Request, user account.User) {
+	ctx := r.Context()
 
 	team, err := s.activeTeam(ctx, user)
 	if err != nil {
@@ -229,10 +192,12 @@ func (s *Server) signInCallback(w http.ResponseWriter, r *http.Request) {
 
 	setSessionCookie(w, r, raw, s.sessionTTL)
 	s.log.Info("signed in",
-		slog.String("user", user.ID.String()), slog.String("team", team))
+		slog.String("user", user.ID.String()),
+		slog.String("username", user.Username),
+		slog.String("team", team))
 
-	// See other rather than a temporary redirect: the link has been spent, and
-	// a browser that repeated this GET from history would meet a dead token.
+	// See other rather than a temporary redirect, so a browser repeating this
+	// from history does not re-post the credentials.
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -465,84 +430,6 @@ func recent(ts []time.Time, cutoff time.Time) []time.Time {
 // The token is not proof of identity. Acceptance is bound to the address the
 // invitation names, so a visitor who is not signed in is sent a sign-in link to
 // that address rather than let in — which makes a forwarded or intercepted
-// invitation useless to anyone who cannot read that mailbox.
-//
-// Deliberately outside the authenticated group: the whole point is that the
-// person following it may have no account yet.
-func (s *Server) acceptInvitation(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	token := chi.URLParam(r, "token")
-
-	// Signed in already: spend it. AcceptInvitation checks the address itself,
-	// so a signed-in stranger is refused here rather than trusted.
-	if sess, err := s.accounts.ResolveSession(ctx, sessionToken(r)); err == nil {
-		team, role, err := s.accounts.AcceptInvitation(ctx, token, sess.UserID)
-		if err != nil {
-			s.invitationFailed(w, r, err)
-			return
-		}
-		s.log.Info("invitation accepted",
-			slog.String("team", team), slog.String("role", string(role)))
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-		return
-	}
-
-	// Not signed in. Read the invitation without spending it, and mail a
-	// sign-in link to the address it names.
-	inv, err := s.accounts.InvitationFor(ctx, token)
-	if err != nil {
-		s.invitationFailed(w, r, err)
-		return
-	}
-
-	raw, _, existed, err := s.accounts.IssueMagicLink(ctx, inv.Email, s.magicTTL)
-	if err != nil {
-		s.log.Error("issue sign-in link for an invitation", slog.String("error", err.Error()))
-		http.Error(w, "could not send a sign-in link", http.StatusInternalServerError)
-		return
-	}
-	if existed || raw != "" {
-		msg := notify.Message{
-			To:      inv.Email,
-			Subject: "Sign in to Ozymandis to accept your invitation",
-			TextBody: "Sign in to accept your invitation:\n\n" +
-				s.baseURL + "/auth/" + raw + "\n\n" +
-				"Then open the invitation link again.\n" +
-				"If you were not expecting this, ignore it.",
-		}
-		if err := s.mailer.Send(ctx, msg); err != nil {
-			s.log.Error("send invitation sign-in link", slog.String("error", err.Error()))
-		}
-	}
-
-	// The address is not echoed back. Whoever is holding this link may not be
-	// the person it was sent to, and telling them which mailbox to watch would
-	// be the disclosure the binding exists to prevent.
-	s.renderSignedOut(w, r, http.StatusOK, "Check your mail", CheckMail())
-}
-
-// invitationFailed answers a link that cannot be spent.
-//
-// Expired, already accepted, revoked and never-existed are one response on
-// purpose: distinguishing them tells whoever is holding a stray token which
-// kind of stray it is.
-func (s *Server) invitationFailed(w http.ResponseWriter, r *http.Request, err error) {
-	if !errors.Is(err, account.ErrTokenInvalid) {
-		s.log.Error("accept invitation", slog.String("error", err.Error()))
-		http.Error(w, "could not accept the invitation", http.StatusInternalServerError)
-		return
-	}
-	http.Error(w, "this invitation is no longer valid", http.StatusNotFound)
-}
-
-// signInRedirect sends a request with no usable session to the sign-in page.
-//
-// It runs before identity.Middleware rather than replacing it: the middleware
-// stays the single place that resolves an owner, and this only decides what an
-// unresolved request should see. Answering 401 is correct for a machine and
-// useless to a person, who gets a blank page with nothing to click.
-//
-// It does not carry the attempted path through. A return-to parameter is an
 // open-redirect surface, and the benefit — landing back on the page you asked
 // for — is small next to getting that wrong.
 // Only GET is redirected. A person navigating needs somewhere to go; a form
@@ -574,16 +461,3 @@ func (s *Server) signInRedirect(next http.Handler) http.Handler {
 // Failures are swallowed to the log. The caller renders the same page whatever
 // happened here, and an error that changed the response would say whether the
 // address is the configured one.
-func (s *Server) bootstrapAccount(ctx context.Context, email string) {
-	if s.bootstrapEmail == "" || !strings.EqualFold(email, s.bootstrapEmail) {
-		return
-	}
-	created, err := s.accounts.EnsureUser(ctx, email, "")
-	if err != nil {
-		s.log.Error("bootstrap the configured owner",
-			slog.String("error", err.Error()))
-		return
-	}
-	s.log.Info("created the configured owner on first sign-in",
-		slog.String("user", created.ID.String()))
-}

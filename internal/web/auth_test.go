@@ -1,7 +1,6 @@
 package web
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -16,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -136,9 +136,9 @@ func TestSessionCookieNameMatchesTheProvider(t *testing.T) {
 // fakeAccounts stands in for the account service, so the sign-in surface can be
 // tested without a database — the same reason Apps is an interface.
 //
-// Any address beginning "known" is registered. issueDelay stands for the extra
-// INSERT that issuing a link for a registered address costs and an unregistered
-// one does not: it is the difference the timing floor has to hide.
+// Any username beginning "known" exists, and its password is "correct-horse".
+// issueDelay stands for the bcrypt comparison a real user's row costs and an
+// absent one would not: it is the difference the timing floor has to hide.
 type fakeAccounts struct {
 	mu         sync.Mutex
 	issueDelay time.Duration
@@ -146,23 +146,48 @@ type fakeAccounts struct {
 	asked      []string
 }
 
-func (f *fakeAccounts) IssueMagicLink(
-	_ context.Context, email string, _ time.Duration,
-) (string, account.User, bool, error) {
+func (f *fakeAccounts) Authenticate(
+	_ context.Context, username, password string,
+) (account.User, error) {
 	f.mu.Lock()
-	f.asked = append(f.asked, email)
+	f.asked = append(f.asked, username)
 	err := f.err
 	delay := f.issueDelay
 	f.mu.Unlock()
 
 	if err != nil {
-		return "", account.User{}, false, err
+		return account.User{}, err
 	}
-	if !strings.HasPrefix(email, "known") {
-		return "", account.User{}, false, nil
+	if !strings.HasPrefix(username, "known") {
+		return account.User{}, account.ErrBadCredentials
 	}
 	time.Sleep(delay)
-	return "raw-token-for-" + email, account.User{Email: email}, true, nil
+	if password != "correct-horse" {
+		return account.User{}, account.ErrBadCredentials
+	}
+	return account.User{Username: username}, nil
+}
+
+func (f *fakeAccounts) CreateUser(
+	context.Context, uuid.UUID, string, string, string, bool,
+) (account.User, error) {
+	return account.User{}, errNoFakeAccountsBackend
+}
+
+func (f *fakeAccounts) ListUsers(context.Context, uuid.UUID) ([]account.User, error) {
+	return nil, errNoFakeAccountsBackend
+}
+
+func (f *fakeAccounts) SetPassword(context.Context, uuid.UUID, uuid.UUID, string) error {
+	return errNoFakeAccountsBackend
+}
+
+func (f *fakeAccounts) DeleteUser(context.Context, uuid.UUID, uuid.UUID) error {
+	return errNoFakeAccountsBackend
+}
+
+func (f *fakeAccounts) IsSuperuser(context.Context, uuid.UUID) (bool, error) {
+	return false, errNoFakeAccountsBackend
 }
 
 func (f *fakeAccounts) asking() []string {
@@ -172,17 +197,9 @@ func (f *fakeAccounts) asking() []string {
 }
 
 // The rest of the interface exists so this fake satisfies it, and refuses so
-// that a test which reaches the callback through it fails loudly instead of
-// quietly proving nothing. The callback is exercised against the real service,
-// where consuming a link and claiming a team mean something.
-func (f *fakeAccounts) EnsureUser(context.Context, string, string) (account.User, error) {
-	return account.User{}, errNoFakeAccountsBackend
-}
-
-func (f *fakeAccounts) ConsumeMagicLink(context.Context, string) (account.User, error) {
-	return account.User{}, account.ErrTokenInvalid
-}
-
+// that a test reaching past authentication through it fails loudly instead of
+// quietly proving nothing. Sessions and teams are exercised against the real
+// service, where they mean something.
 func (f *fakeAccounts) TeamsFor(context.Context, uuid.UUID) ([]account.Membership, error) {
 	return nil, errNoFakeAccountsBackend
 }
@@ -219,36 +236,8 @@ func (f *fakeAccounts) RevokeAllSessions(context.Context, uuid.UUID) error {
 // with. These exist so fakeAccounts still satisfies the interface for the
 // sign-in tests, which have no business touching a team.
 
-func (f *fakeAccounts) InvitationFor(context.Context, string) (account.Invitation, error) {
-	return account.Invitation{}, account.ErrTokenInvalid
-}
-
-func (f *fakeAccounts) AcceptInvitation(
-	context.Context, string, uuid.UUID,
-) (string, account.Role, error) {
-	return "", "", account.ErrTokenInvalid
-}
-
 func (f *fakeAccounts) ListMembers(context.Context, string) ([]account.Member, error) {
 	return nil, errNoFakeAccountsBackend
-}
-
-func (f *fakeAccounts) ListPendingInvitations(
-	context.Context, string,
-) ([]account.Invitation, error) {
-	return nil, errNoFakeAccountsBackend
-}
-
-func (f *fakeAccounts) Invite(
-	context.Context, uuid.UUID, string, string, account.Role, time.Duration,
-) (string, error) {
-	return "", errNoFakeAccountsBackend
-}
-
-func (f *fakeAccounts) RevokeInvitation(
-	context.Context, uuid.UUID, string, uuid.UUID,
-) error {
-	return errNoFakeAccountsBackend
 }
 
 func (f *fakeAccounts) SetRole(
@@ -317,8 +306,8 @@ func signInServer(t *testing.T, accounts Accounts, mailer notify.Mailer) http.Ha
 	})
 }
 
-func postSignIn(h http.Handler, email, remoteAddr string) *httptest.ResponseRecorder {
-	body := url.Values{"email": {email}}.Encode()
+func postSignIn(h http.Handler, username, password, remoteAddr string) *httptest.ResponseRecorder {
+	body := url.Values{"username": {username}, "password": {password}}.Encode()
 	r := httptest.NewRequest(http.MethodPost, "/sign-in", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if remoteAddr != "" {
@@ -339,44 +328,58 @@ func TestSignInPageRendersOutsideAuth(t *testing.T) {
 		t.Fatalf("GET /sign-in = %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{`method="post"`, `action="/sign-in"`, `name="email"`} {
+	for _, want := range []string{
+		`method="post"`, `action="/sign-in"`, `name="username"`, `name="password"`,
+	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("sign-in page missing %q", want)
 		}
 	}
 }
 
-// A sign-in form that reveals which addresses are registered is a user-list
-// disclosure. Status, body and headers must be byte-identical.
-func TestSignInDoesNotRevealWhetherAnAddressExists(t *testing.T) {
+// A sign-in form that reveals which usernames exist is a user-list disclosure.
+// Status, headers and the refusal itself must not differ.
+func TestSignInDoesNotRevealWhetherAUsernameExists(t *testing.T) {
 	accounts := &fakeAccounts{}
 	mailer := &fakeMailer{}
 	h := signInServer(t, accounts, mailer)
 
-	registered := postSignIn(h, "known@example.test", "198.51.100.7:3000")
-	stranger := postSignIn(h, "nobody@example.test", "198.51.100.8:3000")
+	registered := postSignIn(h, "known", "wrong-horse-x", "198.51.100.7:3000")
+	stranger := postSignIn(h, "nobody", "wrong-horse-x", "198.51.100.8:3000")
 
 	if registered.Code != stranger.Code {
 		t.Fatalf("status: registered = %d, unregistered = %d — the difference is the disclosure",
 			registered.Code, stranger.Code)
 	}
-	if registered.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", registered.Code)
+	if registered.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", registered.Code)
 	}
-	if registered.Body.String() != stranger.Body.String() {
-		t.Fatalf("bodies differ:\nregistered:   %q\nunregistered: %q",
-			registered.Body.String(), stranger.Body.String())
+	// The bodies are not compared byte for byte any more: the form echoes back
+	// the username that was typed, so they differ by exactly that and by nothing
+	// else. What must be identical is the refusal itself — a page that said "no
+	// such user" for one and "wrong password" for the other is the disclosure.
+	const refusal = "Incorrect username or password."
+	for name, body := range map[string]string{
+		"registered": registered.Body.String(), "unregistered": stranger.Body.String(),
+	} {
+		if !strings.Contains(body, refusal) {
+			t.Fatalf("%s response does not carry the one refusal message", name)
+		}
+	}
+	if normalised := strings.Replace(stranger.Body.String(), "nobody", "known", 1); normalised !=
+		registered.Body.String() {
+		t.Fatal("the two responses differ by more than the username echoed back")
 	}
 	if !maps.EqualFunc(registered.Result().Header, stranger.Result().Header, slices.Equal) {
 		t.Fatalf("headers differ:\nregistered:   %v\nunregistered: %v",
 			registered.Result().Header, stranger.Result().Header)
 	}
 
-	// ...and the difference that does exist is invisible from outside: a link
-	// goes to the registered address and nothing at all to the other.
-	sent := mailer.messages()
-	if len(sent) != 1 || sent[0].To != "known@example.test" {
-		t.Fatalf("mail sent = %v, want exactly one to the registered address", sent)
+	// And nothing is sent to anybody. Sign-in used to mail a link to an address
+	// that existed and nothing to one that did not, which was the difference the
+	// timing floor had to hide. There is now no such difference to hide.
+	if sent := mailer.messages(); len(sent) != 0 {
+		t.Fatalf("sign-in sent mail: %v", sent)
 	}
 }
 
@@ -398,9 +401,9 @@ func TestSignInResponseTimeDoesNotLeakExistence(t *testing.T) {
 	unknown := make([]time.Duration, samples)
 	codes := make([]int, 2*samples)
 
-	timed := func(email, ip string) (time.Duration, int) {
+	timed := func(name, ip string) (time.Duration, int) {
 		start := time.Now()
-		rec := postSignIn(h, email, ip)
+		rec := postSignIn(h, name, "wrong-horse-x", ip)
 		return time.Since(start), rec.Code
 	}
 
@@ -417,8 +420,8 @@ func TestSignInResponseTimeDoesNotLeakExistence(t *testing.T) {
 			defer wg.Done()
 			for i := range work {
 				ip := fmt.Sprintf("10.1.%d.%d:5000", i/256, i%256)
-				known[i], codes[2*i] = timed(fmt.Sprintf("known-%d@example.test", i), ip)
-				unknown[i], codes[2*i+1] = timed(fmt.Sprintf("nobody-%d@example.test", i), ip)
+				known[i], codes[2*i] = timed(fmt.Sprintf("known-%d", i), ip)
+				unknown[i], codes[2*i+1] = timed(fmt.Sprintf("nobody-%d", i), ip)
 			}
 		}()
 	}
@@ -429,7 +432,7 @@ func TestSignInResponseTimeDoesNotLeakExistence(t *testing.T) {
 	wg.Wait()
 
 	for i, code := range codes {
-		if code != http.StatusOK {
+		if code != http.StatusUnauthorized {
 			t.Fatalf("sample %d answered %d — the measurement is not of the sign-in path", i, code)
 		}
 	}
@@ -451,62 +454,12 @@ func median(d []time.Duration) time.Duration {
 	return s[len(s)/2]
 }
 
-// With no relay configured the link goes to the log, which is the only way back
-// into an install whose mail broke after accounts were switched on. Sign-in
-// must behave the same either way.
-func TestSignInWithNoMailTransportStillSucceeds(t *testing.T) {
-	var logged bytes.Buffer
-	h := testServer(t, Options{
-		Accounts:        &fakeAccounts{},
-		BaseURL:         "https://ozymandis.test",
-		BootstrapTeamID: "web-signin",
-		Logger:          slog.New(slog.NewTextHandler(&logged, nil)),
-	})
-
-	rec := postSignIn(h, "known@example.test", "203.0.113.5:4000")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "Check your mail") {
-		t.Fatalf("body = %q, want the check-your-mail page", rec.Body.String())
-	}
-	if !strings.Contains(logged.String(), "https://ozymandis.test/auth/raw-token-for-known@example.test") {
-		t.Fatalf("the sign-in link never reached the log, so there is no way in:\n%s",
-			logged.String())
-	}
-}
-
-// Delivery failure must not become an oracle of its own, so it changes nothing
-// the visitor can see — and is logged, because otherwise nobody ever finds out
-// mail is broken.
-func TestSignInSurvivesAMailFailure(t *testing.T) {
-	var logged bytes.Buffer
-	h := testServer(t, Options{
-		Accounts:        &fakeAccounts{},
-		Mailer:          &fakeMailer{err: errors.New("relay refused")},
-		BaseURL:         "https://ozymandis.test",
-		BootstrapTeamID: "web-signin",
-		Logger:          slog.New(slog.NewTextHandler(&logged, nil)),
-	})
-
-	failed := postSignIn(h, "known@example.test", "203.0.113.9:4000")
-	fine := postSignIn(h, "nobody@example.test", "203.0.113.10:4000")
-
-	if failed.Code != fine.Code || failed.Body.String() != fine.Body.String() {
-		t.Fatalf("a failed send is visible in the response: %d %q vs %d %q",
-			failed.Code, failed.Body.String(), fine.Code, fine.Body.String())
-	}
-	if !strings.Contains(logged.String(), "relay refused") {
-		t.Errorf("a send failure must reach the log:\n%s", logged.String())
-	}
-}
-
 func TestSignInRejectsAMalformedAddress(t *testing.T) {
 	accounts := &fakeAccounts{}
 	mailer := &fakeMailer{}
 	h := signInServer(t, accounts, mailer)
 
-	rec := postSignIn(h, "not an address", "203.0.113.11:4000")
+	rec := postSignIn(h, "", "", "203.0.113.11:4000")
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422", rec.Code)
 	}
@@ -537,19 +490,19 @@ func TestSignInIsRateLimited(t *testing.T) {
 
 	const same = "known@example.test"
 	for i := range signInAttemptsPerAddress {
-		if code := postSignIn(h, same, "192.0.2.20:5000").Code; code != http.StatusOK {
-			t.Fatalf("attempt %d = %d, want 200", i+1, code)
+		if code := postSignIn(h, same, "wrong-horse-x", "192.0.2.20:5000").Code; code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d = %d, want 401", i+1, code)
 		}
 	}
 	// Another client IP, so this is the address limit and not the IP one.
-	if code := postSignIn(h, same, "192.0.2.21:5000").Code; code != http.StatusTooManyRequests {
+	if code := postSignIn(h, same, "wrong-horse-x", "192.0.2.21:5000").Code; code != http.StatusTooManyRequests {
 		t.Errorf("attempt %d = %d, want 429", signInAttemptsPerAddress+1, code)
 	}
 
 	// The limit is per address and per client, not a global stop: everyone else
 	// can still sign in.
-	if code := postSignIn(h, "known-other@example.test", "192.0.2.22:5000").Code; code != http.StatusOK {
-		t.Errorf("an unrelated address = %d, want 200 — one attacker must not lock out the install", code)
+	if code := postSignIn(h, "known-other", "wrong-horse-x", "192.0.2.22:5000").Code; code != http.StatusUnauthorized {
+		t.Errorf("an unrelated username = %d, want 401 — one attacker must not lock out the install", code)
 	}
 
 	// ...and one client cannot spend the whole install's budget either. Run in
@@ -562,7 +515,7 @@ func TestSignInIsRateLimited(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			codes[i] = postSignIn(h, fmt.Sprintf("known-flood-%d@example.test", i), flooder).Code
+			codes[i] = postSignIn(h, fmt.Sprintf("known-flood-%d", i), "wrong-horse-x", flooder).Code
 		}()
 	}
 	wg.Wait()
@@ -573,24 +526,6 @@ func TestSignInIsRateLimited(t *testing.T) {
 	}
 }
 
-// Magic links are built from the configured base URL and never from the Host
-// header: a link built from a header is a link an attacker can point at their
-// own server and have Ozymandis mail to a real person.
-func TestAccountsRequireAConfiguredBaseURL(t *testing.T) {
-	_, err := New(Options{
-		Orchestrator:    newFailingOrchestrator(),
-		Identity:        identity.NewSingleOwner(identity.Owner{ID: "x"}),
-		Accounts:        &fakeAccounts{},
-		BootstrapTeamID: "owner-local",
-	})
-	if err == nil {
-		t.Fatal("expected accounts without a BaseURL to be refused")
-	}
-}
-
-// Without the configured team id the first person to sign in gets a fresh empty
-// team, and the apps the install already deployed belong to an owner nobody can
-// sign in as. Silently, which is why it is refused at construction.
 func TestAccountsRequireABootstrapTeam(t *testing.T) {
 	_, err := New(Options{
 		Orchestrator: newFailingOrchestrator(),
@@ -619,6 +554,10 @@ type liveHarness struct {
 	mailer   *fakeMailer
 	pool     *pgxpool.Pool
 	teamID   string
+
+	// names maps a test's label to the username actually created for it.
+	mu    sync.Mutex
+	names map[string]string
 }
 
 // newLiveHarness wires the engine against the test database, with teamID
@@ -652,20 +591,25 @@ func newLiveHarnessOwnedBy(t *testing.T, teamID, ownerEmail string) *liveHarness
 	}
 	t.Cleanup(pool.Close)
 
+	// Every account this package creates is named with the harnessPrefix, which
+	// is what makes it findable afterwards. It used to be an @web.test address;
+	// usernames replaced addresses as the identity, so the filter moved with it.
+	// Without this the suffix counter — which restarts with the process — would
+	// collide with rows left by the previous run.
 	purge := func() {
 		// A person who could not have the configured team gets one named after
-		// themselves, so it is found through the same address filter — and has
-		// to go before the user it is derived from.
+		// themselves, so it is found through the same filter — and has to go
+		// before the user it is derived from.
 		if _, err := pool.Exec(ctx, `DELETE FROM teams WHERE id IN (
 			SELECT 'user-' || u.id::text FROM users u
-			WHERE lower(u.email) LIKE '%@web.test')`); err != nil {
+			WHERE u.username LIKE $1)`, harnessPrefix+"%"); err != nil {
 			t.Errorf("purge personal teams: %v", err)
 		}
 		if _, err := pool.Exec(ctx, `DELETE FROM teams WHERE id LIKE 'web-%'`); err != nil {
 			t.Errorf("purge teams: %v", err)
 		}
 		if _, err := pool.Exec(ctx,
-			`DELETE FROM users WHERE lower(email) LIKE '%@web.test'`); err != nil {
+			`DELETE FROM users WHERE username LIKE $1`, harnessPrefix+"%"); err != nil {
 			t.Errorf("purge users: %v", err)
 		}
 	}
@@ -686,7 +630,6 @@ func newLiveHarnessOwnedBy(t *testing.T, teamID, ownerEmail string) *liveHarness
 		BaseURL:           "https://ozymandis.test",
 		BootstrapTeamID:   teamID,
 		BootstrapTeamName: "Local",
-		BootstrapEmail:    ownerEmail,
 		SessionTTL:        time.Hour,
 	})
 
@@ -711,37 +654,91 @@ func (h *liveHarness) installedApp(t *testing.T, name string) {
 	}
 }
 
-func (h *liveHarness) user(t *testing.T, email string) account.User {
+// testPassword is what every account these tests create signs in with.
+//
+// Fixed rather than random: no test asserts anything about the password itself,
+// and a generated one would only make a failure harder to reproduce.
+const testPassword = "test-password-1"
+
+// user creates somebody who can sign in.
+//
+// Every account needs a creator now, so the harness seeds a superuser once and
+// creates the rest through it — which is also the path the dashboard takes, so
+// the fixture exercises the same rule the product does.
+//
+// The key a test passes is a label, not the username. Two things are done to it
+// that a test should not have to think about: anything a username may not
+// contain is stripped, because these labels were email addresses before sign-in
+// was, and a suffix is added, because this database outlives any one test and
+// usernames are unique across the whole package. The mapping is remembered so
+// signIn can be handed the same label.
+func (h *liveHarness) user(t *testing.T, key string) account.User {
 	t.Helper()
-	u, err := h.accounts.EnsureUser(context.Background(), email, "")
+	ctx := context.Background()
+
+	boss, err := h.accounts.EnsureSuperuser(ctx, harnessPrefix+"superuser", testPassword)
 	if err != nil {
-		t.Fatalf("EnsureUser: %v", err)
+		t.Fatalf("EnsureSuperuser: %v", err)
 	}
+
+	name := harnessUsername(key)
+	u, err := h.accounts.CreateUser(ctx, boss.ID, name, testPassword, "", false)
+	if err != nil {
+		t.Fatalf("CreateUser %q: %v", name, err)
+	}
+
+	h.mu.Lock()
+	if h.names == nil {
+		h.names = map[string]string{}
+	}
+	h.names[key] = u.Username
+	h.mu.Unlock()
 	return u
 }
 
-// signIn walks the whole path: ask for a link, take it out of the mail, follow
-// it. The token exists nowhere else, which is exactly the person's position.
-func (h *liveHarness) signIn(t *testing.T, email string) *httptest.ResponseRecorder {
+// signIn posts the form the way a browser does, for a label user() was given.
+func (h *liveHarness) signIn(t *testing.T, key string) *httptest.ResponseRecorder {
 	t.Helper()
-	before := len(h.mailer.messages())
 
-	if code := postSignIn(h.handler, email, "198.51.100.1:2000").Code; code != http.StatusOK {
-		t.Fatalf("POST /sign-in for %s = %d, want 200", email, code)
+	h.mu.Lock()
+	name, ok := h.names[key]
+	h.mu.Unlock()
+	if !ok {
+		t.Fatalf("signIn(%q): no such user was created by the harness", key)
 	}
-	sent := h.mailer.messages()
-	if len(sent) != before+1 {
-		t.Fatalf("mails sent = %d, want one more than %d — no link to follow",
-			len(sent), before)
+
+	rec := postSignIn(h.handler, name, testPassword, "198.51.100.1:2000")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST /sign-in for %s = %d, want 303", name, rec.Code)
 	}
-	return h.follow(t, linkIn(t, sent[len(sent)-1].TextBody))
+	return rec
 }
 
-func (h *liveHarness) follow(t *testing.T, link string) *httptest.ResponseRecorder {
-	t.Helper()
-	rec := httptest.NewRecorder()
-	h.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, link, nil))
-	return rec
+// harnessPrefix marks every account this package creates, so the purge can find
+// them all without knowing what any individual test called them.
+const harnessPrefix = "wt-"
+
+var harnessSeq atomic.Int64
+
+// harnessUsername turns a test's label into a legal, unique username.
+func harnessUsername(key string) string {
+	if at := strings.IndexByte(key, '@'); at >= 0 {
+		key = key[:at]
+	}
+	clean := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r + 32
+		default:
+			return -1
+		}
+	}, key)
+	if clean == "" {
+		clean = "user"
+	}
+	return fmt.Sprintf("%s%s-%d", harnessPrefix, clean, harnessSeq.Add(1))
 }
 
 func (h *liveHarness) getAs(
@@ -781,21 +778,6 @@ func (h *liveHarness) owners(t *testing.T, teamID string) int {
 	return n
 }
 
-// linkIn pulls the sign-in URL out of the mail body.
-func linkIn(t *testing.T, body string) string {
-	t.Helper()
-	const prefix = "https://ozymandis.test/auth/"
-	i := strings.Index(body, prefix)
-	if i < 0 {
-		t.Fatalf("no sign-in link in the mail:\n%s", body)
-	}
-	link := body[i:]
-	if j := strings.IndexAny(link, " \r\n"); j >= 0 {
-		link = link[:j]
-	}
-	return link
-}
-
 func sessionCookie(rec *httptest.ResponseRecorder) *http.Cookie {
 	for _, c := range rec.Result().Cookies() {
 		if c.Name == SessionCookie {
@@ -830,105 +812,6 @@ func TestValidTokenCreatesASessionAndRedirects(t *testing.T) {
 	}
 }
 
-// The cookie must carry the flags from the cookie helper, on the one response
-// that ever sets it.
-func TestCallbackSetsTheSessionCookie(t *testing.T) {
-	h := newLiveHarness(t, "web-cookie")
-	h.user(t, "cookie@web.test")
-
-	c := sessionCookie(h.signIn(t, "cookie@web.test"))
-	if c == nil {
-		t.Fatal("the callback set no session cookie")
-	}
-	if !c.HttpOnly {
-		t.Error("HttpOnly must be set — script-readable session cookies are stealable by XSS")
-	}
-	if c.SameSite != http.SameSiteLaxMode {
-		t.Error("SameSite=Lax is the CSRF defence; without it every form needs a token")
-	}
-	if c.Path != "/" {
-		t.Errorf("Path = %q, want /", c.Path)
-	}
-	// The mailed link is https, so this one arrived over TLS.
-	if !c.Secure {
-		t.Error("Secure must be set when the link was followed over TLS")
-	}
-	if c.MaxAge <= 0 {
-		t.Errorf("MaxAge = %d, want the session TTL", c.MaxAge)
-	}
-
-	// ...and the same callback on a plain-HTTP install must not set it, or the
-	// browser drops the cookie and signing in appears to do nothing at all.
-	raw, _, existed, err := h.accounts.IssueMagicLink(
-		context.Background(), "cookie@web.test", time.Minute)
-	if err != nil || !existed {
-		t.Fatalf("IssueMagicLink: %v (existed=%v)", err, existed)
-	}
-	plain := sessionCookie(h.follow(t, "http://ozymandis.test/auth/"+raw))
-	if plain == nil {
-		t.Fatal("the callback set no session cookie over plain HTTP")
-	}
-	if plain.Secure {
-		t.Error("Secure must not be set on a plain-HTTP request")
-	}
-}
-
-// A link sits in a mailbox forever. One that still worked the second time would
-// be a permanent key to the account.
-func TestConsumedTokenIsRejected(t *testing.T) {
-	h := newLiveHarness(t, "web-consumed")
-	h.user(t, "spent@web.test")
-
-	if code := postSignIn(h.handler, "spent@web.test", "198.51.100.2:2000").Code; code != http.StatusOK {
-		t.Fatalf("POST /sign-in = %d, want 200", code)
-	}
-	sent := h.mailer.messages()
-	if len(sent) != 1 {
-		t.Fatalf("mails = %d, want 1", len(sent))
-	}
-	link := linkIn(t, sent[0].TextBody)
-
-	if code := h.follow(t, link).Code; code != http.StatusSeeOther {
-		t.Fatalf("first use = %d, want 303", code)
-	}
-
-	again := h.follow(t, link)
-	if again.Code == http.StatusSeeOther {
-		t.Fatal("the link worked twice")
-	}
-	if again.Code != http.StatusUnauthorized {
-		t.Errorf("second use = %d, want 401", again.Code)
-	}
-	if c := sessionCookie(again); c != nil && c.Value != "" {
-		t.Fatal("a spent link still handed out a session")
-	}
-}
-
-func TestExpiredTokenIsRejected(t *testing.T) {
-	h := newLiveHarness(t, "web-expired")
-	h.user(t, "stale@web.test")
-
-	// Issued directly, because the only way to hold an expired link is to have
-	// been given it before it expired.
-	raw, _, existed, err := h.accounts.IssueMagicLink(
-		context.Background(), "stale@web.test", -time.Minute)
-	if err != nil || !existed {
-		t.Fatalf("IssueMagicLink: %v (existed=%v)", err, existed)
-	}
-
-	rec := h.follow(t, "https://ozymandis.test/auth/"+raw)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("following an expired link = %d, want 401", rec.Code)
-	}
-	if c := sessionCookie(rec); c != nil && c.Value != "" {
-		t.Fatal("an expired link handed out a session")
-	}
-}
-
-// The spec's third lockout guard, dropped between spec and plan in sub-project
-// B. Without it an existing single-owner install switches accounts on and the
-// apps already deployed under OZYMANDIS_OWNER_ID belong to a team nobody can sign
-// in to.
 func TestFirstSignInInheritsTheConfiguredOwner(t *testing.T) {
 	h := newLiveHarness(t, "web-inherit")
 	h.installedApp(t, "legacy-app")
@@ -1282,63 +1165,67 @@ func deniedGET(t *testing.T, rec *httptest.ResponseRecorder, mustNotContain stri
 	return true
 }
 
-// TestFreshInstallCanBeEnteredByItsOwner is a regression test for a hole that
-// only a live run found.
+// TestFreshInstallCanBeEnteredByItsSuperuser is a regression test for a hole
+// that only a live run found.
 //
-// A link is issued only to an address that already has an account, which is
-// what stops the sign-in form filling the user table. On a fresh install that
-// left nobody able to sign in at all: no user, so no link, so no user. Every
-// existing test missed it because they all seed a person first.
-//
-// OZYMANDIS_OWNER_EMAIL names the one address allowed to create itself.
-func TestFreshInstallCanBeEnteredByItsOwner(t *testing.T) {
+// Sign-in used to be a link issued only to an address that already had an
+// account, which is what stopped the form filling the user table — and on a
+// fresh install left nobody able to sign in at all: no user, so no link, so no
+// user. Password sign-in removes the circle by seeding the superuser at
+// startup, and this is the test that says so.
+func TestFreshInstallCanBeEnteredByItsSuperuser(t *testing.T) {
 	h := newLiveHarnessOwnedBy(t, "web-fresh", "founder-fresh@web.test")
+	ctx := context.Background()
 
-	// Nobody has ever signed in. The configured owner must still get a link.
-	before := len(h.mailer.messages())
-	if code := postSignIn(h.handler, "founder-fresh@web.test", "198.51.100.5:2000").Code; code != http.StatusOK {
-		t.Fatalf("POST /sign-in = %d, want 200", code)
-	}
-	sent := h.mailer.messages()
-	if len(sent) != before+1 {
-		t.Fatal("the configured owner got no sign-in link — the install cannot be entered")
-	}
-
-	// And following it makes them the owner of the configured team.
-	rec := h.follow(t, linkIn(t, sent[len(sent)-1].TextBody))
-	if sessionCookie(rec) == nil {
-		t.Fatal("no session cookie after the founder signed in")
-	}
-	u, err := h.accounts.EnsureUser(context.Background(), "founder-fresh@web.test", "")
+	// Exactly what run() does at startup, and nothing more.
+	boss, err := h.accounts.EnsureSuperuser(ctx, harnessPrefix+"fresh-superuser", testPassword)
 	if err != nil {
-		t.Fatalf("EnsureUser: %v", err)
+		t.Fatalf("EnsureSuperuser: %v", err)
 	}
-	if role, err := h.accounts.RoleIn(context.Background(), u.ID, "web-fresh"); err != nil ||
+	if err := h.accounts.BootstrapOwner(ctx, "web-fresh", "Fresh", boss); err != nil {
+		t.Fatalf("BootstrapOwner: %v", err)
+	}
+
+	rec := postSignIn(h.handler, harnessPrefix+"fresh-superuser", testPassword, "198.51.100.5:2000")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST /sign-in = %d, want 303 — the install cannot be entered", rec.Code)
+	}
+	if sessionCookie(rec) == nil {
+		t.Fatal("no session cookie after the superuser signed in")
+	}
+
+	// And they own the team the install has been running as, so the apps it
+	// already had stay reachable.
+	if role, err := h.accounts.RoleIn(ctx, boss.ID, "web-fresh"); err != nil ||
 		role != account.RoleOwner {
-		t.Fatalf("founder role = %q (%v), want owner of the configured team", role, err)
+		t.Fatalf("superuser role = %q (%v), want owner of the configured team", role, err)
 	}
 }
 
-// The bootstrap is one address, not an open door. Anyone else is still unknown,
-// and the sign-in form must not create them.
+// The seeded superuser is one account, not an open door. Nobody else exists
+// until that superuser creates them, and the sign-in form must not create
+// anybody at all.
 func TestFreshInstallDoesNotAdmitAnyoneElse(t *testing.T) {
 	h := newLiveHarnessOwnedBy(t, "web-fresh2", "founder-fresh2@web.test")
+	ctx := context.Background()
 
-	before := len(h.mailer.messages())
-	if code := postSignIn(h.handler, "stranger-fresh2@web.test", "198.51.100.6:2000").Code; code != http.StatusOK {
-		t.Fatalf("POST /sign-in = %d, want 200", code)
+	if _, err := h.accounts.EnsureSuperuser(ctx, harnessPrefix+"fresh2-superuser", testPassword); err != nil {
+		t.Fatalf("EnsureSuperuser: %v", err)
 	}
-	if len(h.mailer.messages()) != before {
-		t.Fatal("a stranger was mailed a link on a fresh install")
+
+	if code := postSignIn(
+		h.handler, harnessPrefix+"stranger-fresh2", testPassword, "198.51.100.6:2000",
+	).Code; code != http.StatusUnauthorized {
+		t.Fatalf("POST /sign-in for a stranger = %d, want 401", code)
 	}
 
 	var n int
-	if err := h.pool.QueryRow(context.Background(),
-		`SELECT count(*) FROM users WHERE lower(email) = $1`,
-		"stranger-fresh2@web.test").Scan(&n); err != nil {
+	if err := h.pool.QueryRow(ctx,
+		`SELECT count(*) FROM users WHERE lower(username) = $1`,
+		harnessPrefix+"stranger-fresh2").Scan(&n); err != nil {
 		t.Fatalf("count: %v", err)
 	}
 	if n != 0 {
-		t.Fatal("the sign-in form created an account for a stranger")
+		t.Fatalf("the sign-in form created %d user rows for a stranger", n)
 	}
 }

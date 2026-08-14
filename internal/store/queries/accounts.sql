@@ -1,23 +1,44 @@
 -- Users and sessions carry no owner_id: a person exists before they belong to
--- any team. Memberships and invitations do, and stay scoped by it like
--- everything else.
+-- any team. Memberships do, and stay scoped by it like everything else.
+--
+-- Sign-in is username and password. There is no query here that looks a person
+-- up by address, because an address no longer identifies anybody — it is a
+-- contact field, and the credential is the password hash.
 
--- name: UpsertUser :one
-INSERT INTO users (email, display_name)
-VALUES (lower(@email::text), @display_name)
-ON CONFLICT (lower(email)) DO UPDATE
-SET display_name = CASE
-        WHEN excluded.display_name <> '' THEN excluded.display_name
-        ELSE users.display_name
-    END,
-    updated_at = now()
+-- name: CreateUser :one
+INSERT INTO users (username, password_hash, display_name, is_superuser)
+VALUES (lower(@username::text), @password_hash, @display_name, @is_superuser)
 RETURNING *;
 
--- name: GetUserByEmail :one
-SELECT * FROM users WHERE lower(email) = lower(@email::text);
+-- Seeding the superuser is an upsert on the name, and it deliberately does not
+-- touch password_hash. Re-running the process must not put the built-in default
+-- back over a password somebody has since changed — that would make every
+-- restart a silent credential reset.
+-- name: EnsureSuperuser :one
+INSERT INTO users (username, password_hash, display_name, is_superuser)
+VALUES (lower(@username::text), @password_hash, @display_name, true)
+ON CONFLICT (lower(username)) DO UPDATE
+SET is_superuser = true,
+    updated_at   = now()
+RETURNING *;
+
+-- name: GetUserByUsername :one
+SELECT * FROM users WHERE lower(username) = lower(@username::text);
 
 -- name: GetUserByID :one
 SELECT * FROM users WHERE id = @id;
+
+-- name: ListUsers :many
+SELECT * FROM users ORDER BY is_superuser DESC, lower(username);
+
+-- name: SetUserPassword :exec
+UPDATE users SET password_hash = @password_hash, updated_at = now() WHERE id = @id;
+
+-- name: DeleteUser :execrows
+DELETE FROM users WHERE id = @id AND NOT is_superuser;
+
+-- name: CountSuperusers :one
+SELECT count(*) FROM users WHERE is_superuser;
 
 -- name: CreateTeam :one
 INSERT INTO teams (id, display_name)
@@ -51,11 +72,11 @@ WHERE m.user_id = @user_id
 ORDER BY t.display_name;
 
 -- name: ListMembersOfTeam :many
-SELECT m.*, u.email, u.display_name AS user_name
+SELECT m.*, u.username, u.display_name AS user_name
 FROM memberships m
 JOIN users u ON u.id = m.user_id
 WHERE m.owner_id = @owner_id
-ORDER BY u.email;
+ORDER BY lower(u.username);
 
 -- name: DeleteMembership :exec
 DELETE FROM memberships WHERE user_id = @user_id AND owner_id = @owner_id;
@@ -107,82 +128,3 @@ DELETE FROM sessions WHERE user_id = @user_id;
 
 -- name: DeleteExpiredSessions :exec
 DELETE FROM sessions WHERE expires_at <= now();
-
--- name: CreateMagicLink :one
-INSERT INTO magic_links (user_id, token_hash, expires_at)
-VALUES (@user_id, @token_hash, @expires_at)
-RETURNING *;
-
--- Marking consumed and reading the user are one statement, so there is no
--- window between the two in which a second request can also find the link
--- unconsumed. Expiry is in the same condition for the same reason: a link that
--- has just expired must fail here rather than in whatever checks it later.
--- name: ConsumeMagicLink :one
-WITH consumed AS (
-    UPDATE magic_links
-    SET consumed_at = now()
-    WHERE token_hash = @token_hash
-      AND consumed_at IS NULL
-      AND expires_at > now()
-    RETURNING user_id
-)
-SELECT u.* FROM users u JOIN consumed ON consumed.user_id = u.id;
-
--- name: DeleteExpiredMagicLinks :exec
-DELETE FROM magic_links WHERE expires_at <= now();
-
--- Re-inviting replaces the pending invitation rather than adding a second one,
--- so the token in the older mail stops working. Two live tokens for one address
--- would mean revoking the invitation on screen leaves the other one usable.
--- name: UpsertInvitation :one
-INSERT INTO invitations (owner_id, email, role, token_hash, invited_by, expires_at)
-VALUES (@owner_id, lower(@email::text), @role, @token_hash, @invited_by::uuid, @expires_at)
-ON CONFLICT (owner_id, lower(email)) WHERE accepted_at IS NULL
-DO UPDATE SET role       = excluded.role,
-              token_hash = excluded.token_hash,
-              invited_by = excluded.invited_by,
-              expires_at = excluded.expires_at,
-              created_at = now()
-RETURNING id;
-
--- One conditional UPDATE, like the magic link: checking first and writing after
--- leaves a window in which the same invitation is accepted twice.
--- name: AcceptInvitation :one
-UPDATE invitations
-SET accepted_at = now()
-WHERE token_hash = @token_hash
-  AND accepted_at IS NULL
-  AND expires_at > now()
-RETURNING owner_id, role, email;
-
--- The columns are named rather than starred, and token_hash is not among them.
--- This list feeds the team page, and a hash that never leaves the database
--- cannot be rendered into it by a template that innocently prints a struct.
--- name: ListPendingInvitations :many
-SELECT id, owner_id, email, role, expires_at, created_at
-FROM invitations
-WHERE owner_id = @owner_id AND accepted_at IS NULL AND expires_at > now()
-ORDER BY email;
-
--- Scoped by owner_id as well as id: an id from another team must not be
--- reachable by someone who happens to administer this one.
--- name: DeleteInvitation :execrows
-DELETE FROM invitations WHERE id = @id AND owner_id = @owner_id;
-
--- name: DeleteExpiredInvitations :exec
-DELETE FROM invitations WHERE expires_at <= now() AND accepted_at IS NULL;
-
--- Reads an invitation without spending it, so a signed-out visitor can be sent
--- a sign-in link to the address it names. token_hash is not among the columns,
--- for the same reason it is absent from ListPendingInvitations.
--- name: GetInvitationByHash :one
-SELECT id, owner_id, email, role, expires_at, created_at
-FROM invitations
-WHERE token_hash = @token_hash AND accepted_at IS NULL AND expires_at > now();
-
--- Withdraws the invitations somebody issued, used when they lose the authority
--- to have issued them. An administrator who leaves must not keep a live token
--- for an address they control.
--- name: DeleteInvitationsByInviter :exec
-DELETE FROM invitations
-WHERE owner_id = @owner_id AND invited_by = @invited_by::uuid AND accepted_at IS NULL;

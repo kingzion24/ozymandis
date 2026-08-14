@@ -11,9 +11,6 @@ import (
 )
 
 type Querier interface {
-	// One conditional UPDATE, like the magic link: checking first and writing after
-	// leaves a window in which the same invitation is accepted twice.
-	AcceptInvitation(ctx context.Context, tokenHash []byte) (AcceptInvitationRow, error)
 	// Appended rather than replaced, so a build streaming its output does not have
 	// to hold the whole log in memory to write any of it.
 	AppendBuildLog(ctx context.Context, arg AppendBuildLogParams) error
@@ -22,13 +19,9 @@ type Querier interface {
 	// Forget every saved position in a project, so the next render lays it out
 	// again from the dependencies.
 	ClearProjectPositions(ctx context.Context, arg ClearProjectPositionsParams) (int64, error)
-	// Marking consumed and reading the user are one statement, so there is no
-	// window between the two in which a second request can also find the link
-	// unconsumed. Expiry is in the same condition for the same reason: a link that
-	// has just expired must fail here rather than in whatever checks it later.
-	ConsumeMagicLink(ctx context.Context, tokenHash []byte) (User, error)
 	CountApps(ctx context.Context, ownerID string) (int64, error)
 	CountOwnersOfTeam(ctx context.Context, ownerID string) (int64, error)
+	CountSuperusers(ctx context.Context) (int64, error)
 	CreateAPIToken(ctx context.Context, arg CreateAPITokenParams) (ApiToken, error)
 	CreateApp(ctx context.Context, arg CreateAppParams) (App, error)
 	CreateAppLink(ctx context.Context, arg CreateAppLinkParams) error
@@ -44,7 +37,6 @@ type Querier interface {
 	// over it here is exactly how a domain gets stolen.
 	CreateCustomDomain(ctx context.Context, arg CreateCustomDomainParams) (Domain, error)
 	CreateDeployment(ctx context.Context, arg CreateDeploymentParams) (Deployment, error)
-	CreateMagicLink(ctx context.Context, arg CreateMagicLinkParams) (MagicLink, error)
 	// Every query filters by owner_id, for the reason apps.sql gives: the scope is
 	// the check, not a duplicate of one.
 	CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error)
@@ -57,6 +49,13 @@ type Querier interface {
 	// another owner's data, and sqlc makes the parameter impossible to omit
 	// because the generated signature requires it.
 	CreateTeamRow(ctx context.Context, arg CreateTeamRowParams) (Team, error)
+	// Users and sessions carry no owner_id: a person exists before they belong to
+	// any team. Memberships do, and stay scoped by it like everything else.
+	//
+	// Sign-in is username and password. There is no query here that looks a person
+	// up by address, because an address no longer identifies anybody — it is a
+	// contact field, and the credential is the password hash.
+	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	// Storage attached to an app. Scoped by owner_id like every other resource
 	// query: a handler that forgets to scope produces no rows here rather than
 	// another team's storage.
@@ -75,16 +74,7 @@ type Querier interface {
 	DeleteBackupPolicy(ctx context.Context, arg DeleteBackupPolicyParams) (int64, error)
 	DeleteCustomDomain(ctx context.Context, arg DeleteCustomDomainParams) (int64, error)
 	DeleteExpiredAPITokens(ctx context.Context) error
-	DeleteExpiredInvitations(ctx context.Context) error
-	DeleteExpiredMagicLinks(ctx context.Context) error
 	DeleteExpiredSessions(ctx context.Context) error
-	// Scoped by owner_id as well as id: an id from another team must not be
-	// reachable by someone who happens to administer this one.
-	DeleteInvitation(ctx context.Context, arg DeleteInvitationParams) (int64, error)
-	// Withdraws the invitations somebody issued, used when they lose the authority
-	// to have issued them. An administrator who leaves must not keep a live token
-	// for an address they control.
-	DeleteInvitationsByInviter(ctx context.Context, arg DeleteInvitationsByInviterParams) error
 	// Releases an app's platform hostname.
 	//
 	// Deleting rather than leaving the row is what makes the feature reversible:
@@ -95,6 +85,7 @@ type Querier interface {
 	DeleteProject(ctx context.Context, arg DeleteProjectParams) (int64, error)
 	DeleteSessionByHash(ctx context.Context, tokenHash []byte) error
 	DeleteSessionsForUser(ctx context.Context, userID uuid.UUID) error
+	DeleteUser(ctx context.Context, id uuid.UUID) (int64, error)
 	DeleteVariable(ctx context.Context, arg DeleteVariableParams) (int64, error)
 	DeleteVolume(ctx context.Context, arg DeleteVolumeParams) (int64, error)
 	// Deploys per day and outcome, for the overview chart.
@@ -111,6 +102,11 @@ type Querier interface {
 	// Scoped by owner as well as id: an audit row is not something a caller should
 	// be able to close on somebody else's behalf by holding an id.
 	EndExecSession(ctx context.Context, arg EndExecSessionParams) error
+	// Seeding the superuser is an upsert on the name, and it deliberately does not
+	// touch password_hash. Re-running the process must not put the built-in default
+	// back over a password somebody has since changed — that would make every
+	// restart a silent credential reset.
+	EnsureSuperuser(ctx context.Context, arg EnsureSuperuserParams) (User, error)
 	FinishBuild(ctx context.Context, arg FinishBuildParams) (Build, error)
 	FinishDeployment(ctx context.Context, arg FinishDeploymentParams) (Deployment, error)
 	// Resolves a token only while the membership behind it still exists, and
@@ -152,10 +148,6 @@ type Querier interface {
 	GetClusterJoin(ctx context.Context) (ClusterJoin, error)
 	GetCustomDomain(ctx context.Context, arg GetCustomDomainParams) (Domain, error)
 	GetDeployment(ctx context.Context, arg GetDeploymentParams) (Deployment, error)
-	// Reads an invitation without spending it, so a signed-out visitor can be sent
-	// a sign-in link to the address it names. token_hash is not among the columns,
-	// for the same reason it is absent from ListPendingInvitations.
-	GetInvitationByHash(ctx context.Context, tokenHash []byte) (GetInvitationByHashRow, error)
 	GetManagedDomain(ctx context.Context, appID uuid.UUID) (Domain, error)
 	GetMembership(ctx context.Context, arg GetMembershipParams) (Membership, error)
 	// Install-wide DNS settings. No owner_id, for the reason cluster_join has
@@ -188,8 +180,8 @@ type Querier interface {
 	GetSessionByHash(ctx context.Context, tokenHash []byte) (GetSessionByHashRow, error)
 	GetTeam(ctx context.Context, id string) (Team, error)
 	GetTeamRow(ctx context.Context, id string) (Team, error)
-	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
+	GetUserByUsername(ctx context.Context, username string) (User, error)
 	GetVolume(ctx context.Context, arg GetVolumeParams) (Volume, error)
 	// Expansion only, enforced in the WHERE clause rather than by reading the row
 	// and comparing in Go: a check the caller performs is one a caller can skip,
@@ -250,10 +242,6 @@ type Querier interface {
 	//
 	// Backed by the partial index on (owner_id) WHERE ended_at IS NULL.
 	ListOpenExecSessions(ctx context.Context, ownerID string) ([]ListOpenExecSessionsRow, error)
-	// The columns are named rather than starred, and token_hash is not among them.
-	// This list feeds the team page, and a hash that never leaves the database
-	// cannot be rendered into it by a template that innocently prints a struct.
-	ListPendingInvitations(ctx context.Context, ownerID string) ([]ListPendingInvitationsRow, error)
 	ListProjects(ctx context.Context, ownerID string) ([]ListProjectsRow, error)
 	// Joined to apps so the activity feed can name the workload without a second
 	// round trip per row. The join is on app_id AND owner_id: joining on app_id
@@ -263,6 +251,7 @@ type Querier interface {
 	// feeds the reconciler, which is the platform settling its own records rather
 	// than a team reading theirs.
 	ListRunningBuilds(ctx context.Context) ([]Build, error)
+	ListUsers(ctx context.Context) ([]User, error)
 	ListVariablesForApp(ctx context.Context, appID uuid.UUID) ([]Variable, error)
 	ListVolumesForApp(ctx context.Context, appID uuid.UUID) ([]Volume, error)
 	// A role change reads the owner count and then writes; taking the team row
@@ -325,6 +314,7 @@ type Querier interface {
 	SetPlatformDNS(ctx context.Context, arg SetPlatformDNSParams) (PlatformDn, error)
 	SetPlatformRegistry(ctx context.Context, arg SetPlatformRegistryParams) (PlatformRegistry, error)
 	SetSessionTeam(ctx context.Context, arg SetSessionTeamParams) error
+	SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error
 	// Written BEFORE the stream opens, so a session that dies during attach has
 	// already been recorded. See 00025 for why the ordering is load-bearing.
 	StartExecSession(ctx context.Context, arg StartExecSessionParams) (ExecSession, error)
@@ -351,10 +341,6 @@ type Querier interface {
 	// it would disagree in the direction that matters: claiming a backup exists.
 	UpsertBackupDestination(ctx context.Context, arg UpsertBackupDestinationParams) (BackupDestination, error)
 	UpsertBackupPolicy(ctx context.Context, arg UpsertBackupPolicyParams) (BackupPolicy, error)
-	// Re-inviting replaces the pending invitation rather than adding a second one,
-	// so the token in the older mail stops working. Two live tokens for one address
-	// would mean revoking the invitation on screen leaves the other one usable.
-	UpsertInvitation(ctx context.Context, arg UpsertInvitationParams) (uuid.UUID, error)
 	// Platform-issued hostnames. Custom domains get their own queries when that
 	// sub-project lands; keeping them in one file rather than in apps.sql is so
 	// that apps.sql stays about apps.
@@ -370,10 +356,6 @@ type Querier interface {
 	// name we already control.
 	UpsertManagedDomain(ctx context.Context, arg UpsertManagedDomainParams) (Domain, error)
 	UpsertMembership(ctx context.Context, arg UpsertMembershipParams) (Membership, error)
-	// Users and sessions carry no owner_id: a person exists before they belong to
-	// any team. Memberships and invitations do, and stay scoped by it like
-	// everything else.
-	UpsertUser(ctx context.Context, arg UpsertUserParams) (User, error)
 	// Environment variables, one row each so a secret can be sealed while its
 	// neighbour stays readable.
 	// Upsert rather than insert: setting a variable that already exists is what a

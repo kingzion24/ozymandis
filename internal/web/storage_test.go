@@ -16,11 +16,8 @@ import (
 func storageHarness(t *testing.T, team string) (*liveHarness, *http.Cookie) {
 	t.Helper()
 	h := newLiveHarnessOwnedBy(t, team, "founder-store@web.test")
-	if code := postSignIn(h.handler, "founder-store@web.test", "198.51.100.7:2000").Code; code != http.StatusOK {
-		t.Fatalf("sign-in = %d", code)
-	}
-	sent := h.mailer.messages()
-	c := sessionCookie(h.follow(t, linkIn(t, sent[len(sent)-1].TextBody)))
+	h.user(t, "founder-store")
+	c := sessionCookie(h.signIn(t, "founder-store"))
 	if c == nil {
 		t.Fatal("no session")
 	}

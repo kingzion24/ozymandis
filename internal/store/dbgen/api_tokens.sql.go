@@ -77,7 +77,7 @@ func (q *Queries) DeleteExpiredAPITokens(ctx context.Context) error {
 }
 
 const getAPITokenByHash = `-- name: GetAPITokenByHash :one
-SELECT t.id, t.user_id, t.owner_id, t.name, t.token_hash, t.last_used_at, t.expires_at, t.created_at, u.email AS user_email, u.display_name AS user_name,
+SELECT t.id, t.user_id, t.owner_id, t.name, t.token_hash, t.last_used_at, t.expires_at, t.created_at, u.username AS user_username, u.display_name AS user_name,
        m.role AS member_role, tm.display_name AS team_name, tm.email AS team_email
 FROM api_tokens t
 JOIN users u ON u.id = t.user_id
@@ -88,19 +88,19 @@ WHERE t.token_hash = $1
 `
 
 type GetAPITokenByHashRow struct {
-	ID         uuid.UUID
-	UserID     uuid.UUID
-	OwnerID    string
-	Name       string
-	TokenHash  []byte
-	LastUsedAt pgtype.Timestamptz
-	ExpiresAt  pgtype.Timestamptz
-	CreatedAt  time.Time
-	UserEmail  string
-	UserName   string
-	MemberRole string
-	TeamName   string
-	TeamEmail  string
+	ID           uuid.UUID
+	UserID       uuid.UUID
+	OwnerID      string
+	Name         string
+	TokenHash    []byte
+	LastUsedAt   pgtype.Timestamptz
+	ExpiresAt    pgtype.Timestamptz
+	CreatedAt    time.Time
+	UserUsername string
+	UserName     string
+	MemberRole   string
+	TeamName     string
+	TeamEmail    string
 }
 
 // Resolves a token only while the membership behind it still exists, and
@@ -142,7 +142,7 @@ func (q *Queries) GetAPITokenByHash(ctx context.Context, tokenHash []byte) (GetA
 		&i.LastUsedAt,
 		&i.ExpiresAt,
 		&i.CreatedAt,
-		&i.UserEmail,
+		&i.UserUsername,
 		&i.UserName,
 		&i.MemberRole,
 		&i.TeamName,

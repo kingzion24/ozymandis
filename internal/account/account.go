@@ -58,12 +58,28 @@ func (r Role) CanOwn() bool { return r == RoleOwner }
 func (r Role) Valid() bool { _, ok := rank[r]; return ok }
 
 // User is a person.
+//
+// Username is the identity and the thing typed at sign-in; Email is a contact
+// field and nothing more. They were one column until password sign-in replaced
+// magic links, and keeping the address as an identity afterwards would have
+// meant an install could not create a user for somebody without one.
 type User struct {
-	ID          uuid.UUID
-	Email       string
+	ID       uuid.UUID
+	Username string
+
+	// Email is optional. Empty means the person gave none, which is the
+	// ordinary case for an account created by the superuser.
+	Email string
+
 	DisplayName string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+
+	// IsSuperuser is the right to manage other people, and is deliberately not
+	// a Role. A role says what somebody may do with apps; this says who may
+	// create and remove the people who hold roles at all.
+	IsSuperuser bool
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // Team is a principal: the thing owner_id points at everywhere else.
@@ -89,7 +105,7 @@ type Membership struct {
 // management page to name them without a query per row.
 type Member struct {
 	UserID    uuid.UUID
-	Email     string
+	Username  string
 	Name      string
 	Role      Role
 	CreatedAt time.Time
@@ -108,26 +124,6 @@ func NewService(pool *pgxpool.Pool, log *slog.Logger) *Service {
 		log = slog.Default()
 	}
 	return &Service{pool: pool, q: dbgen.New(pool), log: log}
-}
-
-// EnsureUser returns the user for an address, creating them if new.
-//
-// The address is lowercased on the way in, because a person who signs up as
-// Alice@ and is later invited as alice@ is one person. An empty display name
-// leaves the stored one alone: sign-in knows the address and not the name, and
-// must not blank out what the person set.
-func (s *Service) EnsureUser(ctx context.Context, email, displayName string) (User, error) {
-	email = strings.TrimSpace(email)
-	if email == "" {
-		return User{}, errors.New("account: email is required")
-	}
-	row, err := s.q.UpsertUser(ctx, dbgen.UpsertUserParams{
-		Email: email, DisplayName: strings.TrimSpace(displayName),
-	})
-	if err != nil {
-		return User{}, fmt.Errorf("account: ensure user: %w", err)
-	}
-	return toUser(row), nil
 }
 
 // CreateTeam creates a team and makes the creator its owner.
@@ -226,7 +222,7 @@ func (s *Service) ListMembers(ctx context.Context, teamID string) ([]Member, err
 	for _, row := range rows {
 		out = append(out, Member{
 			UserID:    row.UserID,
-			Email:     row.Email,
+			Username:  row.Username,
 			Name:      row.UserName,
 			Role:      Role(row.Role),
 			CreatedAt: row.CreatedAt,
@@ -307,16 +303,10 @@ func (s *Service) RemoveMember(
 		}); err != nil {
 			return fmt.Errorf("account: remove member: %w", err)
 		}
-		// Their outstanding invitations go with them, in the same transaction.
-		// An administrator who leaves would otherwise keep a live token for any
-		// address they control — a self-service way back into a team that has
-		// just removed them. Their session stops resolving the moment the
-		// membership row goes; without this, the invitation would not.
-		if err := q.DeleteInvitationsByInviter(ctx, dbgen.DeleteInvitationsByInviterParams{
-			OwnerID: teamID, InvitedBy: target,
-		}); err != nil {
-			return fmt.Errorf("account: remove member invitations: %w", err)
-		}
+		// Nothing else has to be revoked here. Their session stops resolving the
+		// moment the membership row goes, because GetSessionByHash joins
+		// through it — and with invitations gone there is no longer a second
+		// credential that outlives the membership.
 		return nil
 	})
 }
@@ -399,8 +389,10 @@ func (s *Service) inTeam(
 func toUser(row dbgen.User) User {
 	return User{
 		ID:          row.ID,
-		Email:       row.Email,
+		Username:    row.Username,
+		Email:       deref(row.Email),
 		DisplayName: row.DisplayName,
+		IsSuperuser: row.IsSuperuser,
 		CreatedAt:   row.CreatedAt,
 		UpdatedAt:   row.UpdatedAt,
 	}

@@ -12,61 +12,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const acceptInvitation = `-- name: AcceptInvitation :one
-UPDATE invitations
-SET accepted_at = now()
-WHERE token_hash = $1
-  AND accepted_at IS NULL
-  AND expires_at > now()
-RETURNING owner_id, role, email
-`
-
-type AcceptInvitationRow struct {
-	OwnerID string
-	Role    string
-	Email   string
-}
-
-// One conditional UPDATE, like the magic link: checking first and writing after
-// leaves a window in which the same invitation is accepted twice.
-func (q *Queries) AcceptInvitation(ctx context.Context, tokenHash []byte) (AcceptInvitationRow, error) {
-	row := q.db.QueryRow(ctx, acceptInvitation, tokenHash)
-	var i AcceptInvitationRow
-	err := row.Scan(&i.OwnerID, &i.Role, &i.Email)
-	return i, err
-}
-
-const consumeMagicLink = `-- name: ConsumeMagicLink :one
-WITH consumed AS (
-    UPDATE magic_links
-    SET consumed_at = now()
-    WHERE token_hash = $1
-      AND consumed_at IS NULL
-      AND expires_at > now()
-    RETURNING user_id
-)
-SELECT u.id, u.email, u.display_name, u.totp_secret, u.totp_confirmed, u.created_at, u.updated_at FROM users u JOIN consumed ON consumed.user_id = u.id
-`
-
-// Marking consumed and reading the user are one statement, so there is no
-// window between the two in which a second request can also find the link
-// unconsumed. Expiry is in the same condition for the same reason: a link that
-// has just expired must fail here rather than in whatever checks it later.
-func (q *Queries) ConsumeMagicLink(ctx context.Context, tokenHash []byte) (User, error) {
-	row := q.db.QueryRow(ctx, consumeMagicLink, tokenHash)
-	var i User
-	err := row.Scan(
-		&i.ID,
-		&i.Email,
-		&i.DisplayName,
-		&i.TotpSecret,
-		&i.TotpConfirmed,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
 const countOwnersOfTeam = `-- name: CountOwnersOfTeam :one
 SELECT count(*) FROM memberships WHERE owner_id = $1 AND role = 'owner'
 `
@@ -78,30 +23,15 @@ func (q *Queries) CountOwnersOfTeam(ctx context.Context, ownerID string) (int64,
 	return count, err
 }
 
-const createMagicLink = `-- name: CreateMagicLink :one
-INSERT INTO magic_links (user_id, token_hash, expires_at)
-VALUES ($1, $2, $3)
-RETURNING id, user_id, token_hash, expires_at, consumed_at, created_at
+const countSuperusers = `-- name: CountSuperusers :one
+SELECT count(*) FROM users WHERE is_superuser
 `
 
-type CreateMagicLinkParams struct {
-	UserID    uuid.UUID
-	TokenHash []byte
-	ExpiresAt time.Time
-}
-
-func (q *Queries) CreateMagicLink(ctx context.Context, arg CreateMagicLinkParams) (MagicLink, error) {
-	row := q.db.QueryRow(ctx, createMagicLink, arg.UserID, arg.TokenHash, arg.ExpiresAt)
-	var i MagicLink
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.TokenHash,
-		&i.ExpiresAt,
-		&i.ConsumedAt,
-		&i.CreatedAt,
-	)
-	return i, err
+func (q *Queries) CountSuperusers(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countSuperusers)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const createSession = `-- name: CreateSession :one
@@ -167,22 +97,47 @@ func (q *Queries) CreateTeam(ctx context.Context, arg CreateTeamParams) (Team, e
 	return i, err
 }
 
-const deleteExpiredInvitations = `-- name: DeleteExpiredInvitations :exec
-DELETE FROM invitations WHERE expires_at <= now() AND accepted_at IS NULL
+const createUser = `-- name: CreateUser :one
+
+INSERT INTO users (username, password_hash, display_name, is_superuser)
+VALUES (lower($1::text), $2, $3, $4)
+RETURNING id, email, display_name, totp_secret, totp_confirmed, created_at, updated_at, username, password_hash, is_superuser
 `
 
-func (q *Queries) DeleteExpiredInvitations(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, deleteExpiredInvitations)
-	return err
+type CreateUserParams struct {
+	Username     string
+	PasswordHash []byte
+	DisplayName  string
+	IsSuperuser  bool
 }
 
-const deleteExpiredMagicLinks = `-- name: DeleteExpiredMagicLinks :exec
-DELETE FROM magic_links WHERE expires_at <= now()
-`
-
-func (q *Queries) DeleteExpiredMagicLinks(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, deleteExpiredMagicLinks)
-	return err
+// Users and sessions carry no owner_id: a person exists before they belong to
+// any team. Memberships do, and stay scoped by it like everything else.
+//
+// Sign-in is username and password. There is no query here that looks a person
+// up by address, because an address no longer identifies anybody — it is a
+// contact field, and the credential is the password hash.
+func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, error) {
+	row := q.db.QueryRow(ctx, createUser,
+		arg.Username,
+		arg.PasswordHash,
+		arg.DisplayName,
+		arg.IsSuperuser,
+	)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.DisplayName,
+		&i.TotpSecret,
+		&i.TotpConfirmed,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Username,
+		&i.PasswordHash,
+		&i.IsSuperuser,
+	)
+	return i, err
 }
 
 const deleteExpiredSessions = `-- name: DeleteExpiredSessions :exec
@@ -191,43 +146,6 @@ DELETE FROM sessions WHERE expires_at <= now()
 
 func (q *Queries) DeleteExpiredSessions(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, deleteExpiredSessions)
-	return err
-}
-
-const deleteInvitation = `-- name: DeleteInvitation :execrows
-DELETE FROM invitations WHERE id = $1 AND owner_id = $2
-`
-
-type DeleteInvitationParams struct {
-	ID      uuid.UUID
-	OwnerID string
-}
-
-// Scoped by owner_id as well as id: an id from another team must not be
-// reachable by someone who happens to administer this one.
-func (q *Queries) DeleteInvitation(ctx context.Context, arg DeleteInvitationParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteInvitation, arg.ID, arg.OwnerID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const deleteInvitationsByInviter = `-- name: DeleteInvitationsByInviter :exec
-DELETE FROM invitations
-WHERE owner_id = $1 AND invited_by = $2::uuid AND accepted_at IS NULL
-`
-
-type DeleteInvitationsByInviterParams struct {
-	OwnerID   string
-	InvitedBy uuid.UUID
-}
-
-// Withdraws the invitations somebody issued, used when they lose the authority
-// to have issued them. An administrator who leaves must not keep a live token
-// for an address they control.
-func (q *Queries) DeleteInvitationsByInviter(ctx context.Context, arg DeleteInvitationsByInviterParams) error {
-	_, err := q.db.Exec(ctx, deleteInvitationsByInviter, arg.OwnerID, arg.InvitedBy)
 	return err
 }
 
@@ -263,34 +181,51 @@ func (q *Queries) DeleteSessionsForUser(ctx context.Context, userID uuid.UUID) e
 	return err
 }
 
-const getInvitationByHash = `-- name: GetInvitationByHash :one
-SELECT id, owner_id, email, role, expires_at, created_at
-FROM invitations
-WHERE token_hash = $1 AND accepted_at IS NULL AND expires_at > now()
+const deleteUser = `-- name: DeleteUser :execrows
+DELETE FROM users WHERE id = $1 AND NOT is_superuser
 `
 
-type GetInvitationByHashRow struct {
-	ID        uuid.UUID
-	OwnerID   string
-	Email     string
-	Role      string
-	ExpiresAt time.Time
-	CreatedAt time.Time
+func (q *Queries) DeleteUser(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteUser, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-// Reads an invitation without spending it, so a signed-out visitor can be sent
-// a sign-in link to the address it names. token_hash is not among the columns,
-// for the same reason it is absent from ListPendingInvitations.
-func (q *Queries) GetInvitationByHash(ctx context.Context, tokenHash []byte) (GetInvitationByHashRow, error) {
-	row := q.db.QueryRow(ctx, getInvitationByHash, tokenHash)
-	var i GetInvitationByHashRow
+const ensureSuperuser = `-- name: EnsureSuperuser :one
+INSERT INTO users (username, password_hash, display_name, is_superuser)
+VALUES (lower($1::text), $2, $3, true)
+ON CONFLICT (lower(username)) DO UPDATE
+SET is_superuser = true,
+    updated_at   = now()
+RETURNING id, email, display_name, totp_secret, totp_confirmed, created_at, updated_at, username, password_hash, is_superuser
+`
+
+type EnsureSuperuserParams struct {
+	Username     string
+	PasswordHash []byte
+	DisplayName  string
+}
+
+// Seeding the superuser is an upsert on the name, and it deliberately does not
+// touch password_hash. Re-running the process must not put the built-in default
+// back over a password somebody has since changed — that would make every
+// restart a silent credential reset.
+func (q *Queries) EnsureSuperuser(ctx context.Context, arg EnsureSuperuserParams) (User, error) {
+	row := q.db.QueryRow(ctx, ensureSuperuser, arg.Username, arg.PasswordHash, arg.DisplayName)
+	var i User
 	err := row.Scan(
 		&i.ID,
-		&i.OwnerID,
 		&i.Email,
-		&i.Role,
-		&i.ExpiresAt,
+		&i.DisplayName,
+		&i.TotpSecret,
+		&i.TotpConfirmed,
 		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Username,
+		&i.PasswordHash,
+		&i.IsSuperuser,
 	)
 	return i, err
 }
@@ -412,27 +347,8 @@ func (q *Queries) GetTeam(ctx context.Context, id string) (Team, error) {
 	return i, err
 }
 
-const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, display_name, totp_secret, totp_confirmed, created_at, updated_at FROM users WHERE lower(email) = lower($1::text)
-`
-
-func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
-	row := q.db.QueryRow(ctx, getUserByEmail, email)
-	var i User
-	err := row.Scan(
-		&i.ID,
-		&i.Email,
-		&i.DisplayName,
-		&i.TotpSecret,
-		&i.TotpConfirmed,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, display_name, totp_secret, totp_confirmed, created_at, updated_at FROM users WHERE id = $1
+SELECT id, email, display_name, totp_secret, totp_confirmed, created_at, updated_at, username, password_hash, is_superuser FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
@@ -446,16 +362,41 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 		&i.TotpConfirmed,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Username,
+		&i.PasswordHash,
+		&i.IsSuperuser,
+	)
+	return i, err
+}
+
+const getUserByUsername = `-- name: GetUserByUsername :one
+SELECT id, email, display_name, totp_secret, totp_confirmed, created_at, updated_at, username, password_hash, is_superuser FROM users WHERE lower(username) = lower($1::text)
+`
+
+func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByUsername, username)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.DisplayName,
+		&i.TotpSecret,
+		&i.TotpConfirmed,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Username,
+		&i.PasswordHash,
+		&i.IsSuperuser,
 	)
 	return i, err
 }
 
 const listMembersOfTeam = `-- name: ListMembersOfTeam :many
-SELECT m.user_id, m.owner_id, m.role, m.created_at, u.email, u.display_name AS user_name
+SELECT m.user_id, m.owner_id, m.role, m.created_at, u.username, u.display_name AS user_name
 FROM memberships m
 JOIN users u ON u.id = m.user_id
 WHERE m.owner_id = $1
-ORDER BY u.email
+ORDER BY lower(u.username)
 `
 
 type ListMembersOfTeamRow struct {
@@ -463,7 +404,7 @@ type ListMembersOfTeamRow struct {
 	OwnerID   string
 	Role      string
 	CreatedAt time.Time
-	Email     string
+	Username  string
 	UserName  string
 }
 
@@ -481,7 +422,7 @@ func (q *Queries) ListMembersOfTeam(ctx context.Context, ownerID string) ([]List
 			&i.OwnerID,
 			&i.Role,
 			&i.CreatedAt,
-			&i.Email,
+			&i.Username,
 			&i.UserName,
 		); err != nil {
 			return nil, err
@@ -536,41 +477,30 @@ func (q *Queries) ListMembershipsForUser(ctx context.Context, userID uuid.UUID) 
 	return items, nil
 }
 
-const listPendingInvitations = `-- name: ListPendingInvitations :many
-SELECT id, owner_id, email, role, expires_at, created_at
-FROM invitations
-WHERE owner_id = $1 AND accepted_at IS NULL AND expires_at > now()
-ORDER BY email
+const listUsers = `-- name: ListUsers :many
+SELECT id, email, display_name, totp_secret, totp_confirmed, created_at, updated_at, username, password_hash, is_superuser FROM users ORDER BY is_superuser DESC, lower(username)
 `
 
-type ListPendingInvitationsRow struct {
-	ID        uuid.UUID
-	OwnerID   string
-	Email     string
-	Role      string
-	ExpiresAt time.Time
-	CreatedAt time.Time
-}
-
-// The columns are named rather than starred, and token_hash is not among them.
-// This list feeds the team page, and a hash that never leaves the database
-// cannot be rendered into it by a template that innocently prints a struct.
-func (q *Queries) ListPendingInvitations(ctx context.Context, ownerID string) ([]ListPendingInvitationsRow, error) {
-	rows, err := q.db.Query(ctx, listPendingInvitations, ownerID)
+func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := q.db.Query(ctx, listUsers)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListPendingInvitationsRow{}
+	items := []User{}
 	for rows.Next() {
-		var i ListPendingInvitationsRow
+		var i User
 		if err := rows.Scan(
 			&i.ID,
-			&i.OwnerID,
 			&i.Email,
-			&i.Role,
-			&i.ExpiresAt,
+			&i.DisplayName,
+			&i.TotpSecret,
+			&i.TotpConfirmed,
 			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Username,
+			&i.PasswordHash,
+			&i.IsSuperuser,
 		); err != nil {
 			return nil, err
 		}
@@ -616,42 +546,18 @@ func (q *Queries) SetSessionTeam(ctx context.Context, arg SetSessionTeamParams) 
 	return err
 }
 
-const upsertInvitation = `-- name: UpsertInvitation :one
-INSERT INTO invitations (owner_id, email, role, token_hash, invited_by, expires_at)
-VALUES ($1, lower($2::text), $3, $4, $5::uuid, $6)
-ON CONFLICT (owner_id, lower(email)) WHERE accepted_at IS NULL
-DO UPDATE SET role       = excluded.role,
-              token_hash = excluded.token_hash,
-              invited_by = excluded.invited_by,
-              expires_at = excluded.expires_at,
-              created_at = now()
-RETURNING id
+const setUserPassword = `-- name: SetUserPassword :exec
+UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2
 `
 
-type UpsertInvitationParams struct {
-	OwnerID   string
-	Email     string
-	Role      string
-	TokenHash []byte
-	InvitedBy uuid.UUID
-	ExpiresAt time.Time
+type SetUserPasswordParams struct {
+	PasswordHash []byte
+	ID           uuid.UUID
 }
 
-// Re-inviting replaces the pending invitation rather than adding a second one,
-// so the token in the older mail stops working. Two live tokens for one address
-// would mean revoking the invitation on screen leaves the other one usable.
-func (q *Queries) UpsertInvitation(ctx context.Context, arg UpsertInvitationParams) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, upsertInvitation,
-		arg.OwnerID,
-		arg.Email,
-		arg.Role,
-		arg.TokenHash,
-		arg.InvitedBy,
-		arg.ExpiresAt,
-	)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
+func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error {
+	_, err := q.db.Exec(ctx, setUserPassword, arg.PasswordHash, arg.ID)
+	return err
 }
 
 const upsertMembership = `-- name: UpsertMembership :one
@@ -675,42 +581,6 @@ func (q *Queries) UpsertMembership(ctx context.Context, arg UpsertMembershipPara
 		&i.OwnerID,
 		&i.Role,
 		&i.CreatedAt,
-	)
-	return i, err
-}
-
-const upsertUser = `-- name: UpsertUser :one
-
-INSERT INTO users (email, display_name)
-VALUES (lower($1::text), $2)
-ON CONFLICT (lower(email)) DO UPDATE
-SET display_name = CASE
-        WHEN excluded.display_name <> '' THEN excluded.display_name
-        ELSE users.display_name
-    END,
-    updated_at = now()
-RETURNING id, email, display_name, totp_secret, totp_confirmed, created_at, updated_at
-`
-
-type UpsertUserParams struct {
-	Email       string
-	DisplayName string
-}
-
-// Users and sessions carry no owner_id: a person exists before they belong to
-// any team. Memberships and invitations do, and stay scoped by it like
-// everything else.
-func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) (User, error) {
-	row := q.db.QueryRow(ctx, upsertUser, arg.Email, arg.DisplayName)
-	var i User
-	err := row.Scan(
-		&i.ID,
-		&i.Email,
-		&i.DisplayName,
-		&i.TotpSecret,
-		&i.TotpConfirmed,
-		&i.CreatedAt,
-		&i.UpdatedAt,
 	)
 	return i, err
 }

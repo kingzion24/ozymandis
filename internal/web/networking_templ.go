@@ -16,7 +16,7 @@ type NetworkingData struct {
 	Net app.Networking
 
 	// UntrustedCert means this app is served over https with a certificate
-	// nobody will trust, because the install has no wildcard certificate.
+	// nobody will trust, because the install has no ACME resolver configured.
 	UntrustedCert bool
 
 	Notice string

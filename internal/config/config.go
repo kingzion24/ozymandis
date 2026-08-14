@@ -4,8 +4,9 @@ package config
 import (
 	"errors"
 	"fmt"
-	"net/mail"
 	"net/url"
+
+	"github.com/kingzion24/ozymandis/internal/account"
 	"os"
 	"regexp"
 	"strconv"
@@ -71,15 +72,6 @@ type Config struct {
 	// OwnerID identifies the single owner every resource belongs to.
 	OwnerID   string
 	OwnerName string
-
-	// OwnerEmail is the address that may sign in to a fresh install before
-	// anybody has an account.
-	//
-	// Links go only to addresses that already exist, which is what stops the
-	// sign-in form filling the user table — and leaves a new install with
-	// accounts on unenterable. This names the one exception, and only until it
-	// has an account of its own.
-	OwnerEmail string
 
 	// SecretKey seals secret environment variables, base64 of 32 bytes.
 	//
@@ -153,7 +145,6 @@ func Load() (Config, error) {
 		AuthToken:       env("OZYMANDIS_AUTH_TOKEN", ""),
 		OwnerID:         env("OZYMANDIS_OWNER_ID", "owner-local"),
 		OwnerName:       env("OZYMANDIS_OWNER_NAME", "Local"),
-		OwnerEmail:      strings.TrimSpace(env("OZYMANDIS_OWNER_EMAIL", "")),
 		SecretKey:       strings.TrimSpace(env("OZYMANDIS_SECRET_KEY", "")),
 		AppDomain:       env("OZYMANDIS_APP_DOMAIN", ""),
 		ReservedDomains: envList("OZYMANDIS_RESERVED_DOMAINS"),
@@ -226,35 +217,38 @@ func (c Config) validate() error {
 		errs = append(errs, fmt.Errorf(
 			"OZYMANDIS_CERT_RESOLVER %q must be a lowercase name like \"letsencrypt\"", c.CertResolver))
 	}
-	if c.OwnerEmail != "" {
-		if _, err := mail.ParseAddress(c.OwnerEmail); err != nil {
-			errs = append(errs, errors.New("OZYMANDIS_OWNER_EMAIL must be an email address"))
-		}
-	}
 	errs = append(errs, c.accountFaults()...)
 
 	return errors.Join(errs...)
 }
 
-// accountFaults validates the sign-in settings, and only once accounts are on.
+// accountFaults validates the sign-in settings.
 //
-// With no base URL nothing ever sends mail, so a half-finished relay block is
-// inert; refusing to start over it would stop an install that had simply left
-// the settings lying around. Once accounts are on the same settings decide
-// whether anybody can get in, and each of these would be discovered at the
-// first sign-in attempt — by which point the operator reads it as sign-in
-// being broken rather than as a setting they got wrong.
+// OZYMANDIS_BASE_URL is no longer required and is only checked when it is set.
+// It used to be the address a sign-in link was built from, and sign-in could not
+// work without it; with a password there is nothing to build and nothing to
+// send, so demanding it would stop an install that has no public URL yet — which
+// is every install, on the first run.
 func (c Config) accountFaults() []error {
-	if !c.AccountsEnabled() {
-		return nil
+	var errs []error
+	if c.BaseURL != "" {
+		if u, err := url.Parse(c.BaseURL); err != nil {
+			errs = append(errs, fmt.Errorf("OZYMANDIS_BASE_URL is not a URL: %w", err))
+		} else if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			errs = append(errs, errors.New(
+				"OZYMANDIS_BASE_URL must be an absolute http or https URL, such as https://ozymandis.example.com"))
+		}
 	}
 
-	var errs []error
-	if u, err := url.Parse(c.BaseURL); err != nil {
-		errs = append(errs, fmt.Errorf("OZYMANDIS_BASE_URL is not a URL: %w", err))
-	} else if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		errs = append(errs, errors.New(
-			"OZYMANDIS_BASE_URL must be an absolute http or https URL, such as https://ozymandis.example.com"))
+	// The password the superuser is seeded with has to be one they can actually
+	// sign in with. A key set to something too short would be accepted here and
+	// then refused at seeding, which stops the process with an error about
+	// hashing rather than about the setting that caused it.
+	if err := account.ValidatePassword(c.SuperuserPassword()); err != nil {
+		errs = append(errs, fmt.Errorf("OZYMANDIS_SUPERUSER_PASSWORD: %w", err))
+	}
+	if err := account.ValidateUsername(c.SuperuserName()); err != nil {
+		errs = append(errs, fmt.Errorf("OZYMANDIS_SUPERUSER_NAME: %w", err))
 	}
 
 	// Two transports is not a fallback chain, it is an unanswered question
@@ -274,9 +268,6 @@ func (c Config) accountFaults() []error {
 	if c.SessionTTL <= 0 {
 		errs = append(errs, errors.New("OZYMANDIS_SESSION_TTL must be positive"))
 	}
-	if c.MagicLinkTTL <= 0 {
-		errs = append(errs, errors.New("OZYMANDIS_MAGIC_LINK_TTL must be positive"))
-	}
 	return errs
 }
 
@@ -285,12 +276,44 @@ func (c Config) Unauthenticated() bool { return c.AuthToken == "" }
 
 // AccountsEnabled reports whether the dashboard signs people in.
 //
-// A base URL and nothing else is enough: with no relay configured the sign-in
-// link is written to the log, which is the documented way back in when mail
-// breaks. What cannot be recovered from is the reverse — sign-in switched on
-// with no address to put in the link, which locks the operator out of their own
-// dashboard for good.
-func (c Config) AccountsEnabled() bool { return c.BaseURL != "" }
+// Always, now. It used to require OZYMANDIS_BASE_URL, because sign-in was a
+// link in a mail message and there was no address to build one from without it.
+// Password sign-in has no such dependency: the superuser is seeded at startup,
+// so a fresh install has somebody to sign in as before it has a URL, a relay,
+// or a way to send anything to anybody.
+//
+// Deliberately not a setting. An install where this could be switched off is an
+// install that serves the dashboard to whoever reaches the port, and that mode
+// already exists on purpose in the form of leaving OZYMANDIS_AUTH_TOKEN unset —
+// a second way to reach it would be a second thing to get wrong.
+func (c Config) AccountsEnabled() bool { return true }
+
+// SuperuserPassword is the built-in administrator's password.
+//
+// The default is a constant, so a fresh install has a working sign-in with no
+// configuration at all. That default is published in the source of a repository
+// intended to go public, so it is a way in for anybody reading it: set
+// OZYMANDIS_SUPERUSER_PASSWORD, or change the password from the dashboard,
+// which is what the startup log says in as many words.
+func (c Config) SuperuserPassword() string {
+	return env("OZYMANDIS_SUPERUSER_PASSWORD", DefaultSuperuserPassword)
+}
+
+// SuperuserName is the built-in administrator's username.
+func (c Config) SuperuserName() string {
+	return env("OZYMANDIS_SUPERUSER_NAME", DefaultSuperuserName)
+}
+
+// UsingDefaultSuperuserPassword reports whether the published default is live.
+func (c Config) UsingDefaultSuperuserPassword() bool {
+	return c.SuperuserPassword() == DefaultSuperuserPassword
+}
+
+// The built-in administrator, who creates every other account.
+const (
+	DefaultSuperuserName     = "batman"
+	DefaultSuperuserPassword = "tevinoni2642"
+)
 
 func env(key, fallback string) string {
 	if v, ok := os.LookupEnv(key); ok && v != "" {

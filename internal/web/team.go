@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -14,7 +15,6 @@ import (
 
 	"github.com/kingzion24/ozymandis/internal/account"
 	"github.com/kingzion24/ozymandis/internal/identity"
-	"github.com/kingzion24/ozymandis/internal/notify"
 )
 
 // TeamChoice is one team a person may act as, as the chrome needs it.
@@ -193,11 +193,24 @@ type TeamPageData struct {
 	Viewer   account.Role
 	ViewerID uuid.UUID
 
-	Members     []account.Member
-	Invitations []account.Invitation
+	Members []account.Member
+
+	// ViewerIsSuperuser gates the whole people-management block. Read per
+	// request rather than carried in the session, so authority taken away takes
+	// effect on the next page load rather than at the next sign-in.
+	ViewerIsSuperuser bool
+
+	// Users is every person on the install, and is populated only for a
+	// superuser. A page that fetched it and then declined to render it would
+	// still have put the list in memory for someone not entitled to it.
+	Users []account.User
 
 	// Error is a message from the action that redirected here, if it failed.
 	Error string
+
+	// Notice is how a created account's password reaches the superuser: once,
+	// on the page, never stored and never mailed.
+	Notice string
 }
 
 // teamPage shows who is in the team and who has been invited.
@@ -218,30 +231,42 @@ func (s *Server) teamPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	invitations, err := s.accounts.ListPendingInvitations(ctx, owner.ID)
+	superuser, err := s.accounts.IsSuperuser(ctx, sess.UserID)
 	if err != nil {
-		s.log.Error("list invitations", slog.String("error", err.Error()))
+		s.log.Error("read superuser", slog.String("error", err.Error()))
 		http.Error(w, "could not load the team", http.StatusInternalServerError)
 		return
 	}
 
+	var users []account.User
+	if superuser {
+		if users, err = s.accounts.ListUsers(ctx, sess.UserID); err != nil {
+			s.log.Error("list users", slog.String("error", err.Error()))
+			http.Error(w, "could not load the team", http.StatusInternalServerError)
+			return
+		}
+	}
+
 	s.render(w, r, TeamPage(TeamPageData{
-		TeamID:      owner.ID,
-		TeamName:    displayName(owner),
-		Viewer:      sess.Role,
-		ViewerID:    sess.UserID,
-		Members:     members,
-		Invitations: invitations,
-		Error:       r.URL.Query().Get("error"),
+		TeamID:            owner.ID,
+		TeamName:          displayName(owner),
+		Viewer:            sess.Role,
+		ViewerID:          sess.UserID,
+		Members:           members,
+		ViewerIsSuperuser: superuser,
+		Users:             users,
+		Error:             r.URL.Query().Get("error"),
+		Notice:            r.URL.Query().Get("notice"),
 	}))
 }
 
 // teamInvite mails an invitation.
 //
-// The token exists in exactly one place — the message — and is never rendered,
-// logged, or returned. That is the same position the invited person is in, and
-// it is what stops an administrator joining as somebody else.
-func (s *Server) teamInvite(w http.ResponseWriter, r *http.Request) {
+// The password is chosen by the superuser and shown back to them exactly once,
+// in the redirect. It is never mailed, never stored in plaintext, and never
+// logged: the only copy that outlives this request is the bcrypt hash, and the
+// only person who sees the original is the one who typed it.
+func (s *Server) teamCreateUser(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	owner := identity.MustFromContext(ctx)
 
@@ -251,39 +276,49 @@ func (s *Server) teamInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	email := strings.TrimSpace(r.FormValue("email"))
+	username := strings.TrimSpace(r.FormValue("username"))
+	password := r.FormValue("password")
+	displayName := strings.TrimSpace(r.FormValue("display_name"))
 	role := account.Role(strings.TrimSpace(r.FormValue("role")))
+	if !role.Valid() {
+		role = account.RoleMember
+	}
 
-	raw, err := s.accounts.Invite(ctx, sess.UserID, owner.ID, email, role, s.inviteTTL())
+	// Superuser is checked inside CreateUser against the database, not here
+	// against the session — this call is the convenience, that one is the gate.
+	created, err := s.accounts.CreateUser(ctx, sess.UserID, username, password, displayName, false)
 	if err != nil {
-		s.teamActionFailed(w, r, err, "invite")
+		s.teamActionFailed(w, r, err, "create user")
 		return
 	}
 
-	// Mailed after the row is written, so a delivery failure leaves an
-	// invitation the page can offer to revoke rather than a token nobody holds.
-	msg := notify.Message{
-		To:      email,
-		Subject: "You have been invited to " + displayName(owner) + " on Ozymandis",
-		TextBody: "You have been invited to join " + displayName(owner) +
-			" as " + string(role) + ".\n\n" +
-			s.baseURL + "/invitations/" + raw + "\n\n" +
-			"The link expires. If you were not expecting this, ignore it.",
-	}
-	if err := s.mailer.Send(ctx, msg); err != nil {
-		// Logged, not surfaced: the invitation is real and revocable either
-		// way, and the address is not ours to report on.
-		s.log.Error("send invitation",
-			slog.String("team", owner.ID), slog.String("error", err.Error()))
+	// A person who can sign in but belongs to no team resolves to no owner and
+	// meets a wall. Membership is part of creating them, not a second step
+	// somebody has to remember.
+	if err := s.accounts.SetRole(ctx, sess.UserID, owner.ID, created.ID, role); err != nil {
+		s.log.Error("grant the new user a role",
+			slog.String("user", created.ID.String()), slog.String("error", err.Error()))
+		s.teamActionFailed(w, r, err, "create user")
+		return
 	}
 
-	http.Redirect(w, r, "/team", http.StatusSeeOther)
+	s.log.Info("user created",
+		slog.String("by", sess.UserID.String()),
+		slog.String("username", created.Username),
+		slog.String("role", string(role)))
+
+	http.Redirect(w, r, "/team?notice="+url.QueryEscape(
+		"Created "+created.Username+". Give them their password now — it is not shown again."),
+		http.StatusSeeOther)
 }
 
-// teamRevokeInvitation withdraws an invitation.
-func (s *Server) teamRevokeInvitation(w http.ResponseWriter, r *http.Request) {
+// teamDeleteUser removes a person from the install entirely.
+//
+// Distinct from removing them from the team: that takes away what they may do,
+// this takes away the account. Their sessions go by cascade, so the deletion
+// takes effect on their next request rather than at their next sign-in.
+func (s *Server) teamDeleteUser(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	owner := identity.MustFromContext(ctx)
 
 	sess, err := s.accounts.ResolveSession(ctx, sessionToken(r))
 	if err != nil {
@@ -293,15 +328,52 @@ func (s *Server) teamRevokeInvitation(w http.ResponseWriter, r *http.Request) {
 
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		http.Error(w, "no such invitation", http.StatusNotFound)
+		http.Error(w, "no such user", http.StatusNotFound)
 		return
 	}
 
-	if err := s.accounts.RevokeInvitation(ctx, sess.UserID, owner.ID, id); err != nil {
-		s.teamActionFailed(w, r, err, "revoke invitation")
+	if err := s.accounts.DeleteUser(ctx, sess.UserID, id); err != nil {
+		s.teamActionFailed(w, r, err, "delete user")
 		return
 	}
 	http.Redirect(w, r, "/team", http.StatusSeeOther)
+}
+
+// teamSetPassword changes somebody's password.
+//
+// Anyone may change their own; a superuser may change anybody's. Which of those
+// applies is decided in the service against the database, not here.
+func (s *Server) teamSetPassword(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	sess, err := s.accounts.ResolveSession(ctx, sessionToken(r))
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "no such user", http.StatusNotFound)
+		return
+	}
+
+	if err := s.accounts.SetPassword(ctx, sess.UserID, id, r.FormValue("password")); err != nil {
+		s.teamActionFailed(w, r, err, "set password")
+		return
+	}
+
+	// Every other session that person holds is ended, and theirs is not. A
+	// password change is what somebody does when they think the old one is
+	// known, and leaving the other browsers signed in would make it ceremony.
+	if id != sess.UserID {
+		if err := s.accounts.RevokeAllSessions(ctx, id); err != nil {
+			s.log.Error("revoke sessions after a password change",
+				slog.String("user", id.String()), slog.String("error", err.Error()))
+		}
+	}
+
+	http.Redirect(w, r, "/team?notice="+url.QueryEscape("Password changed."), http.StatusSeeOther)
 }
 
 // teamRemoveMember takes someone out of the team.
@@ -368,8 +440,16 @@ func (s *Server) teamActionFailed(
 		http.Error(w, "a team must keep at least one owner", http.StatusConflict)
 	case errors.Is(err, account.ErrNotAMember):
 		http.Error(w, "not a member of this team", http.StatusNotFound)
-	case errors.Is(err, account.ErrInvitationNotFound):
-		http.Error(w, "no such invitation", http.StatusNotFound)
+	case errors.Is(err, account.ErrNotSuperuser):
+		http.Error(w, "only a superuser may manage users", http.StatusForbidden)
+	case errors.Is(err, account.ErrUsernameTaken):
+		http.Error(w, "that username is already taken", http.StatusConflict)
+	// The message is passed through rather than replaced: "at least 10
+	// characters" is the whole value of the error, and a generic "invalid
+	// input" would make the person guess which rule they broke.
+	case errors.Is(err, account.ErrRejected):
+		http.Error(w, strings.TrimPrefix(err.Error(), "account: rejected: "),
+			http.StatusUnprocessableEntity)
 	case errors.Is(err, account.ErrSessionInvalid):
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	default:

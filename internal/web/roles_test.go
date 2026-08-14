@@ -291,11 +291,13 @@ func TestAdminCanDeleteAppsAndInvite(t *testing.T) {
 		t.Error("the admin's delete answered 303 and deleted nothing")
 	}
 
-	// Inviting, revoking an invitation and removing a member are the same
-	// authority: they decide who is in the team at all.
+	// Removing a member decides who is in the team at all, and that is an
+	// administrator's authority rather than a member's.
+	//
+	// Creating and deleting accounts used to sit alongside it here. Those routes
+	// are now superuser-only rather than role-gated, which is a different rule
+	// checked in a different place — see TestIsolationUserManagementNeedsSuperuser.
 	for _, path := range []string{
-		"/team/invite",
-		"/team/invitations/" + uuid.New().String() + "/revoke",
 		"/team/members/" + rt.memberID.String() + "/remove",
 	} {
 		if code := rt.postAs(t, path, rt.member).Code; code != http.StatusForbidden {

@@ -177,28 +177,46 @@ func TestValidReservedDomainsLoad(t *testing.T) {
 	}
 }
 
-// Turning sign-in on with no way to deliver a link locks the operator out of
-// their own dashboard permanently. Accounts stay off unless a link can be
-// delivered and a URL exists to put in it.
-func TestAccountsRequireABaseURL(t *testing.T) {
-	setEnv(t, map[string]string{"OZYMANDIS_SMTP_ADDR": "smtp.example.test:587"})
-	c, err := Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if c.AccountsEnabled() {
-		t.Fatal("accounts enabled with no OZYMANDIS_BASE_URL — the link would point nowhere")
-	}
-}
-
-func TestAccountsEnabledWithBaseURL(t *testing.T) {
-	setEnv(t, map[string]string{"OZYMANDIS_BASE_URL": "https://ozymandis.example.test"})
+// Sign-in no longer depends on anything being deliverable. It used to be a
+// link, so it needed a URL to put in it and a relay to send it through, and an
+// install with neither had to keep accounts off or lock its operator out. A
+// password needs none of that, and the superuser is seeded at startup — so
+// accounts are on always, including on an install that has no public URL yet.
+func TestAccountsAreOnWithoutABaseURL(t *testing.T) {
+	setEnv(t, nil)
 	c, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	if !c.AccountsEnabled() {
-		t.Fatal("accounts should be enabled once a base URL is set")
+		t.Fatal("accounts are off with no base URL — nobody can sign in at all")
+	}
+	if c.SuperuserName() != DefaultSuperuserName {
+		t.Fatalf("SuperuserName = %q, want the built-in default", c.SuperuserName())
+	}
+	if !c.UsingDefaultSuperuserPassword() {
+		t.Fatal("the default password is not reported as in use, so nothing warns about it")
+	}
+}
+
+// The seeded password has to be one the person can actually sign in with. A
+// value refused at seeding stops the process with an error about hashing rather
+// than about the setting that caused it.
+func TestSuperuserPasswordIsValidated(t *testing.T) {
+	setEnv(t, map[string]string{"OZYMANDIS_SUPERUSER_PASSWORD": "short"})
+	if _, err := Load(); err == nil {
+		t.Fatal("a password too short to be accepted was loaded without complaint")
+	}
+}
+
+func TestSuperuserPasswordCanBeOverridden(t *testing.T) {
+	setEnv(t, map[string]string{"OZYMANDIS_SUPERUSER_PASSWORD": "a-chosen-password"})
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.UsingDefaultSuperuserPassword() {
+		t.Fatal("an overridden password still reports as the built-in default")
 	}
 }
 

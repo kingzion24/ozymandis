@@ -15,7 +15,7 @@ func TestSessionRoundTrip(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
 
-	u, _ := s.EnsureUser(ctx, "session@example.test", "S")
+	u := mustUser(t, s, "session", "S")
 	if _, err := s.CreateTeam(ctx, "team-session", "Team", u.ID); err != nil {
 		t.Fatalf("CreateTeam: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestSessionTokenIsStoredAsAHash(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
 
-	u, _ := s.EnsureUser(ctx, "hash@example.test", "H")
+	u := mustUser(t, s, "hash", "H")
 	_, _ = s.CreateTeam(ctx, "team-hash", "Team", u.ID)
 	raw, err := s.CreateSession(ctx, u.ID, "team-hash", "", "", time.Hour)
 	if err != nil {
@@ -61,7 +61,7 @@ func TestExpiredSessionIsRejected(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
 
-	u, _ := s.EnsureUser(ctx, "expired@example.test", "E")
+	u := mustUser(t, s, "expired", "E")
 	_, _ = s.CreateTeam(ctx, "team-expired", "Team", u.ID)
 	raw, _ := s.CreateSession(ctx, u.ID, "team-expired", "", "", -time.Minute)
 
@@ -82,7 +82,7 @@ func TestRevokeAllSessionsSignsOutEverywhere(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
 
-	u, _ := s.EnsureUser(ctx, "everywhere@example.test", "E")
+	u := mustUser(t, s, "everywhere", "E")
 	_, _ = s.CreateTeam(ctx, "team-everywhere", "Team", u.ID)
 
 	first, _ := s.CreateSession(ctx, u.ID, "team-everywhere", "", "", time.Hour)
@@ -103,7 +103,7 @@ func TestRevokeSessionEndsOnlyThatSession(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
 
-	u, _ := s.EnsureUser(ctx, "one@example.test", "O")
+	u := mustUser(t, s, "one", "O")
 	_, _ = s.CreateTeam(ctx, "team-one", "Team", u.ID)
 
 	here, _ := s.CreateSession(ctx, u.ID, "team-one", "", "", time.Hour)
@@ -126,8 +126,8 @@ func TestSwitchTeamRefusesATeamYouAreNotIn(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
 
-	mine, _ := s.EnsureUser(ctx, "switcher@example.test", "S")
-	theirs, _ := s.EnsureUser(ctx, "bystander@example.test", "B")
+	mine := mustUser(t, s, "switcher", "S")
+	theirs := mustUser(t, s, "bystander", "B")
 	_, _ = s.CreateTeam(ctx, "team-mine", "Mine", mine.ID)
 	_, _ = s.CreateTeam(ctx, "team-theirs", "Theirs", theirs.ID)
 
@@ -168,7 +168,7 @@ func TestSessionsImplementsIdentityProvider(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
 
-	u, _ := s.EnsureUser(ctx, "provider@example.test", "P")
+	u := mustUser(t, s, "provider", "P")
 	_, _ = s.CreateTeam(ctx, "team-provider", "Team", u.ID)
 	raw, _ := s.CreateSession(ctx, u.ID, "team-provider", "", "", time.Hour)
 
@@ -203,8 +203,8 @@ func TestRemovedMemberLosesTheirSession(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
 
-	owner, _ := s.EnsureUser(ctx, "owner-revoke@example.test", "Owner")
-	member, _ := s.EnsureUser(ctx, "member-revoke@example.test", "Member")
+	owner := mustUser(t, s, "ownerrevoke", "Owner")
+	member := mustUser(t, s, "memberrevoke", "Member")
 
 	const team = "team-session-revoke"
 	if _, err := s.CreateTeam(ctx, team, "Team", owner.ID); err != nil {
@@ -238,7 +238,7 @@ func TestSessionDoesNotOutliveMembershipRemovedDirectly(t *testing.T) {
 	s := testService(t)
 	ctx := context.Background()
 
-	u, _ := s.EnsureUser(ctx, "direct-revoke@example.test", "U")
+	u := mustUser(t, s, "directrevoke", "U")
 	const team = "team-direct-revoke"
 	if _, err := s.CreateTeam(ctx, team, "Team", u.ID); err != nil {
 		t.Fatalf("CreateTeam: %v", err)
