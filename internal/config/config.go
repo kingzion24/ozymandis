@@ -124,10 +124,6 @@ type Config struct {
 	// SessionTTL is how long a signed-in browser stays signed in.
 	SessionTTL time.Duration
 
-	// MagicLinkTTL is how long a sign-in link remains redeemable. Short,
-	// because the link is a bearer credential sitting in a mailbox.
-	MagicLinkTTL time.Duration
-
 	// ShutdownTimeout bounds graceful shutdown.
 	ShutdownTimeout time.Duration
 
@@ -159,7 +155,6 @@ func Load() (Config, error) {
 		ResendAPIKey:    env("OZYMANDIS_RESEND_API_KEY", ""),
 		ResendFrom:      env("OZYMANDIS_RESEND_FROM", ""),
 		SessionTTL:      envDuration("OZYMANDIS_SESSION_TTL", 720*time.Hour),
-		MagicLinkTTL:    envDuration("OZYMANDIS_MAGIC_LINK_TTL", 15*time.Minute),
 		ShutdownTimeout: envDuration("OZYMANDIS_SHUTDOWN_TIMEOUT", 15*time.Second),
 		Debug:           envBool("OZYMANDIS_DEBUG", false),
 	}

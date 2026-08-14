@@ -22,24 +22,29 @@ func renderToString(t *testing.T, c templ.Component) string {
 	return buf.String()
 }
 
-// The wordmark has to be drawn in currentColor.
+// The sidebar spells the brand's name, as text somebody can read and search.
 //
-// Without it the letters take the SVG default, which is black — invisible on
-// the dark theme. Nothing errors and the mark beside it still draws, so the
-// sidebar looks like it has lost its name rather than like it has a bug.
-func TestTheWordmarkFollowsTheTheme(t *testing.T) {
-	word := renderToString(t, brandWordmark("x"))
-
-	if !strings.Contains(word, `fill="currentColor"`) {
-		t.Error("the wordmark is not drawn in currentColor — it will be black on the dark theme")
-	}
-	// Every path either carries the mark's own teal or takes currentColor. One
-	// with neither renders black wherever it lands.
-	for _, m := range regexp.MustCompile(`<path[^>]*>`).FindAllString(word, -1) {
-		if strings.Contains(m, "currentColor") || strings.Contains(m, "fill:rgb(") {
-			continue
+// It used to be drawn: vector letterforms for the engine's own name, and plain
+// text only for a wrapping application's. The drawing still said Yacht long
+// after the rename, and no search of this repository could find it, because
+// letters made of bezier curves are not letters to anything but an eye.
+//
+// Asserting on rendered text rather than on artwork is the whole point of this
+// test: a name that is drawn cannot be checked, and one that is checked cannot
+// silently be the wrong name.
+func TestTheSidebarSpellsTheBrandName(t *testing.T) {
+	for _, name := range []string{DefaultBrandName, "Some Other Product"} {
+		markup := renderToString(t, Layout(Slots{BrandName: name, BrandHref: "/"}, templ.NopComponent))
+		if !strings.Contains(markup, name) {
+			t.Errorf("the sidebar does not carry %q as text", name)
 		}
-		t.Errorf("path with no colour of its own and no currentColor: %.90s", m)
+	}
+
+	// And the engine's own name specifically, since that is the case the
+	// artwork used to intercept.
+	markup := renderToString(t, Layout(Slots{BrandName: DefaultBrandName, BrandHref: "/"}, templ.NopComponent))
+	if strings.Contains(strings.ToLower(markup), "yacht") {
+		t.Error("the sidebar still carries the pre-rename name")
 	}
 }
 
@@ -116,8 +121,7 @@ func TestEveryMarkIsFramedOnItsArtwork(t *testing.T) {
 	source := struct{ w, h float64 }{885, 292} // assets/brand/logo.svg
 
 	for name, markup := range map[string]string{
-		"mark":     renderToString(t, brandMark("x")),
-		"wordmark": renderToString(t, brandWordmark("x")),
+		"mark": renderToString(t, brandMark("x")),
 	} {
 		m := regexp.MustCompile(`viewBox="([-\d.]+) ([-\d.]+) ([-\d.]+) ([-\d.]+)"`).FindStringSubmatch(markup)
 		if m == nil {

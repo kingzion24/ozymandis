@@ -255,13 +255,12 @@ type Options struct {
 
 	// BaseURL is the public URL links are built from. Required with Accounts,
 	// and deliberately not derived from the request: a link built from the Host
-	// header is one an attacker can point at their own server and have Ozymandis
-	// mail to a real person.
+	// BaseURL is the public address the dashboard is reached at.
+	//
+	// Optional since sign-in became a password. It used to be required because a
+	// link had to be built from a configured address rather than from a Host
+	// header, which an attacker can point at their own server.
 	BaseURL string
-
-	// MagicLinkTTL is how long a sign-in link stays redeemable. Defaults to
-	// defaultMagicLinkTTL.
-	MagicLinkTTL time.Duration
 
 	// SessionTTL is how long a signed-in browser stays signed in. Defaults to
 	// defaultSessionTTL.
@@ -281,13 +280,9 @@ type Options struct {
 	Logger *slog.Logger
 }
 
-// defaultMagicLinkTTL and defaultSessionTTL match config's defaults, so a
-// server built without them does not quietly outlive what the operator
-// configured.
-const (
-	defaultMagicLinkTTL = 15 * time.Minute
-	defaultSessionTTL   = 720 * time.Hour
-)
+// defaultSessionTTL matches config's default, so a server built without one
+// does not quietly outlive what the operator configured.
+const defaultSessionTTL = 720 * time.Hour
 
 // Server serves the dashboard.
 type Server struct {
@@ -330,7 +325,6 @@ type Server struct {
 	accounts      Accounts
 	mailer        notify.Mailer
 	baseURL       string
-	magicTTL      time.Duration
 	sessionTTL    time.Duration
 	bootstrapID   string
 	bootstrapName string
@@ -378,9 +372,6 @@ func New(opts Options) (*Server, error) {
 		if opts.Mailer == nil {
 			opts.Mailer = notify.NewLog(opts.Logger)
 		}
-		if opts.MagicLinkTTL <= 0 {
-			opts.MagicLinkTTL = defaultMagicLinkTTL
-		}
 		if opts.SessionTTL <= 0 {
 			opts.SessionTTL = defaultSessionTTL
 		}
@@ -406,7 +397,6 @@ func New(opts Options) (*Server, error) {
 		accounts:      opts.Accounts,
 		mailer:        opts.Mailer,
 		baseURL:       strings.TrimRight(opts.BaseURL, "/"),
-		magicTTL:      opts.MagicLinkTTL,
 		sessionTTL:    opts.SessionTTL,
 		bootstrapID:   opts.BootstrapTeamID,
 		bootstrapName: opts.BootstrapTeamName,

@@ -236,7 +236,6 @@ func run() error {
 		opts.Accounts = accounts
 		opts.Mailer = mailer
 		opts.BaseURL = cfg.BaseURL
-		opts.MagicLinkTTL = cfg.MagicLinkTTL
 		opts.SessionTTL = cfg.SessionTTL
 		// The team the install has been running as. The first person to sign in
 		// inherits it, so the apps already deployed under OZYMANDIS_OWNER_ID stay
