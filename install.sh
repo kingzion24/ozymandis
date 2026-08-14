@@ -18,7 +18,7 @@
 
 set -eu
 
-REPO="codeblocktz/ozymandis"
+REPO="kingzion24/ozymandis"
 INSTALL_DIR="/usr/local/bin"
 CONF_DIR="/etc/ozymandis"
 ENV_FILE="${CONF_DIR}/ozymandis.env"

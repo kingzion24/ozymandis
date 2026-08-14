@@ -18,7 +18,7 @@
 
 set -eu
 
-REPO="codeblocktz/ozymandis"
+REPO="kingzion24/ozymandis"
 INSTALL_DIR="/usr/local/bin"
 BIN="${INSTALL_DIR}/ozymandis"
 PREV="${INSTALL_DIR}/ozymandis.prev"
