@@ -186,8 +186,8 @@ func (f *fakeAccounts) DeleteUser(context.Context, uuid.UUID, uuid.UUID) error {
 	return errNoFakeAccountsBackend
 }
 
-func (f *fakeAccounts) IsSuperuser(context.Context, uuid.UUID) (bool, error) {
-	return false, errNoFakeAccountsBackend
+func (f *fakeAccounts) User(context.Context, uuid.UUID) (account.User, error) {
+	return account.User{}, errNoFakeAccountsBackend
 }
 
 func (f *fakeAccounts) asking() []string {

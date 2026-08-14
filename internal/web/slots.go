@@ -147,15 +147,36 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 	// this same chrome with no session, and a footer offering to sign out of
 	// nothing is worse than an empty corner — which is also why this reads the
 	// owner with FromContext rather than MustFromContext.
+	// The person first, the owner only as a fallback.
+	//
+	// These answer different questions and the footer wants the first one: the
+	// owner is the team every query on this request is scoped by, and after
+	// signing in as somebody the sidebar saying "Local" names the install rather
+	// than whoever is looking at it. The team is already on screen — the
+	// switcher above renders it.
+	//
+	// The fallback is not dead code. An install authenticating by bearer token,
+	// or one with no token at all, has an owner and no person, and there the
+	// owner's name is the only true thing to show.
 	var footer templ.Component
-	if owner, ok := identity.FromContext(ctx); ok {
+	if viewer, ok := ViewerFromContext(ctx); ok {
+		footer = UserMenu(UserMenuData{
+			Label: viewer.Label(), Sub: viewer.Sub(), CanSignOut: len(teams) > 0,
+		})
+	} else if owner, ok := identity.FromContext(ctx); ok {
 		// Sign-out is routed only where accounts are on, and that is the same
 		// condition that gives a session teams to switch between.
-		footer = UserMenu(owner, len(teams) > 0)
+		sub := owner.Email
+		if sub == ownerLabel(owner) {
+			sub = ""
+		}
+		footer = UserMenu(UserMenuData{
+			Label: ownerLabel(owner), Sub: sub, CanSignOut: len(teams) > 0,
+		})
 	}
 
 	return Slots{
-		Title: "Ozymandis",
+		Title: pageTitle(path),
 		// The canvas is a workspace rather than a document: a graph inside a
 		// 1240px column with the window's scrollbar beside it reads as a
 		// picture of a canvas rather than one.
@@ -221,8 +242,16 @@ func breadcrumbFor(path string) []Crumb {
 		return []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "Cluster"}}
 	case hasPrefix(path, "/settings/backups"):
 		return []Crumb{{Label: "Settings", Href: "/settings"}, {Label: "Backups"}}
+	case hasPrefix(path, "/settings/tokens"):
+		return []Crumb{{Label: "Settings", Href: "/settings"}, {Label: "Access tokens"}}
 	case hasPrefix(path, "/settings"):
 		return []Crumb{{Label: "Settings"}}
+	case hasPrefix(path, "/team"):
+		return []Crumb{{Label: "Team"}}
+	case hasPrefix(path, "/projects"):
+		return []Crumb{{Label: "Projects"}}
+	case hasPrefix(path, "/canvas"):
+		return []Crumb{{Label: "Projects", Href: "/projects"}, {Label: "Canvas"}}
 	}
 	return nil
 }
@@ -352,6 +381,28 @@ func isCanvasPath(path string) bool {
 	default:
 		return hasPrefix(path, "/apps/")
 	}
+}
+
+// pageTitle is what the browser tab says.
+//
+// Built from the breadcrumb the chrome already computes, so a page gets a title
+// by being navigable rather than by every handler remembering to set one — and
+// there is one place to change the scheme rather than one per page.
+//
+// The page comes first because that is the part that differs: a row of tabs all
+// reading "Ozymandis" is a row of tabs nobody can tell apart, which is what
+// this had before.
+//
+// The signed-in person is deliberately not here. A tab title is read by browser
+// history, by session restore, by anything that screen-shares a window list,
+// and none of those are places a username needs to be. It is in the sidebar,
+// where somebody has to be looking at the page to see it.
+func pageTitle(path string) string {
+	crumbs := breadcrumbFor(path)
+	if len(crumbs) == 0 {
+		return DefaultBrandName
+	}
+	return crumbs[len(crumbs)-1].Label + " · " + DefaultBrandName
 }
 
 // DefaultBrandName is this engine's own name.

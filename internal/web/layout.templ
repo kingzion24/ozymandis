@@ -1,7 +1,6 @@
 package web
 
 import (
-	"github.com/kingzion24/ozymandis/internal/identity"
 	"github.com/kingzion24/ozymandis/internal/web/ui/selectbox"
 	"github.com/kingzion24/ozymandis/internal/web/ui/sheet"
 )
@@ -216,26 +215,37 @@ templ TeamSwitcher(teams []TeamChoice) {
 	</details>
 }
 
-// UserMenu is the sidebar's floor: who the session belongs to, and the actions
-// that belong to the session rather than to any page.
+// UserMenuData is the sidebar's floor: who is looking at this page, and the
+// actions that belong to them rather than to any page.
 //
-// A details/summary for the same reason the switcher is one — the control that
-// signs you out is the last thing that should need JavaScript to open — and it
-// opens upward because it sits on the floor of the panel.
-//
-// canSignOut is false on a token-authenticated install. There is no session to
-// end there and /sign-out is not routed at all, so the buttons would 404;
-// drawing nothing is better than drawing a control that cannot work. It is the
-// same question the switcher answers by having no teams to offer.
-templ UserMenu(owner identity.Owner, canSignOut bool) {
+// A label and a second line rather than the owner it used to take, because what
+// belongs here is the signed-in person and an owner describes the team. Which
+// of the two is available is decided in DefaultSlots; this renders whatever it
+// is handed.
+type UserMenuData struct {
+	Label string
+	Sub   string
+
+	// CanSignOut is false on a token-authenticated install. There is no session
+	// to end there and /sign-out is not routed at all, so the buttons would 404;
+	// drawing nothing is better than drawing a control that cannot work. It is
+	// the same question the switcher answers by having no teams to offer.
+	CanSignOut bool
+}
+
+// UserMenu is a details/summary for the same reason the switcher is one — the
+// control that signs you out is the last thing that should need JavaScript to
+// open — and it opens upward because it sits on the floor of the panel.
+
+templ UserMenu(d UserMenuData) {
 	<details name="sidebar-menu" class="group relative">
 		<summary class="switcher">
-			<span class="avatar">{ initials(ownerLabel(owner)) }</span>
+			<span class="avatar">{ initials(d.Label) }</span>
 			<span class="rail-hide flex min-w-0 flex-1 flex-col text-left">
-				<span class="truncate font-medium leading-tight">{ ownerLabel(owner) }</span>
-				if owner.Email != "" && owner.Email != ownerLabel(owner) {
+				<span class="truncate font-medium leading-tight">{ d.Label }</span>
+				if d.Sub != "" {
 					<span class="truncate text-[11px] leading-tight text-muted-foreground">
-						{ owner.Email }
+						{ d.Sub }
 					</span>
 				}
 			</span>
@@ -250,14 +260,14 @@ templ UserMenu(owner identity.Owner, canSignOut bool) {
 			>
 				<path d="M6 9l6 6 6-6"></path>
 			</svg>
-			<span class="nav-tip" aria-hidden="true">{ ownerLabel(owner) }</span>
+			<span class="nav-tip" aria-hidden="true">{ d.Label }</span>
 		</summary>
 		<div class="switcher-menu bottom-full left-0 right-0 mb-1">
 			<a href="/settings" class="switcher-item">
 				@icon("settings")
 				<span class="flex-1">Settings</span>
 			</a>
-			if canSignOut {
+			if d.CanSignOut {
 				<div class="my-1 h-px bg-border"></div>
 				<form method="post" action="/sign-out">
 					<button type="submit" class="switcher-item switcher-danger">

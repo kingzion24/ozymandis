@@ -154,7 +154,11 @@ func (s *Service) EnsureSuperuser(ctx context.Context, username, password string
 	row, err := s.q.EnsureSuperuser(ctx, dbgen.EnsureSuperuserParams{
 		Username:     username,
 		PasswordHash: hash,
-		DisplayName:  "Superuser",
+		// No display name. "Superuser" is what they are, not what they are
+		// called, and setting it here made the sidebar read "Superuser" with the
+		// actual account name demoted to the line beneath — naming the role and
+		// hiding the person, which is the opposite of what that corner is for.
+		DisplayName: "",
 	})
 	if err != nil {
 		return User{}, fmt.Errorf("account: ensure superuser: %w", err)
@@ -226,13 +230,26 @@ func (s *Service) DeleteUser(ctx context.Context, actor, target uuid.UUID) error
 	return nil
 }
 
-// IsSuperuser reports whether the person is an administrator of the install.
-func (s *Service) IsSuperuser(ctx context.Context, id uuid.UUID) (bool, error) {
+// User reads one person by id.
+//
+// The whole row rather than the one bit a caller happens to want: the chrome
+// needs a name to show and a gate needs the superuser flag, and two methods
+// reading the same row would be two round trips for one question.
+func (s *Service) User(ctx context.Context, id uuid.UUID) (User, error) {
 	row, err := s.q.GetUserByID(ctx, id)
 	if err != nil {
-		return false, fmt.Errorf("account: read user: %w", err)
+		return User{}, fmt.Errorf("account: read user: %w", err)
 	}
-	return row.IsSuperuser, nil
+	return toUser(row), nil
+}
+
+// IsSuperuser reports whether the person is an administrator of the install.
+func (s *Service) IsSuperuser(ctx context.Context, id uuid.UUID) (bool, error) {
+	u, err := s.User(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	return u.IsSuperuser, nil
 }
 
 func (s *Service) requireSuperuser(ctx context.Context, actor uuid.UUID) error {

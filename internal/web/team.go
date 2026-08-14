@@ -231,12 +231,13 @@ func (s *Server) teamPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	superuser, err := s.accounts.IsSuperuser(ctx, sess.UserID)
+	viewer, err := s.accounts.User(ctx, sess.UserID)
 	if err != nil {
-		s.log.Error("read superuser", slog.String("error", err.Error()))
+		s.log.Error("read the signed-in user", slog.String("error", err.Error()))
 		http.Error(w, "could not load the team", http.StatusInternalServerError)
 		return
 	}
+	superuser := viewer.IsSuperuser
 
 	var users []account.User
 	if superuser {

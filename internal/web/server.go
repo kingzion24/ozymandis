@@ -122,10 +122,11 @@ type Accounts interface {
 	// DeleteUser removes a person, their sessions and their memberships.
 	DeleteUser(ctx context.Context, actor, target uuid.UUID) error
 
-	// IsSuperuser gates the people page. Read per request rather than carried
-	// in the session, so authority taken away takes effect on the next click
-	// rather than at the next sign-in.
-	IsSuperuser(ctx context.Context, id uuid.UUID) (bool, error)
+	// User reads one person. It is what the chrome names in the sidebar and what
+	// gates the people page — read per request rather than carried in the
+	// session, so authority taken away takes effect on the next click rather
+	// than at the next sign-in.
+	User(ctx context.Context, id uuid.UUID) (account.User, error)
 
 	// TeamsFor lists the teams a person may act as.
 	TeamsFor(ctx context.Context, userID uuid.UUID) ([]account.Membership, error)
@@ -483,6 +484,10 @@ func (s *Server) Handler() http.Handler {
 		// belongs to the layout and not to any one page.
 		if s.accounts != nil {
 			r.Use(s.withTeams)
+			// Beside withTeams and for the same reason: the chrome needs to name
+			// the person, and this is the group where a session exists to name
+			// them from.
+			r.Use(s.withViewer)
 		}
 
 		// Which optional pages exist, for the same reason and in the same

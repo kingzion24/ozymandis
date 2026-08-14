@@ -163,13 +163,18 @@ func TestIsolationTeamPageDoesNotLeakAnotherTeam(t *testing.T) {
 // session id in advance and then wait for the victim to authenticate it.
 func TestIsolationSignInDoesNotAdoptAPresentedToken(t *testing.T) {
 	h := newLiveHarness(t, "web-iso5")
-	h.user(t, "fixation-iso")
+
+	// The name the harness actually created, not the label it was asked for:
+	// usernames are unique across this package, so the fixture suffixes them.
+	// Posting the label instead authenticates nobody, and the test then passes
+	// for the wrong reason — a 401 issues no cookie either.
+	user := h.user(t, "fixation-iso")
 
 	planted := &http.Cookie{Name: SessionCookie, Value: "attacker-chosen-token-value"}
 
 	req := httptest.NewRequest(http.MethodPost, "/sign-in",
 		strings.NewReader(url.Values{
-			"username": {"fixation-iso"}, "password": {testPassword},
+			"username": {user.Username}, "password": {testPassword},
 		}.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(planted)
