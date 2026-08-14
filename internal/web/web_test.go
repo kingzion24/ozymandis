@@ -27,6 +27,20 @@ func testServer(t *testing.T, opts Options) http.Handler {
 			ID: "owner-1", DisplayName: "Eric",
 		})
 	}
+	// An empty Apps rather than none.
+	//
+	// Apps is not optional the way Registries and Joiner are — every page that
+	// lists anything reaches for it — so a server without one does not serve a
+	// reduced dashboard, it nil-panics on the first such page. chi's Recoverer
+	// turns that into a 500, which is how a test asserting only on 404 passed
+	// for years while printing a panic trace into the output.
+	//
+	// A test that wants particular apps passes its own; this is what the rest
+	// get so that walking the navigation exercises the pages rather than the
+	// recovery middleware.
+	if opts.Apps == nil {
+		opts.Apps = newFakeApps()
+	}
 	// A test that asserts on what was logged supplies its own logger; the rest
 	// get a silent one.
 	if opts.Logger == nil {

@@ -95,8 +95,15 @@ func TestEverySidebarLinkResolves(t *testing.T) {
 		seen[href] = true
 
 		rec := get(t, h, href)
-		if rec.Code == http.StatusNotFound {
+		switch {
+		case rec.Code == http.StatusNotFound:
 			t.Errorf("the sidebar offers %s and nothing serves it", href)
+		case rec.Code >= 500:
+			// Checked because a panic does not reach here as a panic: the
+			// Recoverer above these handlers turns one into a 500 and logs the
+			// trace, so a link that blows up looks like a link that resolves to
+			// anything asserting only on 404.
+			t.Errorf("the sidebar offers %s and it answers %d", href, rec.Code)
 		}
 	}
 	if len(seen) < 5 {
