@@ -32,6 +32,12 @@ const (
 	// it can mount the data directory, run as the right user, and generate the
 	// credentials — none of which a person should have to look up.
 	SourcePostgres Source = "postgres"
+
+	// SourceRedis is a Redis instance, on the same terms as SourcePostgres: a
+	// known image, so the uid, the data directory, the password and the
+	// eviction policy are all decided here rather than rediscovered by whoever
+	// deploys one.
+	SourceRedis Source = "redis"
 )
 
 // Blueprint is everything a source decides on the app's behalf.
@@ -54,6 +60,15 @@ type Blueprint struct {
 
 	Image string
 	Port  int32
+
+	// Command replaces the image's own, for an image that has to be told how to
+	// run rather than configured through the environment. Postgres reads
+	// POSTGRES_PASSWORD and needs none of this; Redis takes its settings as
+	// arguments, so its blueprint has to supply them.
+	//
+	// Only used when the person left the command empty, so it is a default
+	// rather than something a source imposes.
+	Command string
 
 	// Internal keeps the workload off the public internet. A database speaks
 	// its own protocol on its own port, so an HTTP hostname pointed at it
@@ -153,6 +168,59 @@ func BlueprintsFor(c Capabilities) []Blueprint {
 			GeneratedSecrets:   []string{"POSTGRES_PASSWORD"},
 			ConnectionKey:      "DATABASE_URL",
 			ConnectionTemplate: "postgres://ozymandis:%s@%s:5432/ozymandis?sslmode=disable",
+		},
+		{
+			Source:      SourceRedis,
+			Label:       "Redis",
+			Description: "A Redis 7 instance, with storage, a password and eviction set up.",
+			Available:   true,
+			Image:       "redis:7-alpine",
+			Port:        6379,
+			Internal:    true,
+
+			// The uid of the redis account in the alpine image. Checked against
+			// the image rather than read off a page — `redis:7-alpine` declares
+			// no USER at all, so without this the kubelet refuses it outright
+			// with "image will run as root", exactly as it does for nginx.
+			//
+			// FSGroup is what makes the mounted data directory writable: the
+			// volume is chowned to this gid and the pod joins it as a
+			// supplementary group. Without it Redis starts, fails its first
+			// write, and the failure looks like a disk problem.
+			RunAsUser: 999,
+			FSGroup:   999,
+
+			// Everything Redis persists goes to --dir below, and nothing else
+			// is written: no pidfile, because the server does not daemonize in
+			// a container. So a read-only root filesystem needs no exceptions.
+			Volume: &VolumeInput{
+				Name: "data", MountPath: "/data",
+				SizeBytes: 1 << 30,
+			},
+
+			// A shell, because the password must reach Redis as an argument and
+			// must not be written into the pod template. `$REDIS_PASSWORD` is
+			// literal here — ParseCommand deliberately expands nothing — so the
+			// pod template carries the name and the shell in the container
+			// resolves it from the sealed Secret at startup.
+			//
+			// appendonly, because this holds things whose loss is not merely a
+			// cold cache: an unread work queue, or a counter that lets somebody
+			// past a limit again when it resets to zero.
+			//
+			// noeviction rather than an LRU policy, and this is the load-bearing
+			// choice. Under memory pressure an LRU quietly discards whatever it
+			// judges least useful, which for a queue is unprocessed work and for
+			// a counter is the limit itself. Refusing the write is visible, and
+			// visible is recoverable.
+			Command: `sh -c 'exec redis-server` +
+				` --appendonly yes --dir /data` +
+				` --maxmemory 256mb --maxmemory-policy noeviction` +
+				` --requirepass "$REDIS_PASSWORD"'`,
+
+			GeneratedSecrets:   []string{"REDIS_PASSWORD"},
+			ConnectionKey:      "REDIS_URL",
+			ConnectionTemplate: "redis://:%s@%s:6379",
 		},
 		{
 			Source:      SourceGit,

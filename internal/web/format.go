@@ -347,7 +347,7 @@ func gigabytes(b int64) string {
 // sourceIcon maps a source to an icon that already exists.
 func sourceIcon(src app.Source) string {
 	switch src {
-	case app.SourcePostgres:
+	case app.SourcePostgres, app.SourceRedis:
 		return "storage"
 	case "git":
 		return "external"

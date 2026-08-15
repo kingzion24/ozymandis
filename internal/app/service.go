@@ -384,6 +384,14 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 		in.Port = blueprint.Port
 	}
 
+	// A default rather than an override: an image the source named still runs
+	// whatever the person explicitly asked for. Blank is the only case this
+	// fills, because an image that needs arguments to be configured at all
+	// cannot rely on somebody knowing to type them.
+	if blueprint.Command != "" && strings.TrimSpace(in.Command) == "" {
+		in.Command = blueprint.Command
+	}
+
 	// A repository is built into an image, so the app starts with a
 	// placeholder that is replaced by the first successful build. Validating
 	// the repository here means a URL nobody could clone is refused at the

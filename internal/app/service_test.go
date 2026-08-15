@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -945,6 +946,149 @@ func TestPostgresSourceArrivesComplete(t *testing.T) {
 	}
 	if spec.Secrets["POSTGRES_PASSWORD"] == "" {
 		t.Error("the workload did not receive its password")
+	}
+}
+
+func TestRedisSourceArrivesComplete(t *testing.T) {
+	ctx := context.Background()
+	k, err := secret.NewKeeper(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("k"), 32)))
+	if err != nil {
+		t.Fatalf("NewKeeper: %v", err)
+	}
+	s, orch, pool := testService(t, Options{Keeper: k, AppDomain: "apps.example.test"})
+	id := owner(t, s, pool, "svc-redis")
+
+	if _, err := s.Create(ctx, id, CreateInput{Source: SourceRedis, Name: "cache"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := s.Get(ctx, id, "cache")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	if len(got.Volumes) != 1 || got.Volumes[0].MountPath != "/data" {
+		t.Fatalf("volumes = %+v, want one at /data", got.Volumes)
+	}
+
+	var hasPassword, hasConn bool
+	for _, v := range got.Variables {
+		if v.Key == "REDIS_PASSWORD" || v.Key == "REDIS_URL" {
+			hasPassword = hasPassword || v.Key == "REDIS_PASSWORD"
+			hasConn = hasConn || v.Key == "REDIS_URL"
+			if !v.Secret {
+				t.Errorf("%s is not marked secret", v.Key)
+			}
+			if v.Value != "" {
+				t.Errorf("%s came back readable", v.Key)
+			}
+		}
+	}
+	if !hasPassword || !hasConn {
+		t.Fatalf("variables = %+v, want a password and a connection string", got.Variables)
+	}
+
+	// Redis speaks its own protocol, so no HTTP hostname.
+	if got.Host != "" {
+		t.Errorf("redis was given the hostname %q", got.Host)
+	}
+
+	spec := orch.lastAppSpec()
+
+	// The image declares no USER, so without this the kubelet refuses the pod
+	// outright rather than starting it as root.
+	if spec.RunAsUser != 999 || spec.FSGroup != 999 {
+		t.Errorf("runAsUser=%d fsGroup=%d, want 999 — the image will not start otherwise",
+			spec.RunAsUser, spec.FSGroup)
+	}
+	if spec.Secrets["REDIS_PASSWORD"] == "" {
+		t.Error("the workload did not receive its password")
+	}
+}
+
+// The password must reach Redis without ever being written into the pod
+// template, which is what the shell in the command is for.
+func TestRedisIsPasswordProtectedWithoutLeakingIt(t *testing.T) {
+	ctx := context.Background()
+	k, _ := secret.NewKeeper(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("k"), 32)))
+	s, orch, pool := testService(t, Options{Keeper: k})
+	id := owner(t, s, pool, "svc-redis2")
+
+	if _, err := s.Create(ctx, id, CreateInput{Source: SourceRedis, Name: "cache"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	spec := orch.lastAppSpec()
+	password := spec.Secrets["REDIS_PASSWORD"]
+	if password == "" {
+		t.Fatal("no password was generated")
+	}
+
+	joined := strings.Join(spec.Command, " ")
+	if !strings.Contains(joined, "--requirepass") {
+		t.Fatalf("command does not set a password: %q", joined)
+	}
+	// The literal name, never the value: ParseCommand expands nothing, so the
+	// shell inside the container is what resolves it.
+	if !strings.Contains(joined, "$REDIS_PASSWORD") {
+		t.Errorf("command does not reference the variable: %q", joined)
+	}
+	if strings.Contains(joined, password) {
+		t.Error("the generated password was written into the pod template")
+	}
+
+	// A cache that silently drops what it is holding is worse than one that
+	// refuses a write: the entries at risk are unprocessed work and the
+	// counters that enforce limits.
+	if !strings.Contains(joined, "--maxmemory-policy noeviction") {
+		t.Errorf("eviction policy is not noeviction: %q", joined)
+	}
+	if !strings.Contains(joined, "--appendonly yes") {
+		t.Errorf("persistence is off, so a restart loses the data: %q", joined)
+	}
+}
+
+// The command has to survive ParseCommand as three arguments — a shell, -c, and
+// one script — or the container runs something that is not a command line.
+func TestRedisCommandParsesAsAShellInvocation(t *testing.T) {
+	b, err := BlueprintFor(SourceRedis)
+	if err != nil {
+		t.Fatalf("BlueprintFor: %v", err)
+	}
+	argv, err := ParseCommand(b.Command)
+	if err != nil {
+		t.Fatalf("ParseCommand(%q): %v", b.Command, err)
+	}
+	if len(argv) != 3 || argv[0] != "sh" || argv[1] != "-c" {
+		t.Fatalf("argv = %#v, want [sh -c <script>]", argv)
+	}
+	// exec, so redis is PID 1 and receives the signals Kubernetes sends it —
+	// without it the shell gets them and the container stops on a timeout
+	// rather than on request.
+	if !strings.HasPrefix(argv[2], "exec redis-server") {
+		t.Errorf("script does not exec: %q", argv[2])
+	}
+	if !strings.Contains(argv[2], `"$REDIS_PASSWORD"`) {
+		t.Errorf("the variable is not quoted in the script: %q", argv[2])
+	}
+}
+
+// A blueprint command is a default. Somebody who names their own runs theirs.
+func TestABlueprintCommandDoesNotOverrideAChosenOne(t *testing.T) {
+	ctx := context.Background()
+	k, _ := secret.NewKeeper(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("k"), 32)))
+	s, orch, pool := testService(t, Options{Keeper: k})
+	id := owner(t, s, pool, "svc-redis3")
+
+	_, err := s.Create(ctx, id, CreateInput{
+		Source: SourceRedis, Name: "cache", Command: "redis-server --port 6379",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if joined := strings.Join(orch.lastAppSpec().Command, " "); joined != "redis-server --port 6379" {
+		t.Errorf("command = %q, want the one that was asked for", joined)
 	}
 }
 
