@@ -230,8 +230,9 @@ func (o *Orchestrator) container(
 	// Sort environment keys. Map iteration order is random in Go, and an
 	// unsorted list produces a different pod template on every apply, which
 	// would restart the workload each time it reconciles.
-	for _, k := range slices.Sorted(maps(spec.Env)) {
-		c = c.WithEnv(corev1ac.EnvVar().WithName(k).WithValue(spec.Env[k]))
+	env := containerEnv(spec)
+	for _, k := range slices.Sorted(maps(env)) {
+		c = c.WithEnv(corev1ac.EnvVar().WithName(k).WithValue(env[k]))
 	}
 
 	res, err := resourceRequirements(spec)
@@ -376,6 +377,41 @@ func (o *Orchestrator) AppStatus(
 }
 
 // specHash is a stable fingerprint of the fields that should trigger a rollout.
+// containerEnv is the app's plaintext environment plus whatever the platform
+// owes the process regardless of what anybody configured.
+//
+// Today that is PORT. A buildpack-built image binds $PORT and binds nothing at
+// all without it, so an app whose deploy went green answers 502 until somebody
+// sets the variable by hand: a missing convention that presents as a broken
+// app. The port is already known here — the container declares it two fields
+// up — so having the platform state it is the whole fix.
+//
+// A default, never an override. A PORT the caller set wins, whether it arrived
+// plain or sealed as a secret; the value of a secret is not visible here, but
+// the key is, and the key is all this needs to stay out of the way. Injecting
+// over a configured value would let the platform silently contradict the app,
+// and emitting both would leave the winner to list order.
+//
+// Nothing needs adding to specHash: the result is a function of spec.Port and
+// spec.Env, and it hashes both already.
+func containerEnv(spec orchestrator.AppSpec) map[string]string {
+	_, plain := spec.Env["PORT"]
+	_, sealed := spec.Secrets["PORT"]
+	if spec.Port <= 0 || plain || sealed {
+		return spec.Env
+	}
+
+	// Copied rather than written through. The spec belongs to the caller, and
+	// an ApplyApp that mutated its argument would leave PORT behind in whatever
+	// that caller reuses it for next.
+	env := make(map[string]string, len(spec.Env)+1)
+	for k, v := range spec.Env {
+		env[k] = v
+	}
+	env["PORT"] = strconv.Itoa(int(spec.Port))
+	return env
+}
+
 func specHash(spec orchestrator.AppSpec) string {
 	h := sha256.New()
 	fmt.Fprintf(h, "image=%s\n", spec.Image)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"slices"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -177,12 +178,14 @@ func TestApplyApp(t *testing.T) {
 	}
 
 	// Environment must be sorted, or every reconcile produces a different pod
-	// template and restarts the workload.
-	if len(c.Env) != 2 {
-		t.Fatalf("got %d env vars, want 2", len(c.Env))
+	// template and restarts the workload. The injected PORT sorts in with the
+	// rest rather than being appended: one invariant, no exceptions.
+	var names []string
+	for _, e := range c.Env {
+		names = append(names, e.Name)
 	}
-	if c.Env[0].Name != "APP_ENV" || c.Env[1].Name != "LOG_LEVEL" {
-		t.Errorf("env not sorted: got %s, %s", c.Env[0].Name, c.Env[1].Name)
+	if want := []string{"APP_ENV", "LOG_LEVEL", "PORT"}; !slices.Equal(names, want) {
+		t.Errorf("env = %v, want %v", names, want)
 	}
 
 	// Selector must match the pod labels, or the Deployment adopts nothing.
@@ -299,6 +302,78 @@ func TestSpecHash(t *testing.T) {
 		other.Env = map[string]string{"LOG_LEVEL": "debug", "APP_ENV": "prod"}
 		if specHash(base) == specHash(other) {
 			t.Error("hash must change when an env value changes")
+		}
+	})
+}
+
+// TestPortIsInjected covers the convention a buildpack-built image relies on.
+// Such an image binds $PORT and binds nothing without it, so the app deploys
+// green and answers 502 — this was found on a live install, not in a test, and
+// only because somebody opened the URL.
+func TestPortIsInjected(t *testing.T) {
+	ctx := context.Background()
+
+	// End to end for the case that failed: the value has to reach the pod
+	// template, which is the only place the container ever reads it from.
+	t.Run("reaches the deployment", func(t *testing.T) {
+		o, client := testOrchestrator(t)
+		if err := o.ApplyApp(ctx, testSpec()); err != nil {
+			t.Fatalf("ApplyApp: %v", err)
+		}
+		dep, err := client.AppsV1().Deployments("ozymandis-demo").
+			Get(ctx, "web", metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("get deployment: %v", err)
+		}
+
+		var got string
+		for _, e := range dep.Spec.Template.Spec.Containers[0].Env {
+			if e.Name == "PORT" {
+				got = e.Value
+			}
+		}
+		if got != "8080" {
+			t.Errorf("PORT = %q, want %q (the port the container declares)", got, "8080")
+		}
+	})
+
+	// A default is only a default if configuration beats it.
+	t.Run("a configured PORT wins", func(t *testing.T) {
+		spec := testSpec()
+		spec.Env = map[string]string{"PORT": "3000"}
+		if got := containerEnv(spec)["PORT"]; got != "3000" {
+			t.Errorf("PORT = %q, want the configured 3000", got)
+		}
+	})
+
+	// The value of a secret is not visible here, but its key is, and that is
+	// all this needs to know to leave the variable alone. Emitting PORT as a
+	// literal would beat the envFrom the secret arrives by.
+	t.Run("a secret PORT is left alone", func(t *testing.T) {
+		spec := testSpec()
+		spec.Secrets = map[string]string{"PORT": "3000"}
+		if _, injected := containerEnv(spec)["PORT"]; injected {
+			t.Error("injected PORT over a secret of the same name")
+		}
+	})
+
+	// No port means the workload takes no traffic, so there is nothing true to
+	// say — and a PORT naming a port nothing routes to is worse than silence.
+	t.Run("no port, no variable", func(t *testing.T) {
+		spec := testSpec()
+		spec.Port = 0
+		if _, injected := containerEnv(spec)["PORT"]; injected {
+			t.Error("injected PORT into a workload that declares no port")
+		}
+	})
+
+	// The spec belongs to the caller. A mutating ApplyApp would leave PORT in
+	// whatever they reuse it for next.
+	t.Run("the caller's spec is untouched", func(t *testing.T) {
+		spec := testSpec()
+		containerEnv(spec)
+		if _, leaked := spec.Env["PORT"]; leaked {
+			t.Error("containerEnv wrote through to the caller's map")
 		}
 	})
 }

@@ -39,6 +39,7 @@ nothing you build here is locked in.
 |---|---|
 | Deploy a container image, with env vars and replicas | ✅ |
 | Override the image's command, so one image runs as several apps | ✅ |
+| The port an app declares reaches it as `$PORT`, which is what buildpacks bind | ✅ |
 | Build and deploy from a Git repository, using buildpacks | ✅ |
 | Builds run as an isolated Job, with the log kept | ✅ |
 | A built-in registry for the images those builds produce | ✅ |
