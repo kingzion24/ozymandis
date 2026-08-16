@@ -21,6 +21,7 @@ import (
 
 	"github.com/kingzion24/ozymandis/internal/account"
 	"github.com/kingzion24/ozymandis/internal/app"
+	"github.com/kingzion24/ozymandis/internal/domain"
 )
 
 // Error is the body of every failed response.
@@ -106,13 +107,27 @@ func writeServiceError(w http.ResponseWriter, log *slog.Logger, op string, err e
 		errors.Is(err, app.ErrVolumeNotFound),
 		errors.Is(err, app.ErrVariableNotFound),
 		errors.Is(err, app.ErrProjectNotFound),
-		errors.Is(err, app.ErrTemplateNotFound):
+		errors.Is(err, app.ErrTemplateNotFound),
+		errors.Is(err, domain.ErrDomainNotFound):
 		// 404 rather than a description of what is missing. See notFound.
 		writeError(w, http.StatusNotFound, CodeNotFound, err.Error())
 
 	case errors.Is(err, app.ErrNameTaken):
 		writeError(w, http.StatusConflict, CodeConflict,
 			"an app with that name already exists")
+
+	case errors.Is(err, domain.ErrHostTaken):
+		// The same shape as ErrNameTaken: the name is well formed and somebody
+		// else has it. Retrying is pointless; picking another name is not.
+		writeError(w, http.StatusConflict, CodeConflict, err.Error())
+
+	case errors.Is(err, domain.ErrHostReserved),
+		errors.Is(err, domain.ErrNotVerified):
+		// Both are the caller's to fix and neither is a malformed request:
+		// one names something the platform issues itself, the other a name
+		// whose DNS does not point here yet. 422 rather than 400 for the same
+		// reason ErrVolumeShrink is — the syntax was fine, the ask was not.
+		writeError(w, http.StatusUnprocessableEntity, CodeInvalid, err.Error())
 
 	case errors.Is(err, app.ErrVolumeAttached):
 		writeError(w, http.StatusConflict, CodeConflict, err.Error())
@@ -124,13 +139,16 @@ func writeServiceError(w http.ResponseWriter, log *slog.Logger, op string, err e
 		errors.Is(err, app.ErrNoSecretKey),
 		errors.Is(err, app.ErrSourceUnavailable),
 		errors.Is(err, app.ErrNoExec),
-		errors.Is(err, app.ErrNoRunner):
+		errors.Is(err, app.ErrNoRunner),
+		errors.Is(err, domain.ErrNoTarget),
+		errors.Is(err, domain.ErrNoAppDomain):
 		// None of these is a fault in the request. They are all the same shape:
 		// the caller asked for something reasonable and THIS INSTALL is not
 		// configured for it — no registry, no secret key, no source, no exec, no
-		// task runner. A 4xx would send somebody to re-read their own arguments
-		// for a problem that is in the install's configuration, and a 500 would
-		// have a client retry a missing registry forever.
+		// task runner, no CNAME target, no app domain. A 4xx would send somebody
+		// to re-read their own arguments for a problem that is in the install's
+		// configuration, and a 500 would have a client retry a missing registry
+		// forever.
 		writeError(w, http.StatusServiceUnavailable, CodeUnavailable, err.Error())
 
 	case errors.Is(err, account.ErrNotAMember):

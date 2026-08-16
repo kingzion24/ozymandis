@@ -18,6 +18,7 @@ import (
 
 	"github.com/kingzion24/ozymandis/internal/account"
 	"github.com/kingzion24/ozymandis/internal/app"
+	"github.com/kingzion24/ozymandis/internal/domain"
 	"github.com/kingzion24/ozymandis/internal/identity"
 	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
@@ -898,5 +899,72 @@ func TestNewRequiresItsDependencies(t *testing.T) {
 	}
 	if _, err := New(Options{Identity: &tokenIdentity{}}); err == nil {
 		t.Error("a server with no apps service was accepted")
+	}
+}
+
+// --- Error mapping ---
+
+// Every domain error used to fall through to the default case and become a
+// 500 saying "check the server log". That is wrong for all of them and
+// actively misleading for most: an install with no CNAME target configured,
+// or a hostname somebody else already claimed, is not an internal failure and
+// the server log has nothing further to say about it. The caller could not
+// tell "you cannot do this here" from "this broke".
+func TestDomainErrorsAreNotInternalErrors(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want int
+		code string
+	}{
+		// The install is not configured for this. Not the caller's fault, and
+		// not something retrying fixes — the same bucket as ErrNoBuilder.
+		{domain.ErrNoTarget, http.StatusServiceUnavailable, CodeUnavailable},
+		{domain.ErrNoAppDomain, http.StatusServiceUnavailable, CodeUnavailable},
+
+		// The caller's to fix, and each says how.
+		{domain.ErrHostReserved, http.StatusUnprocessableEntity, CodeInvalid},
+		{domain.ErrNotVerified, http.StatusUnprocessableEntity, CodeInvalid},
+
+		// Well formed, but somebody else has it.
+		{domain.ErrHostTaken, http.StatusConflict, CodeConflict},
+
+		// Nothing there to act on.
+		{domain.ErrDomainNotFound, http.StatusNotFound, CodeNotFound},
+	} {
+		w := httptest.NewRecorder()
+		writeServiceError(w, slog.New(slog.DiscardHandler), "add domain", c.err)
+
+		if w.Code != c.want {
+			t.Errorf("%v: status = %d, want %d", c.err, w.Code, c.want)
+		}
+
+		var body errorBody
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%v: body is not JSON: %v", c.err, err)
+		}
+		if body.Error.Code != c.code {
+			t.Errorf("%v: code = %q, want %q", c.err, body.Error.Code, c.code)
+		}
+
+		// The point of the fix: the reason reaches the caller instead of being
+		// swapped for a message telling them to read a log they cannot see.
+		if body.Error.Message == "something went wrong here; check the server log" {
+			t.Errorf("%v: still reported as an internal failure", c.err)
+		}
+	}
+}
+
+// The default case still exists and still hides detail — an error nobody
+// mapped is an operator's problem, and its text may name internals.
+func TestAnUnmappedErrorIsStillOpaque(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeServiceError(w, slog.New(slog.DiscardHandler), "op",
+		errors.New("connection to 10.0.0.4:5432 refused"))
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "10.0.0.4") {
+		t.Error("an internal address reached the caller")
 	}
 }
