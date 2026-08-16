@@ -11,7 +11,9 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/kingzion24/ozymandis/internal/orchestrator"
@@ -585,5 +587,108 @@ func TestTheDeploymentNeverCarriesASecretValue(t *testing.T) {
 	}
 	if strings.Contains(rev, password) {
 		t.Error("the revision annotation contains the secret itself")
+	}
+}
+
+// --- Network isolation ---
+
+func policyFor(t *testing.T, o *Orchestrator, client kubernetes.Interface, ns orchestrator.NamespaceSpec) *networkingv1.NetworkPolicy {
+	t.Helper()
+	if err := o.EnsureNamespace(context.Background(), ns); err != nil {
+		t.Fatalf("EnsureNamespace: %v", err)
+	}
+	p, err := client.NetworkingV1().NetworkPolicies(ns.Name).
+		Get(context.Background(), networkPolicyName, metav1.GetOptions{})
+	if err != nil {
+		return nil
+	}
+	return p
+}
+
+// Without a policy, "internal" means only that an app has no Ingress — every
+// pod in the cluster can still reach it directly, at a port that checks none of
+// the things the front door checks.
+func TestANamespaceIsIsolatedToItsOwnerAndTheEdge(t *testing.T) {
+	o, client := testOrchestrator(t)
+	o.WithIngressNamespace("traefik")
+
+	p := policyFor(t, o, client, orchestrator.NamespaceSpec{Owner: "owner-1", Name: "ozymandis-demo"})
+	if p == nil {
+		t.Fatal("no network policy was created")
+	}
+
+	// Ingress only. Denying egress would break every app that calls an LLM, a
+	// managed database, or a payment provider — with a timeout, not an error.
+	if len(p.Spec.PolicyTypes) != 1 || p.Spec.PolicyTypes[0] != networkingv1.PolicyTypeIngress {
+		t.Errorf("policyTypes = %v, want [Ingress] only", p.Spec.PolicyTypes)
+	}
+
+	// Empty pod selector: everything in the namespace, including whatever is
+	// added later. A policy naming specific pods leaves the next one exposed.
+	if len(p.Spec.PodSelector.MatchLabels) != 0 {
+		t.Errorf("podSelector = %v, want every pod", p.Spec.PodSelector.MatchLabels)
+	}
+
+	if len(p.Spec.Ingress) != 1 {
+		t.Fatalf("got %d ingress rules, want 1", len(p.Spec.Ingress))
+	}
+	from := p.Spec.Ingress[0].From
+	if len(from) != 2 {
+		t.Fatalf("got %d peers, want 2 (own owner, and the edge)", len(from))
+	}
+
+	var sawOwner, sawEdge bool
+	for _, peer := range from {
+		if peer.NamespaceSelector == nil {
+			t.Fatal("a peer has no namespace selector, so it matches more than intended")
+		}
+		if peer.NamespaceSelector.MatchLabels[orchestrator.LabelOwner] == "owner-1" {
+			sawOwner = true
+		}
+		if peer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] == "traefik" {
+			sawEdge = true
+		}
+	}
+	if !sawOwner {
+		t.Error("the owner's own namespaces cannot reach each other — that breaks every wired app")
+	}
+	if !sawEdge {
+		t.Error("the ingress controller cannot reach the app — every public app would be offline")
+	}
+}
+
+// The gate. Ozymandis does not install the edge and cannot guess where it runs,
+// and a policy applied without that exception denies the ingress controller
+// along with everyone else: every public app offline, while the dashboard still
+// reports them healthy. Off is the honest default.
+func TestNoPolicyWithoutKnowingWhereTheEdgeIs(t *testing.T) {
+	o, client := testOrchestrator(t)
+
+	if p := policyFor(t, o, client, orchestrator.NamespaceSpec{Owner: "owner-1", Name: "ozymandis-demo"}); p != nil {
+		t.Error("a policy was applied without an ingress namespace — public apps would be unreachable")
+	}
+}
+
+// Two owners must not select each other's namespaces.
+func TestOwnersDoNotSelectEachOther(t *testing.T) {
+	o, client := testOrchestrator(t)
+	o.WithIngressNamespace("traefik")
+
+	a := policyFor(t, o, client, orchestrator.NamespaceSpec{Owner: "owner-1", Name: "ozymandis-a"})
+	b := policyFor(t, o, client, orchestrator.NamespaceSpec{Owner: "owner-2", Name: "ozymandis-b"})
+	if a == nil || b == nil {
+		t.Fatal("policies missing")
+	}
+
+	ownerOf := func(p *networkingv1.NetworkPolicy) string {
+		for _, peer := range p.Spec.Ingress[0].From {
+			if v := peer.NamespaceSelector.MatchLabels[orchestrator.LabelOwner]; v != "" {
+				return v
+			}
+		}
+		return ""
+	}
+	if ownerOf(a) == ownerOf(b) {
+		t.Errorf("both namespaces admit the same owner %q — that is not isolation", ownerOf(a))
 	}
 }

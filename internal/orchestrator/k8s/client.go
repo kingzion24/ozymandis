@@ -29,6 +29,12 @@ type Config struct {
 	// Kubeconfig is a path to a kubeconfig file. Empty falls back to the
 	// standard client-go loading rules (KUBECONFIG, then ~/.kube/config).
 	Kubeconfig string
+
+	// IngressNamespace is where the ingress controller runs. Empty turns off
+	// namespace network isolation entirely — see ensureNetworkPolicy for why a
+	// policy applied without knowing the edge would take every public app
+	// offline.
+	IngressNamespace string
 }
 
 // Orchestrator applies workloads to a single Kubernetes cluster.
@@ -54,6 +60,10 @@ type Orchestrator struct {
 	// it. A fake cluster has no API server to dial.
 	restCfg *rest.Config
 
+	// ingressNamespace is the one namespace outside an owner's own that may
+	// reach their pods. Empty means network isolation is off.
+	ingressNamespace string
+
 	log *slog.Logger
 }
 
@@ -77,6 +87,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger) (*Orchestrator, erro
 
 	o := NewWithClient(client, log)
 	o.restCfg = restCfg
+	o.ingressNamespace = cfg.IngressNamespace
 
 	// Best effort, like the metrics client: a cluster this cannot build a
 	// dynamic client for is still perfectly usable, it just cannot be asked to
@@ -153,4 +164,14 @@ func (o *Orchestrator) Ping(_ context.Context) error {
 	}
 	o.log.Debug("cluster reachable", slog.String("version", v.String()))
 	return nil
+}
+
+// WithIngressNamespace names where the ingress controller runs, turning on
+// namespace network isolation. Empty leaves it off.
+//
+// A setter as well as a Config field because NewWithClient — every test, and
+// any embedder holding its own clientset — never sees a Config.
+func (o *Orchestrator) WithIngressNamespace(ns string) *Orchestrator {
+	o.ingressNamespace = ns
+	return o
 }

@@ -339,8 +339,9 @@ func newOrchestrator(
 	ctx context.Context, cfg config.Config, log *slog.Logger,
 ) (orchestrator.Orchestrator, error) {
 	orch, err := k8s.New(ctx, k8s.Config{
-		InCluster:  cfg.KubeInCluster,
-		Kubeconfig: cfg.Kubeconfig,
+		InCluster:        cfg.KubeInCluster,
+		Kubeconfig:       cfg.Kubeconfig,
+		IngressNamespace: cfg.IngressNamespace,
 	}, log)
 	if err == nil {
 		log.Info("connected to cluster")

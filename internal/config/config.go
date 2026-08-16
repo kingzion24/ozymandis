@@ -104,6 +104,21 @@ type Config struct {
 	// thing to look at is the issuer rather than the status code.
 	CertResolver string
 
+	// IngressNamespace is the namespace the ingress controller runs in, and
+	// setting it turns on network isolation between owners' namespaces.
+	//
+	// Empty by default, and off is the honest default: Ozymandis does not
+	// install the edge, so it cannot know where yours lives — and a policy
+	// applied without that one exception denies the ingress controller along
+	// with everybody else, taking every public app offline while the dashboard
+	// still reports them healthy.
+	//
+	// With it set, a namespace accepts traffic only from its own owner's
+	// namespaces and from the edge. Egress is untouched: an app legitimately
+	// calls the whole internet, and denying that by default produces timeouts
+	// rather than errors.
+	IngressNamespace string
+
 	// BaseURL is the public URL the dashboard is reached at, such as
 	// https://ozymandis.example.com. It is what a sign-in link is built from, and
 	// setting it is what switches accounts on: without it there is no address
@@ -145,7 +160,8 @@ func Load() (Config, error) {
 		AppDomain:       env("OZYMANDIS_APP_DOMAIN", ""),
 		ReservedDomains: envList("OZYMANDIS_RESERVED_DOMAINS"),
 
-		CertResolver: strings.TrimSpace(envAllowingEmpty("OZYMANDIS_CERT_RESOLVER", "letsencrypt")),
+		CertResolver:     strings.TrimSpace(envAllowingEmpty("OZYMANDIS_CERT_RESOLVER", "letsencrypt")),
+		IngressNamespace: strings.TrimSpace(env("OZYMANDIS_INGRESS_NAMESPACE", "")),
 
 		BaseURL:         strings.TrimRight(env("OZYMANDIS_BASE_URL", ""), "/"),
 		SMTPAddr:        env("OZYMANDIS_SMTP_ADDR", ""),
