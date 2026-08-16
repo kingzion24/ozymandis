@@ -376,7 +376,9 @@ func (o *Orchestrator) AppStatus(
 	return status, nil
 }
 
-// specHash is a stable fingerprint of the fields that should trigger a rollout.
+// specHash is a stable fingerprint of everything that should trigger a rollout,
+// including the CONTENT of the secrets — see the loop over spec.Secrets for
+// why that is not the same question as which fields changed.
 // containerEnv is the app's plaintext environment plus whatever the platform
 // owes the process regardless of what anybody configured.
 //
@@ -392,8 +394,8 @@ func (o *Orchestrator) AppStatus(
 // over a configured value would let the platform silently contradict the app,
 // and emitting both would leave the winner to list order.
 //
-// Nothing needs adding to specHash: the result is a function of spec.Port and
-// spec.Env, and it hashes both already.
+// Nothing needs adding to specHash: the result is a function of spec.Port,
+// spec.Env and spec.Secrets, and it hashes all three already.
 func containerEnv(spec orchestrator.AppSpec) map[string]string {
 	_, plain := spec.Env["PORT"]
 	_, sealed := spec.Secrets["PORT"]
@@ -427,6 +429,32 @@ func specHash(spec orchestrator.AppSpec) string {
 	for _, k := range slices.Sorted(maps(spec.Env)) {
 		fmt.Fprintf(h, "env=%s=%s\n", k, spec.Env[k])
 	}
+
+	// Secrets, by content — and this is the one entry here that is not simply
+	// "a field that changed".
+	//
+	// Secrets reach the container through envFrom, which names a Secret rather
+	// than carrying its values. That is deliberate and stays: it is what keeps
+	// them out of `kubectl get deploy -o yaml`. The consequence is that
+	// rewriting a Secret leaves the pod template byte-identical, so Kubernetes
+	// sees nothing to roll and the running pods keep the old values — for as
+	// long as nothing else happens to restart them. Setting a secret then
+	// reported success and changed nothing, which is the worst available
+	// outcome: the credential is live in the store, absent from the process,
+	// and there is no error anywhere to say so.
+	//
+	// Hashing the values fixes it without putting any of them in the template.
+	// What lands there is the same 16 hex characters as before — a digest over
+	// every key and value, from which no value can be recovered.
+	//
+	// Length-prefixed for the reason the command arguments above are: without
+	// it {"AB":"C"} and {"A":"BC"} hash alike, and a rename between two such
+	// keys would not roll.
+	for _, k := range slices.Sorted(maps(spec.Secrets)) {
+		v := spec.Secrets[k]
+		fmt.Fprintf(h, "secret=%d:%s=%d:%s\n", len(k), k, len(v), v)
+	}
+
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 

@@ -2,9 +2,11 @@ package k8s
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -483,5 +485,105 @@ func TestApplyAppRejectsInvalidInput(t *testing.T) {
 				t.Error("expected validation error, got nil")
 			}
 		})
+	}
+}
+
+// --- Secrets and rollouts ---
+
+// The bug this pins, in full: secrets reach the container through envFrom,
+// which names a Secret and does not carry its values. Rewriting that Secret
+// therefore left the pod template byte-identical, Kubernetes saw nothing to
+// roll, and the running pods kept serving the OLD values indefinitely — while
+// the API reported the change as applied. A rotated password looked set and was
+// not, with no error anywhere to say so.
+func TestChangingASecretRollsThePods(t *testing.T) {
+	base := testSpec()
+	base.Secrets = map[string]string{"DATABASE_URL": "postgres://old@db/x"}
+
+	rotated := testSpec()
+	rotated.Secrets = map[string]string{"DATABASE_URL": "postgres://new@db/x"}
+
+	if specHash(base) == specHash(rotated) {
+		t.Error("a rotated secret must change the pod template, or the pods keep the old value")
+	}
+}
+
+func TestSecretKeysAffectTheHash(t *testing.T) {
+	base := testSpec()
+	base.Secrets = map[string]string{"A": "1"}
+
+	t.Run("adding one", func(t *testing.T) {
+		other := testSpec()
+		other.Secrets = map[string]string{"A": "1", "B": "2"}
+		if specHash(base) == specHash(other) {
+			t.Error("a new secret must roll")
+		}
+	})
+
+	t.Run("removing one", func(t *testing.T) {
+		other := testSpec()
+		other.Secrets = map[string]string{}
+		if specHash(base) == specHash(other) {
+			t.Error("a deleted secret must roll — the process still has it otherwise")
+		}
+	})
+
+	// Length-prefixing earns its place here. Without it these two hash alike,
+	// and renaming a key between them would silently not roll.
+	t.Run("a rename that preserves the concatenation", func(t *testing.T) {
+		x, y := testSpec(), testSpec()
+		x.Secrets = map[string]string{"AB": "C"}
+		y.Secrets = map[string]string{"A": "BC"}
+		if specHash(x) == specHash(y) {
+			t.Error(`{"AB":"C"} and {"A":"BC"} must not hash alike`)
+		}
+	})
+
+	t.Run("stable across map ordering", func(t *testing.T) {
+		x, y := testSpec(), testSpec()
+		x.Secrets = map[string]string{"A": "1", "B": "2", "C": "3"}
+		y.Secrets = map[string]string{"C": "3", "A": "1", "B": "2"}
+		if specHash(x) != specHash(y) {
+			t.Error("hash must not depend on map iteration order, or every apply rolls")
+		}
+	})
+}
+
+// The property that must survive the fix. Hashing the values is only acceptable
+// because a digest is not a value: what lands in the template must still be
+// sixteen hex characters and nothing else, so `kubectl get deploy -o yaml`
+// stays safe to paste into an issue.
+func TestTheDeploymentNeverCarriesASecretValue(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+
+	const password = "sup3r-s3cret-p4ssw0rd"
+	spec := testSpec()
+	spec.Secrets = map[string]string{"DATABASE_URL": "postgres://u:" + password + "@db/x"}
+
+	ns := orchestrator.NamespaceSpec{Owner: "owner-1", Name: "ozymandis-demo"}
+	if err := o.EnsureNamespace(ctx, ns); err != nil {
+		t.Fatalf("namespace: %v", err)
+	}
+	if err := o.ApplyApp(ctx, spec); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	dep, err := client.AppsV1().Deployments("ozymandis-demo").Get(ctx, "web", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+
+	rendered := fmt.Sprintf("%+v", dep)
+	if strings.Contains(rendered, password) {
+		t.Error("a secret value reached the Deployment")
+	}
+
+	rev := dep.Spec.Template.Annotations[orchestrator.AnnotationRevision]
+	if len(rev) != 16 {
+		t.Errorf("revision annotation = %q, want 16 hex characters", rev)
+	}
+	if strings.Contains(rev, password) {
+		t.Error("the revision annotation contains the secret itself")
 	}
 }
