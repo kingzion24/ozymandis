@@ -45,7 +45,7 @@ nothing you build here is locked in.
 | A built-in registry for the images those builds produce | ✅ |
 | Scale, redeploy, delete | ✅ |
 | Liveness and readiness probes | ✅ |
-| Deployment history, with a log per deployment | ✅ |
+| Deployment history, with a build log per deployment, in the dashboard and the API | ✅ |
 | A release command, run against the new image before traffic shifts | ✅ |
 | Deploy on push, with an HMAC-verified webhook | ✅ |
 | A deploy key per app, so private repositories clone — from the dashboard or the API | ✅ |

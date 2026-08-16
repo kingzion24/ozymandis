@@ -41,6 +41,7 @@ type fakeApps struct {
 	commands    map[string]string
 	services    map[string]string
 	releases    map[string]string
+	builds      map[uuid.UUID]app.Build
 
 	err error
 }
@@ -54,6 +55,7 @@ func newFakeApps() *fakeApps {
 		commands: map[string]string{},
 		services: map[string]string{},
 		releases: map[string]string{},
+		builds:   map[uuid.UUID]app.Build{},
 	}
 }
 
@@ -141,6 +143,19 @@ func (f *fakeApps) Deployments(
 	_ context.Context, _ string, _ uuid.UUID, _ int32,
 ) ([]app.Deployment, error) {
 	return nil, f.err
+}
+
+func (f *fakeApps) BuildForDeployment(
+	_ context.Context, _ string, deployID uuid.UUID,
+) (app.Build, error) {
+	if f.err != nil {
+		return app.Build{}, f.err
+	}
+	b, ok := f.builds[deployID]
+	if !ok {
+		return app.Build{}, app.ErrNotFound
+	}
+	return b, nil
 }
 
 func (f *fakeApps) SetVariable(
@@ -1082,5 +1097,142 @@ func TestReadingAnAppShowsTheKeyWithoutMintingOne(t *testing.T) {
 	}
 	if pushes.calls != 0 {
 		t.Error("reading an app minted a deploy key")
+	}
+}
+
+// --- Build logs ---
+
+func buildFixture(appID uuid.UUID, depID uuid.UUID, lines int) app.Build {
+	var b strings.Builder
+	for i := 1; i <= lines; i++ {
+		fmt.Fprintf(&b, "step %d\n", i)
+	}
+	return app.Build{
+		ID: uuid.New(), AppID: appID, DeploymentID: depID,
+		Status: app.BuildFailed, Message: "the clone step exited 128",
+		CommitSHA: "abc123", Log: b.String(), StartedAt: time.Now(),
+	}
+}
+
+// The gap this closes: the build log existed, and could only be read by a
+// person with a browser. Whatever notices a failed build first is usually CI or
+// a script, and neither can open a page.
+func TestTheBuildLogIsReadableOverTheAPI(t *testing.T) {
+	apps := newFakeApps()
+	apps.add("team-a", app.App{Name: "web"})
+	appID := apps.byOwner["team-a"]["web"].ID
+	dep := uuid.New()
+	apps.builds[dep] = buildFixture(appID, dep, 5)
+
+	h, _ := testServer(t, apps, nil)
+	w := do(h, http.MethodGet, "/api/v1/apps/web/deployments/"+dep.String()+"/build", "oz_team-a-token", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body)
+	}
+
+	var out BuildOut
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if !strings.Contains(out.Log, "step 1") || !strings.Contains(out.Log, "step 5") {
+		t.Errorf("log did not come back whole: %q", out.Log)
+	}
+	// The status and the reason travel with it. A log with no verdict makes the
+	// caller parse prose to find out whether the build passed.
+	if out.Status != app.BuildFailed {
+		t.Errorf("status = %q, want %q", out.Status, app.BuildFailed)
+	}
+	if out.Message == "" {
+		t.Error("the failure message did not come back")
+	}
+	if out.Truncated {
+		t.Error("a whole log must not be reported as truncated")
+	}
+}
+
+// A failing build is usually explained by its last lines, and build logs run to
+// thousands. Fetching megabytes to read the end of them is the thing tail avoids.
+func TestTailReturnsTheEndOfTheLog(t *testing.T) {
+	apps := newFakeApps()
+	apps.add("team-a", app.App{Name: "web"})
+	appID := apps.byOwner["team-a"]["web"].ID
+	dep := uuid.New()
+	apps.builds[dep] = buildFixture(appID, dep, 500)
+
+	h, _ := testServer(t, apps, nil)
+	w := do(h, http.MethodGet, "/api/v1/apps/web/deployments/"+dep.String()+"/build?tail=3", "oz_team-a-token", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var out BuildOut
+	json.Unmarshal(w.Body.Bytes(), &out)
+
+	if got := strings.Count(out.Log, "\n") + 1; got != 3 {
+		t.Errorf("got %d lines, want 3", got)
+	}
+	if !strings.Contains(out.Log, "step 500") {
+		t.Error("tail returned the wrong end of the log")
+	}
+	if strings.Contains(out.Log, "step 1\n") {
+		t.Error("tail returned the beginning too")
+	}
+	// Said out loud, so a caller printing this can say the log was cut rather
+	// than present a fragment as the whole thing.
+	if !out.Truncated {
+		t.Error("a cut log must report itself as truncated")
+	}
+}
+
+// The deployment id is scoped to the team, not to the app. Without the check a
+// sibling app's build is readable through this app's URL — same team, so not a
+// leak, but an answer to a question nobody asked.
+func TestABuildFromAnotherAppIsNotFoundHere(t *testing.T) {
+	apps := newFakeApps()
+	apps.add("team-a", app.App{Name: "web"})
+	apps.add("team-a", app.App{Name: "worker"})
+	workerID := apps.byOwner["team-a"]["worker"].ID
+	dep := uuid.New()
+	apps.builds[dep] = buildFixture(workerID, dep, 3)
+
+	h, _ := testServer(t, apps, nil)
+	w := do(h, http.MethodGet, "/api/v1/apps/web/deployments/"+dep.String()+"/build", "oz_team-a-token", "")
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 — worker's build reached web's URL", w.Code)
+	}
+}
+
+func TestBuildRejectsANonsenseDeploymentID(t *testing.T) {
+	apps := newFakeApps()
+	apps.add("team-a", app.App{Name: "web"})
+	h, _ := testServer(t, apps, nil)
+
+	for _, c := range []struct {
+		path string
+		want int
+	}{
+		{"/api/v1/apps/web/deployments/not-a-uuid/build", http.StatusBadRequest},
+		{"/api/v1/apps/web/deployments/" + uuid.New().String() + "/build?tail=0", http.StatusBadRequest},
+		{"/api/v1/apps/web/deployments/" + uuid.New().String() + "/build", http.StatusNotFound},
+	} {
+		w := do(h, http.MethodGet, c.path, "oz_team-a-token", "")
+		if w.Code != c.want {
+			t.Errorf("%s: status = %d, want %d", c.path, w.Code, c.want)
+		}
+	}
+}
+
+// Reading is a Member action, like the deployment list beside it.
+func TestAMemberMayReadABuildLog(t *testing.T) {
+	apps := newFakeApps()
+	apps.add("team-a", app.App{Name: "web"})
+	appID := apps.byOwner["team-a"]["web"].ID
+	dep := uuid.New()
+	apps.builds[dep] = buildFixture(appID, dep, 2)
+
+	h, _ := testServer(t, apps, nil)
+	w := do(h, http.MethodGet, "/api/v1/apps/web/deployments/"+dep.String()+"/build", "oz_member-token", "")
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 — reading a build is a read", w.Code)
 	}
 }

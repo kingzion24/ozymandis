@@ -33,6 +33,7 @@ type Apps interface {
 	Redeploy(ctx context.Context, ownerID, name string) error
 	Delete(ctx context.Context, ownerID, name string) error
 	Deployments(ctx context.Context, ownerID string, appID uuid.UUID, limit int32) ([]app.Deployment, error)
+	BuildForDeployment(ctx context.Context, ownerID string, deployID uuid.UUID) (app.Build, error)
 
 	SetVariable(ctx context.Context, ownerID, appName string, in app.VariableInput) error
 	DeleteVariable(ctx context.Context, ownerID, appName, key string) error
@@ -182,6 +183,7 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/apps/{name}", s.appGet)
 			r.Get("/apps/{name}/status", s.appStatus)
 			r.Get("/apps/{name}/deployments", s.deploymentList)
+			r.Get("/apps/{name}/deployments/{id}/build", s.buildGet)
 			r.Get("/apps/{name}/secrets", s.secretList)
 			r.Get("/apps/{name}/config", s.configGet)
 

@@ -127,6 +127,7 @@ Member (read)                        Admin (write)
   GET  /apps/{name}                    POST   /apps/{name}/deploy
   GET  /apps/{name}/status             POST   /apps/{name}/scale
   GET  /apps/{name}/deployments        PUT    /apps/{name}/config
+  GET  .../deployments/{id}/build      
   GET  /apps/{name}/secrets  (keys)    PUT    /apps/{name}/secrets
   GET  /apps/{name}/config             DELETE /apps/{name}/secrets/{key}
   GET  /apps/{name}/domains            POST   /apps/{name}/domains
@@ -137,6 +138,14 @@ Member (read)                        Admin (write)
 
 `GET /apps/{name}/secrets` returns keys, never values. There is no read path for
 a secret's value by design: `SetVariable` is how one is replaced.
+
+`GET /apps/{name}/deployments/{id}/build` returns the build behind a deployment
+— status, commit, image and the log — with `?tail=N` for the last N lines. The
+dashboard has had this since builds existed and the API had not, which left the
+log readable only by a person with a browser. That is the wrong way round: what
+notices a failed build first is usually CI or a script, and neither can open a
+page. The app in the path is checked against the build's own app, because a
+deployment id is scoped to the team rather than to one app.
 
 `POST /apps/{name}/deploy-key` mints a pair and returns the **public** half;
 `GET /apps/{name}` carries that same public half on every read. Both halves of

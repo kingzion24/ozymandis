@@ -4,9 +4,11 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/kingzion24/ozymandis/internal/app"
 	"github.com/kingzion24/ozymandis/internal/orchestrator"
@@ -441,4 +443,96 @@ func (s *Server) deployKeyGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, s.log, http.StatusCreated, DeployKeyOut{Public: key.Public})
+}
+
+// BuildOut is the body of GET /apps/{name}/deployments/{id}/build.
+type BuildOut struct {
+	ID        string `json:"id"`
+	Status    string `json:"status"`
+	Message   string `json:"message,omitempty"`
+	CommitSHA string `json:"commit_sha,omitempty"`
+	Image     string `json:"image,omitempty"`
+
+	// Log is the build's output. Whole by default, or the last N lines with
+	// ?tail=N — a failing build is usually explained by its final lines, and
+	// asking for those beats fetching megabytes to read the end of them.
+	Log string `json:"log"`
+
+	// Truncated says the log was cut, so a caller printing it can say so rather
+	// than present a fragment as the whole thing.
+	Truncated bool `json:"truncated,omitempty"`
+
+	StartedAt  time.Time  `json:"started_at"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+}
+
+// buildGet returns the build behind one deployment, log included.
+//
+// The dashboard has had this since builds existed; the API had not, which left
+// the log readable only by a person with a browser. That is the wrong way round:
+// a build log is most wanted by whatever noticed the failure, and what notices
+// first is usually CI or a script, neither of which can open a page.
+func (s *Server) buildGet(w http.ResponseWriter, r *http.Request) {
+	a, err := s.lookup(r)
+	if err != nil {
+		writeServiceError(w, s.log, "get app", err)
+		return
+	}
+
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeInvalid(w, "that is not a deployment id")
+		return
+	}
+
+	tail := 0
+	if v := r.URL.Query().Get("tail"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 10000 {
+			writeInvalid(w, "tail must be a number between 1 and 10000")
+			return
+		}
+		tail = n
+	}
+
+	b, err := s.apps.BuildForDeployment(r.Context(), ownerOf(r).ID, id)
+	if err != nil {
+		writeServiceError(w, s.log, "read build", err)
+		return
+	}
+
+	// The deployment id is scoped to the team, not to the app, so a build from
+	// a sibling app would otherwise be readable through this app's URL. Not a
+	// leak — same team either way — but an answer to a question nobody asked,
+	// and the shape of bug that becomes one after the next refactor.
+	if b.AppID != a.ID {
+		writeError(w, http.StatusNotFound, CodeNotFound, "no such deployment for this app")
+		return
+	}
+
+	log, truncated := tailLines(b.Log, tail)
+	writeJSON(w, s.log, http.StatusOK, BuildOut{
+		ID:         b.ID.String(),
+		Status:     b.Status,
+		Message:    b.Message,
+		CommitSHA:  b.CommitSHA,
+		Image:      b.Image,
+		Log:        log,
+		Truncated:  truncated,
+		StartedAt:  b.StartedAt,
+		FinishedAt: b.FinishedAt,
+	})
+}
+
+// tailLines returns the last n lines of s, and whether anything was dropped.
+// n <= 0 means the whole thing.
+func tailLines(s string, n int) (string, bool) {
+	if n <= 0 || s == "" {
+		return s, false
+	}
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) <= n {
+		return s, false
+	}
+	return strings.Join(lines[len(lines)-n:], "\n"), true
 }
