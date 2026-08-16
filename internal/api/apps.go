@@ -52,6 +52,12 @@ type App struct {
 	RepoBranch string `json:"repo_branch,omitempty"`
 	RepoSubdir string `json:"repo_subdir,omitempty"`
 
+	// DeployKey is the PUBLIC half, readable because it is public and because
+	// the alternative is minting a new pair every time somebody needs to see
+	// which key a repository should trust — which revokes the one already
+	// working there.
+	DeployKey string `json:"deploy_key,omitempty"`
+
 	HealthPath string `json:"health_path,omitempty"`
 	Liveness   bool   `json:"liveness,omitempty"`
 
@@ -96,6 +102,7 @@ func appOut(a app.App) App {
 		RepoURL:    a.Repo.URL,
 		RepoBranch: a.Repo.Branch,
 		RepoSubdir: a.Repo.Subdir,
+		DeployKey:  a.DeployKeyPublic,
 
 		HealthPath: a.HealthPath,
 		Liveness:   a.Liveness,
@@ -402,4 +409,36 @@ func (s *Server) lookup(r *http.Request) (app.App, error) {
 		return app.App{}, err
 	}
 	return a, nil
+}
+
+// DeployKeyOut is the body of POST /apps/{name}/deploy-key.
+//
+// Only the public half, because only the public half ever leaves: the private
+// one is sealed on the way in and unsealed only by a build about to clone with
+// it. There is no endpoint that returns it, and this is not an oversight.
+type DeployKeyOut struct {
+	Public string `json:"public"`
+}
+
+// deployKeyGenerate mints a key pair for cloning a private repository and
+// returns the public half to add to the repository host.
+//
+// The dashboard has had this since deploy-on-push existed; the API had not,
+// which left a gap you could fall into without noticing: this API can create an
+// app from a private repository, but could not give it the credential to clone
+// one. Every build then failed at the clone with exit 128, and the fix lived on
+// a page a script cannot reach.
+//
+// POST rather than GET because it is not a read. Calling it twice mints two
+// pairs and the second replaces the first — which is how a leaked key is
+// revoked, and why the response says so rather than being a bare string.
+func (s *Server) deployKeyGenerate(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+
+	key, err := s.pushes.GenerateDeployKey(r.Context(), ownerOf(r).ID, name)
+	if err != nil {
+		writeServiceError(w, s.log, "generate deploy key", err)
+		return
+	}
+	writeJSON(w, s.log, http.StatusCreated, DeployKeyOut{Public: key.Public})
 }

@@ -968,3 +968,119 @@ func TestAnUnmappedErrorIsStillOpaque(t *testing.T) {
 		t.Error("an internal address reached the caller")
 	}
 }
+
+// --- Deploy keys ---
+
+// fakePushes mints a predictable key and records who asked.
+type fakePushes struct {
+	calls int
+	err   error
+}
+
+func (f *fakePushes) GenerateDeployKey(
+	_ context.Context, ownerID, name string,
+) (app.DeployKey, error) {
+	f.calls++
+	if f.err != nil {
+		return app.DeployKey{}, f.err
+	}
+	return app.DeployKey{Public: "ssh-ed25519 AAAAfake ozymandis-" + name}, nil
+}
+
+func serverWithPushes(t *testing.T, apps *fakeApps, pushes Pushes) http.Handler {
+	t.Helper()
+	ident := &tokenIdentity{
+		tokens: map[string]string{"oz_team-a-token": "team-a", "oz_member-token": "team-a"},
+		roles: map[string]account.Role{
+			"oz_team-a-token": account.RoleAdmin,
+			"oz_member-token": account.RoleMember,
+		},
+	}
+	srv, err := New(Options{
+		Identity: ident, Apps: apps, Roles: ident, Pushes: pushes, Logger: quiet(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return srv.Handler()
+}
+
+// The gap this endpoint closes: the API could create an app from a private
+// repository but not give it the credential to clone one, so every build failed
+// at the clone and the only fix was a dashboard page a script cannot reach.
+func TestDeployKeyIsMintedAndOnlyThePublicHalfComesBack(t *testing.T) {
+	apps := newFakeApps()
+	apps.add("team-a", app.App{Name: "web"})
+	pushes := &fakePushes{}
+	h := serverWithPushes(t, apps, pushes)
+
+	w := do(h, http.MethodPost, "/api/v1/apps/web/deploy-key", "oz_team-a-token", "")
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", w.Code, w.Body)
+	}
+
+	var out DeployKeyOut
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if !strings.HasPrefix(out.Public, "ssh-ed25519 ") {
+		t.Errorf("public = %q, want an authorized_keys line", out.Public)
+	}
+
+	// The private half has no field to travel in, and must not have acquired
+	// one: it is sealed on the way in and unsealed only by a build cloning.
+	if strings.Contains(w.Body.String(), "PRIVATE KEY") ||
+		strings.Contains(w.Body.String(), "private") {
+		t.Error("the response mentions a private key")
+	}
+}
+
+// Minting a credential is not a read, and a member is not an admin.
+func TestDeployKeyNeedsAdmin(t *testing.T) {
+	apps := newFakeApps()
+	apps.add("team-a", app.App{Name: "web"})
+	pushes := &fakePushes{}
+	h := serverWithPushes(t, apps, pushes)
+
+	w := do(h, http.MethodPost, "/api/v1/apps/web/deploy-key", "oz_member-token", "")
+	if w.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", w.Code)
+	}
+	if pushes.calls != 0 {
+		t.Error("a member's request reached the service")
+	}
+}
+
+// An install with no secret key has no Pushes wired, and the route is absent
+// rather than mounted and failing — the same rule the dashboard's panel follows.
+// 404 and not 405: nothing answers that path at all.
+func TestDeployKeyIsAbsentWithoutASecretKey(t *testing.T) {
+	apps := newFakeApps()
+	apps.add("team-a", app.App{Name: "web"})
+	h := serverWithPushes(t, apps, nil)
+
+	w := do(h, http.MethodPost, "/api/v1/apps/web/deploy-key", "oz_team-a-token", "")
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 — the route should not be mounted", w.Code)
+	}
+}
+
+// Reading the key back must not mint one: regenerating replaces the pair, so a
+// read that rotated would revoke the key already working on the repository.
+func TestReadingAnAppShowsTheKeyWithoutMintingOne(t *testing.T) {
+	apps := newFakeApps()
+	apps.add("team-a", app.App{Name: "web", DeployKeyPublic: "ssh-ed25519 AAAAexisting ozymandis-web"})
+	pushes := &fakePushes{}
+	h := serverWithPushes(t, apps, pushes)
+
+	w := do(h, http.MethodGet, "/api/v1/apps/web", "oz_team-a-token", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "AAAAexisting") {
+		t.Errorf("the stored public key was not returned: %s", w.Body)
+	}
+	if pushes.calls != 0 {
+		t.Error("reading an app minted a deploy key")
+	}
+}

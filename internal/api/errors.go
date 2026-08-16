@@ -140,6 +140,7 @@ func writeServiceError(w http.ResponseWriter, log *slog.Logger, op string, err e
 		errors.Is(err, app.ErrSourceUnavailable),
 		errors.Is(err, app.ErrNoExec),
 		errors.Is(err, app.ErrNoRunner),
+		errors.Is(err, app.ErrNoSecretKeyForDeployKey),
 		errors.Is(err, domain.ErrNoTarget),
 		errors.Is(err, domain.ErrNoAppDomain):
 		// None of these is a fault in the request. They are all the same shape:

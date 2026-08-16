@@ -60,6 +60,14 @@ type Nets interface {
 	RemoveDomain(ctx context.Context, ownerID, name string, id uuid.UUID) error
 }
 
+// Pushes is deploy-on-push, optional for the same reason it is in the
+// dashboard: the deploy key is a credential, and an install with no secret key
+// declines to hold one rather than storing it readable. Nil leaves the endpoint
+// off the router instead of mounted and failing.
+type Pushes interface {
+	GenerateDeployKey(ctx context.Context, ownerID, name string) (app.DeployKey, error)
+}
+
 // Logs is the log surface, optional in the same way the dashboard's is.
 type Logs interface {
 	Logs(ctx context.Context, ownerID, appName string, req app.LogRequest) (app.Logs, error)
@@ -110,18 +118,23 @@ type Options struct {
 	// failing on a surface that is not there.
 	Nets Nets
 
+	// Pushes is optional, and nil on any install without a secret key to seal
+	// a deploy key with.
+	Pushes Pushes
+
 	Logger *slog.Logger
 }
 
 // Server serves /api/v1.
 type Server struct {
-	ident identity.Provider
-	apps  Apps
-	roles Roles
-	logs  Logs
-	nets  Nets
-	exec  Exec
-	log   *slog.Logger
+	ident  identity.Provider
+	apps   Apps
+	roles  Roles
+	logs   Logs
+	nets   Nets
+	exec   Exec
+	pushes Pushes
+	log    *slog.Logger
 }
 
 // New builds the API server.
@@ -137,13 +150,14 @@ func New(opts Options) (*Server, error) {
 		log = slog.Default()
 	}
 	return &Server{
-		ident: opts.Identity,
-		apps:  opts.Apps,
-		roles: opts.Roles,
-		logs:  opts.Logs,
-		nets:  opts.Nets,
-		exec:  opts.Exec,
-		log:   log,
+		ident:  opts.Identity,
+		apps:   opts.Apps,
+		roles:  opts.Roles,
+		logs:   opts.Logs,
+		nets:   opts.Nets,
+		exec:   opts.Exec,
+		pushes: opts.Pushes,
+		log:    log,
 	}, nil
 }
 
@@ -201,6 +215,13 @@ func (s *Server) Handler() http.Handler {
 			// install cannot attach.
 			if s.exec != nil && s.exec.CanExec() {
 				r.Get("/apps/{name}/exec", s.appExec)
+			}
+
+			// Same rule as the dashboard's: gated on a secret key existing,
+			// because minting a deploy key this install cannot seal would
+			// mean storing a private key readable.
+			if s.pushes != nil {
+				r.Post("/apps/{name}/deploy-key", s.deployKeyGenerate)
 			}
 
 			// Off the router entirely without a networking surface, rather

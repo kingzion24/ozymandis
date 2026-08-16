@@ -293,6 +293,15 @@ func mount(
 		Logger:   log,
 	}
 
+	// Deploy keys, on the same condition the dashboard's panel appears under
+	// and for the same reason: a private key this install cannot seal is one it
+	// declines to mint. Read from the config rather than from the keeper
+	// because it is the same value the keeper was built from above, and mount
+	// already has it.
+	if cfg.SecretKey != "" {
+		opts.Pushes = apps
+	}
+
 	// Roles only exist where accounts do. Left nil, every authenticated caller
 	// acts as the owner — which is the literal truth of a shared-token install
 	// rather than a permissive default, and is what web.roleOf concludes for
