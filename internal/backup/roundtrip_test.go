@@ -25,8 +25,8 @@ import (
 // the data came back.
 //
 // It needs those things standing, so it skips without them. A skip reads as a
-// pass, so the environment it needs is documented in CONTRIBUTING and the
-// Makefile target that provides it is `make test-backup`.
+// pass, so the environment it needs is documented in the README's Development
+// section and the Makefile target that provides it is `make test-backup`.
 //
 // What this cannot cover is Kubernetes itself: whether the pod spec mounts the
 // right claim, whether the Secret arrives. That is covered by the fake

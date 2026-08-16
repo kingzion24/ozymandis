@@ -40,7 +40,7 @@ nothing you build here is locked in.
 | Deploy a container image, with env vars and replicas | ✅ |
 | Override the image's command, so one image runs as several apps | ✅ |
 | The port an app declares reaches it as `$PORT`, which is what buildpacks bind | ✅ |
-| Build and deploy from a Git repository, using buildpacks | ✅ |
+| Build and deploy from a Git repository — a Dockerfile if there is one, buildpacks if there is not | ✅ |
 | Builds run as an isolated Job, with the log kept | ✅ |
 | A built-in registry for the images those builds produce | ✅ |
 | Scale, redeploy, delete | ✅ |
@@ -48,14 +48,16 @@ nothing you build here is locked in.
 | Deployment history, with a log per deployment | ✅ |
 | A release command, run against the new image before traffic shifts | ✅ |
 | Deploy on push, with an HMAC-verified webhook | ✅ |
-| A deploy key per app, so private repositories clone | ✅ |
+| A deploy key per app, so private repositories clone — from the dashboard or the API | ✅ |
 | Polling for installs GitHub cannot reach | ✅ |
 | A shell in a running container, from the CLI | ✅ |
 | A JSON API and an `oz` CLI over it | ✅ |
 | App logs, and per-request HTTP logs you can search and page | ✅ |
 | Live logs, streamed as the container writes them | ✅ |
 | Persistent volumes, mounted and expandable | ✅ |
-| Secrets sealed at rest, kept out of the app record | ✅ |
+| Secrets sealed at rest, kept out of the app record and out of the pod template | ✅ |
+| Changing a secret rolls the pods that read it | ✅ |
+| A datastore beside the app — Postgres or Redis, provisioned with its own credentials | ✅ |
 | Scheduled backups off the machine, encrypted, with retention | ✅ |
 | Restore from a snapshot, from the dashboard | ✅ |
 | Deploy a wired stack from a template in one action | ✅ |
@@ -464,10 +466,10 @@ a cluster.
 Issues and pull requests are welcome. There is no CLA; contributions are
 licensed under MIT, the same as the project.
 
-[CONTRIBUTING.md](CONTRIBUTING.md) covers getting set up, what CI enforces, and
-the conventions this codebase holds to. One thing worth knowing before your
-first test run: **tests that need a database skip themselves when it is absent,
-and a skip reads as a pass** — set `OZYMANDIS_TEST_DATABASE_URL`.
+Getting set up is the [Development](#development) section above. One thing worth
+knowing before your first test run: **tests that need a database skip themselves
+when it is absent, and a skip reads as a pass** — set
+`OZYMANDIS_TEST_DATABASE_URL`.
 
 Found a vulnerability? Please do not open an issue — see
 [SECURITY.md](SECURITY.md). Participation is covered by the

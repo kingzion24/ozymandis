@@ -131,11 +131,24 @@ Member (read)                        Admin (write)
   GET  /apps/{name}/config             DELETE /apps/{name}/secrets/{key}
   GET  /apps/{name}/domains            POST   /apps/{name}/domains
   GET  /apps/{name}/logs               DELETE /apps/{name}/domains/{id}
+                                       POST   /apps/{name}/deploy-key
                                        GET    /apps/{name}/exec  (WebSocket)
 ```
 
 `GET /apps/{name}/secrets` returns keys, never values. There is no read path for
 a secret's value by design: `SetVariable` is how one is replaced.
+
+`POST /apps/{name}/deploy-key` mints a pair and returns the **public** half;
+`GET /apps/{name}` carries that same public half on every read. Both halves of
+that matter. Without the endpoint, this API could create an app from a private
+repository and not give it the credential to clone one — the fix lived on a
+dashboard page a script cannot reach. Without the field, the only way to see
+which key a repository should trust would be to mint another, and minting
+replaces the pair — a read that revokes the key already working.
+
+Like `exec` and `domains`, it is **absent from the router** rather than mounted
+and failing where the install cannot serve it: no `OZYMANDIS_SECRET_KEY` means
+no way to seal a private key, so there is no endpoint to call.
 
 Where accounts are off, `Roles` is nil and every authenticated caller acts as the
 owner. That is not a permissive default — it is the literal truth of a
@@ -478,6 +491,16 @@ its build would be a key sitting in the cluster; and it must land somewhere the
 clone can read and nowhere the built image can — a key baked into a layer is a key
 published with the image.
 
+That Secret carries a second thing: one line of `/etc/passwd`, mounted over the
+file with `subPath`. `ssh(1)` calls `getpwuid(getuid())` before it opens a
+socket and exits when the id resolves to nothing, and `alpine/git` has no entry
+for the uid the clone runs as. Every ssh clone therefore failed having sent no
+packet and read no key — reported by git as *"Could not read from remote
+repository. Please make sure you have the correct access rights"*, which is its
+message for a **rejected** key and sends you to check the one thing that was
+never consulted. Public repositories clone over https, need none of it, and get
+neither the volume nor the mount.
+
 Buildkit runs **rootless** because the alternative is a privileged container with
 the host's Docker socket, which is a root shell on the node for anybody who can
 influence a Dockerfile.
@@ -621,6 +644,22 @@ Secret via `envFrom` rather than as literals in the pod template. A database dum
 is then useless without the key, which lives in configuration rather than in the
 database it protects.
 
+That design has one consequence worth stating, because getting it wrong is
+invisible. `envFrom` names a Secret and does not carry its values, so rewriting
+the Secret leaves the pod template byte-identical — and Kubernetes rolls a
+Deployment when its **template** changes, not when something the template
+*points at* changes. Left there, setting a secret returned success, stored the
+new value, and left every running pod reading the old one, with no error
+anywhere to say so.
+
+So the revision annotation on the pod template (`specHash`, `internal/orchestrator/k8s/app.go`)
+covers the **content** of the secrets as well as the fields you would expect.
+What lands in the template is still only a digest — sixteen hex characters,
+irreversible — so the property `envFrom` exists for is intact, and a changed
+credential now rolls the pods that read it. The hash is length-prefixed per key
+and value, because `{"AB":"C"}` and `{"A":"BC"}` otherwise agree, and sorted,
+because an unsorted map would roll the app on every apply.
+
 ### Backups
 
 `internal/backup`. The problem is specific: K3s stores volumes on `local-path` by
@@ -715,6 +754,9 @@ design:
 | Named ACME resolver does not exist | **undetectable here** — verify the served issuer | see §6 |
 | Host wants a certificate, no resolver | refused at validation | the downgrade would be invisible |
 | Unauthenticated request | uniform rejection, no reason given | which credential was missing is information about what would have worked |
+| A secret is changed | the pods that read it roll | `envFrom` names a Secret rather than carrying it, so nothing else would change the pod template — and a credential live in the store but absent from the process reports no error at all |
+| A dependency an app needs is down | readiness fails, pod leaves the Service, no restart | liveness would restart a process that is fine; the outage is elsewhere |
+| An install cannot serve an endpoint | 503 with the reason, never 500 | "this install is not configured for that" is not an internal failure, and a client must not retry it forever |
 
 ---
 
