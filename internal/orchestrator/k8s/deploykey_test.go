@@ -142,3 +142,82 @@ func hasMount(mounts []corev1.VolumeMount, name string) bool {
 	}
 	return false
 }
+
+// The clone step must be able to resolve its own uid, or ssh never opens a
+// socket. alpine/git has no passwd entry for buildUID, so without this every
+// SSH clone died with "No user exists for uid 1000" — and git then reported
+// "Could not read from remote repository. Please make sure you have the
+// correct access rights", which is the message for a key that was rejected
+// rather than one that was never offered.
+func TestTheCloneCanResolveItsOwnUID(t *testing.T) {
+	job := buildJob("build-x", buildReq(), "registry-secret", "build-x-ssh")
+
+	var mount *corev1.VolumeMount
+	for _, c := range job.Spec.Template.Spec.InitContainers {
+		if c.Name != cloneContainer {
+			continue
+		}
+		for i, m := range c.VolumeMounts {
+			if m.MountPath == passwdPath {
+				mount = &c.VolumeMounts[i]
+			}
+		}
+	}
+	if mount == nil {
+		t.Fatal("the clone step has nothing mounted at " + passwdPath)
+	}
+
+	// subPath, or the mount would cover /etc entirely and take every other
+	// file in it with it.
+	if mount.SubPath == "" {
+		t.Error("mounted without a subPath — that hides the rest of /etc")
+	}
+	if !mount.ReadOnly {
+		t.Error("the passwd file is writable")
+	}
+
+	// Readable by the process itself. A passwd file only root can read is the
+	// failure this exists to prevent, spelled differently.
+	var mode int32
+	for _, v := range job.Spec.Template.Spec.Volumes {
+		if v.Name == passwdVolume && v.Secret != nil && v.Secret.DefaultMode != nil {
+			mode = *v.Secret.DefaultMode
+		}
+	}
+	if mode&0o004 == 0 {
+		t.Errorf("passwd mode = %04o, want world-readable", mode)
+	}
+}
+
+// The entry has to describe the uid the container actually runs as. Derived
+// from the same constants the SecurityContext uses so the two cannot drift.
+func TestThePasswdEntryMatchesTheUIDTheCloneRunsAs(t *testing.T) {
+	line := string(buildPasswdLine())
+
+	want := "builder:x:" + itoa(buildUID) + ":" + itoa(cnbGID) + ":"
+	if !strings.Contains(line, want) {
+		t.Errorf("passwd = %q, want an entry starting %q", line, want)
+	}
+	if !strings.HasSuffix(line, "\n") {
+		t.Error("passwd file does not end in a newline — getpwuid skips the last line")
+	}
+}
+
+// Public repositories clone over https and need none of this. The volume is
+// absent rather than present and empty, the same rule the key itself follows.
+func TestAPublicBuildGetsNoPasswdVolume(t *testing.T) {
+	job := buildJob("build-x", buildReq(), "registry-secret", "")
+
+	for _, v := range job.Spec.Template.Spec.Volumes {
+		if v.Name == passwdVolume {
+			t.Fatal("a build with no deploy key still carries a passwd volume")
+		}
+	}
+	for _, c := range job.Spec.Template.Spec.InitContainers {
+		for _, m := range c.VolumeMounts {
+			if m.MountPath == passwdPath {
+				t.Fatalf("%s mounts a passwd file with no deploy key", c.Name)
+			}
+		}
+	}
+}

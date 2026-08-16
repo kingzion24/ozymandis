@@ -241,7 +241,14 @@ func (o *Orchestrator) ensureBuildSSHSecret(
 			Name: name, Namespace: BuildNamespace,
 			Labels: map[string]string{orchestrator.LabelManagedBy: orchestrator.ManagedByValue},
 		},
-		Data: map[string][]byte{"id": req.SSHKey},
+		Data: map[string][]byte{
+			"id": req.SSHKey,
+
+			// A passwd entry for the uid the clone runs as, carried in the same
+			// secret because it is needed in exactly the cases that secret
+			// exists — see buildPasswdVolume for what goes wrong without it.
+			"passwd": buildPasswdLine(),
+		},
 	}
 
 	_, err := o.client.CoreV1().Secrets(BuildNamespace).Create(ctx, sec, metav1.CreateOptions{})

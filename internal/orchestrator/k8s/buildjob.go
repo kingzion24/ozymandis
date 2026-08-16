@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -256,14 +257,46 @@ echo "Cloned $(git -C /workspace/src rev-parse --short HEAD)"
 		Value: "ssh -i /ssh/id -o IdentitiesOnly=yes " +
 			"-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known_hosts",
 	})
-	c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{
-		Name: sshVolume, MountPath: "/ssh", ReadOnly: true,
-	})
+	c.VolumeMounts = append(c.VolumeMounts,
+		corev1.VolumeMount{Name: sshVolume, MountPath: "/ssh", ReadOnly: true},
+		// subPath so this replaces the one file rather than mounting over
+		// /etc, which would hide everything else the image keeps there.
+		corev1.VolumeMount{
+			Name: passwdVolume, MountPath: passwdPath,
+			SubPath: "passwd", ReadOnly: true,
+		},
+	)
 	return c
 }
 
 // sshVolume is the name of the deploy-key volume.
 const sshVolume = "deploy-key"
+
+// passwdVolume carries one passwd line, and passwdPath is where it lands.
+const (
+	passwdVolume = "build-passwd"
+	passwdPath   = "/etc/passwd"
+)
+
+// buildPasswdLine is the passwd entry the clone step runs as.
+//
+// ssh(1) calls getpwuid(getuid()) before it opens a socket and exits with "No
+// user exists for uid N" when the id resolves to nothing. alpine/git ships
+// entries for root, sshd, games, ntp, guest and nobody — not for buildUID — so
+// every clone over ssh failed there, having sent no packet and read no key.
+//
+// What made it expensive to find is what git says next: "Could not read from
+// remote repository. Please make sure you have the correct access rights."
+// That is the message for a rejected key, so it sends you to check the deploy
+// key, the repository, and the URL — none of which were ever consulted.
+//
+// Built from the same constants the SecurityContext uses, so a uid changed in
+// one place cannot leave the other behind.
+func buildPasswdLine() []byte {
+	return []byte(fmt.Sprintf(
+		"root:x:0:0:root:/root:/bin/sh\nbuilder:x:%d:%d:builder:/tmp:/sbin/nologin\n",
+		buildUID, cnbGID))
+}
 
 // sshVolumes is the volume list for a build that has a deploy key, or nothing.
 //
@@ -275,6 +308,13 @@ func sshVolumes(sshSecret string) []corev1.Volume {
 		return nil
 	}
 	mode := int32(0o400)
+
+	// 0444 rather than 0400: this one is read by the C library resolving the
+	// process's own uid, and a passwd file the process cannot read is the
+	// failure it exists to prevent. Its own volume rather than a second item
+	// beside the key, so /ssh holds a key and nothing else.
+	readable := int32(0o444)
+
 	return []corev1.Volume{{
 		Name: sshVolume,
 		VolumeSource: corev1.VolumeSource{
@@ -282,6 +322,15 @@ func sshVolumes(sshSecret string) []corev1.Volume {
 				SecretName:  sshSecret,
 				DefaultMode: &mode,
 				Items:       []corev1.KeyToPath{{Key: "id", Path: "id"}},
+			},
+		},
+	}, {
+		Name: passwdVolume,
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName:  sshSecret,
+				DefaultMode: &readable,
+				Items:       []corev1.KeyToPath{{Key: "passwd", Path: "passwd"}},
 			},
 		},
 	}}
