@@ -692,3 +692,81 @@ func TestOwnersDoNotSelectEachOther(t *testing.T) {
 		t.Errorf("both namespaces admit the same owner %q — that is not isolation", ownerOf(a))
 	}
 }
+
+// --- Rollout completion ---
+
+// statusFrom builds a Deployment in a given rollout state and reads it back.
+func statusFrom(t *testing.T, gen, observed int64, desired, updated, total, ready, avail int32) orchestrator.AppStatus {
+	t.Helper()
+	o, client := testOrchestrator(t)
+	ctx := context.Background()
+
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "web", Namespace: "ozymandis-demo", Generation: gen,
+		},
+		Spec: appsv1.DeploymentSpec{Replicas: &desired},
+		Status: appsv1.DeploymentStatus{
+			ObservedGeneration: observed,
+			UpdatedReplicas:    updated,
+			Replicas:           total,
+			ReadyReplicas:      ready,
+			AvailableReplicas:  avail,
+		},
+	}
+	if _, err := client.AppsV1().Deployments("ozymandis-demo").
+		Create(ctx, dep, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create deployment: %v", err)
+	}
+
+	st, err := o.AppStatus(ctx, orchestrator.Ref{
+		Owner: "owner-1", Namespace: "ozymandis-demo", Name: "web",
+	})
+	if err != nil {
+		t.Fatalf("AppStatus: %v", err)
+	}
+	return st
+}
+
+// The state that made a green deploy a lie: one new replica up, one old
+// replica still serving. Ready(1) >= Desired(1) holds — which is exactly why
+// waiting on Ready reported success while the previous image answered.
+func TestARolloutIsNotCompleteWhileTheOldReplicaServes(t *testing.T) {
+	st := statusFrom(t, 2, 2 /*desired*/, 1 /*updated*/, 1 /*total*/, 2 /*ready*/, 1 /*avail*/, 1)
+
+	if st.Ready < st.Desired {
+		t.Fatal("this test is meaningless unless Ready >= Desired here")
+	}
+	if st.RolloutComplete {
+		t.Error("reported complete with 2 replicas for a desired of 1 — the old one is still taking traffic")
+	}
+	if st.Total <= st.Desired {
+		t.Errorf("Total = %d, want it to show the extra replica", st.Total)
+	}
+}
+
+func TestARolloutIsCompleteWhenOnlyTheNewVersionRemains(t *testing.T) {
+	st := statusFrom(t, 2, 2, 1, 1, 1, 1, 1)
+	if !st.RolloutComplete {
+		t.Error("one updated, available replica and nothing else is a finished rollout")
+	}
+}
+
+// The controller has not yet looked at the spec we applied, so every count
+// below describes the PREVIOUS version and all of them can look perfect.
+func TestAStaleObservationIsNotACompleteRollout(t *testing.T) {
+	st := statusFrom(t /*generation*/, 3 /*observed*/, 2, 1, 1, 1, 1, 1)
+	if st.RolloutComplete {
+		t.Error("reported complete from counts the controller has not refreshed")
+	}
+}
+
+// New pods created but not yet up. Ready would be 0 here, so this one is
+// caught either way — it is pinned because availability is a separate clause
+// and dropping it would be invisible in the common case.
+func TestNewReplicasThatAreNotUpAreNotComplete(t *testing.T) {
+	st := statusFrom(t, 2, 2 /*desired*/, 2 /*updated*/, 2 /*total*/, 2 /*ready*/, 1 /*avail*/, 1)
+	if st.RolloutComplete {
+		t.Error("reported complete with only one of two replicas available")
+	}
+}

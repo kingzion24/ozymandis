@@ -423,6 +423,26 @@ type AppStatus struct {
 	Ready     int32
 	Available int32
 	Message   string
+
+	// Updated is how many replicas are running the CURRENT template, and Total
+	// is how many exist at all. During a rolling update Total exceeds Desired
+	// and the difference is the previous version, still serving.
+	Updated int32
+	Total   int32
+
+	// RolloutComplete answers the question Ready alone cannot: is the version
+	// just deployed the only one taking traffic?
+	//
+	// Ready >= Desired is true throughout a rolling update, because the OLD
+	// replica satisfies it by itself — so a deploy watched on that signal
+	// reports success while the previous image is still answering. That is not
+	// hypothetical: it is how a deploy of this repository went green while the
+	// endpoint it had just changed still served the old behaviour.
+	//
+	// Derived here rather than left to callers to assemble from four fields,
+	// because every caller would have to get the same subtle rule right and
+	// the interesting case only appears in the seconds a rollout is in flight.
+	RolloutComplete bool
 }
 
 // Orchestrator applies desired state to a runtime and reports back what it

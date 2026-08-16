@@ -763,6 +763,7 @@ design:
 | Named ACME resolver does not exist | **undetectable here** — verify the served issuer | see §6 |
 | Host wants a certificate, no resolver | refused at validation | the downgrade would be invisible |
 | Unauthenticated request | uniform rejection, no reason given | which credential was missing is information about what would have worked |
+| A deploy is waited on | `rollout_complete`, never `ready >= desired` | during a rolling update the OLD replica satisfies ready on its own, so waiting on it reports success while the previous image is still answering |
 | A secret is changed | the pods that read it roll | `envFrom` names a Secret rather than carrying it, so nothing else would change the pod template — and a credential live in the store but absent from the process reports no error at all |
 | A dependency an app needs is down | readiness fails, pod leaves the Service, no restart | liveness would restart a process that is fine; the outage is elsewhere |
 | An install cannot serve an endpoint | 503 with the reason, never 500 | "this install is not configured for that" is not an internal failure, and a client must not retry it forever |

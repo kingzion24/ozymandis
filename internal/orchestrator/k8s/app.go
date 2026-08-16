@@ -348,6 +348,20 @@ func (o *Orchestrator) AppStatus(
 		Desired:   desired,
 		Ready:     dep.Status.ReadyReplicas,
 		Available: dep.Status.AvailableReplicas,
+		Updated:   dep.Status.UpdatedReplicas,
+		Total:     dep.Status.Replicas,
+
+		// All four clauses are load-bearing, and each rules out a state the
+		// others admit:
+		//   observedGeneration — the controller has seen the spec we just
+		//     applied, rather than reporting on the one before it
+		//   updated == desired — every new replica has been created
+		//   total  == updated  — and no old one is left serving
+		//   available == desired — the new ones are actually up
+		RolloutComplete: dep.Status.ObservedGeneration >= dep.Generation &&
+			dep.Status.UpdatedReplicas == desired &&
+			dep.Status.Replicas == dep.Status.UpdatedReplicas &&
+			dep.Status.AvailableReplicas == desired,
 	}
 
 	switch {

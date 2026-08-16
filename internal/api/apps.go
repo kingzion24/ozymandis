@@ -88,6 +88,17 @@ type Status struct {
 	Ready     int32  `json:"ready"`
 	Available int32  `json:"available"`
 	Message   string `json:"message,omitempty"`
+
+	// Updated and Total distinguish the version just deployed from whatever is
+	// still serving beside it. Total > Desired means a rolling update is in
+	// flight and the previous version is still taking traffic.
+	Updated int32 `json:"updated"`
+	Total   int32 `json:"total"`
+
+	// RolloutComplete is what a deploy should be waited on. `ready >= desired`
+	// is satisfied by the OLD replica alone during a rolling update, so a CI
+	// job watching that reports success while the previous image still answers.
+	RolloutComplete bool `json:"rollout_complete"`
 }
 
 func appOut(a app.App) App {
@@ -117,11 +128,14 @@ func appOut(a app.App) App {
 	}
 	if a.StatusKnown {
 		out.Status = &Status{
-			Phase:     string(a.Status.Phase),
-			Desired:   a.Status.Desired,
-			Ready:     a.Status.Ready,
-			Available: a.Status.Available,
-			Message:   a.Status.Message,
+			Phase:           string(a.Status.Phase),
+			Desired:         a.Status.Desired,
+			Ready:           a.Status.Ready,
+			Available:       a.Status.Available,
+			Message:         a.Status.Message,
+			Updated:         a.Status.Updated,
+			Total:           a.Status.Total,
+			RolloutComplete: a.Status.RolloutComplete,
 		}
 	}
 	return out
@@ -168,11 +182,14 @@ func (s *Server) appStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, s.log, http.StatusOK, Status{
-		Phase:     string(a.Status.Phase),
-		Desired:   a.Status.Desired,
-		Ready:     a.Status.Ready,
-		Available: a.Status.Available,
-		Message:   a.Status.Message,
+		Phase:           string(a.Status.Phase),
+		Desired:         a.Status.Desired,
+		Ready:           a.Status.Ready,
+		Available:       a.Status.Available,
+		Message:         a.Status.Message,
+		Updated:         a.Status.Updated,
+		Total:           a.Status.Total,
+		RolloutComplete: a.Status.RolloutComplete,
 	})
 }
 
