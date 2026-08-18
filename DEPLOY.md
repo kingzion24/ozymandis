@@ -211,15 +211,28 @@ dragged, and the arrangement is the **team's**, not yours alone — a canvas two
 people arrange differently is two pictures of one system, and neither can be
 pointed at in a conversation. `Arrange` re-lays it out from scratch.
 
+### Moving an app between projects
+
+An app's **Settings** tab has a **Project** panel: pick a canvas, press Move.
+
+The control appears only when there is somewhere to move to — with a single
+project, a select whose only option is where the app already sits reads as a
+broken control rather than a choice.
+
+Moving is **not a deploy**. The namespace, the image and the running pods are
+untouched; a project is only how apps are grouped on screen. The card's saved
+position is forgotten in the move, so it is laid out with the rest of its new
+canvas instead of landing wherever the old arrangement had put it — possibly on
+top of another app, or outside the visible area.
+
 > [!NOTE]
-> **Apps join a project when they are created.** There is no way to move an
-> existing app into a project yet — the database query exists (`SetAppProject`)
-> but nothing calls it, so there is no button and no API for it. If your apps
-> are already created and unassigned, they will not appear on a canvas.
+> Grouping is **manual**: apps are not gathered into a project automatically by
+> sharing a repository URL. Two apps built from the same repo are related only
+> because you put them in the same project.
 >
-> Grouping is also **manual**: apps are not gathered into a project
-> automatically by sharing a repository URL. Two apps built from the same repo
-> are related only if you put them in the same project.
+> Nothing is ever stranded, though. An app with no project — one created before
+> projects existed, or whose project was deleted — is adopted by the default
+> project the next time anything reads it, so it always appears on some canvas.
 
 ---
 

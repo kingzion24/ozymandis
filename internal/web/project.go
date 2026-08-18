@@ -147,6 +147,13 @@ func (s *Server) renderCanvas(w http.ResponseWriter, r *http.Request, slug, appN
 	data.Open = open
 	if projects, err := s.apps.Projects(ctx, owner.ID); err == nil {
 		data.Projects = projects
+		if open != nil {
+			// The panel's move control needs the same list, and the project
+			// resolved above — which came from the app, not the URL — is where
+			// the app is now.
+			open.Projects = projects
+			open.ProjectSlug = project.Slug
+		}
 	}
 
 	slots := s.slots.Slots(ctx, r)

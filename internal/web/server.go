@@ -77,6 +77,7 @@ type Apps interface {
 	ProjectByID(ctx context.Context, ownerID string, id uuid.UUID) (app.Project, error)
 	CreateProject(ctx context.Context, ownerID, name string) (app.Project, error)
 	ListInProject(ctx context.Context, ownerID string, projectID uuid.UUID) ([]app.App, error)
+	MoveApp(ctx context.Context, ownerID, appName, slug string) error
 
 	// SetPosition and ClearPositions are the canvas arrangement, which belongs
 	// to the team rather than to whoever last dragged something.
@@ -593,6 +594,7 @@ func (s *Server) Handler() http.Handler {
 			// Variables sit with the admin actions: a value here is often the
 			// credential the app runs as, and setting one is not undone by a
 			// redeploy.
+			r.Post("/apps/{name}/project", s.appMove)
 			r.Post("/apps/{name}/health", s.healthSet)
 			r.Post("/apps/{name}/command", s.commandSet)
 			r.Post("/apps/{name}/release-command", s.releaseCommandSet)
@@ -958,6 +960,31 @@ func (s *Server) appScale(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/apps/"+name, http.StatusSeeOther)
+}
+
+// appMove draws an app on a different project's canvas.
+func (s *Server) appMove(w http.ResponseWriter, r *http.Request) {
+	owner := identity.MustFromContext(r.Context())
+	name := chi.URLParam(r, "name")
+
+	slug := r.FormValue("project")
+	if s.apps == nil || slug == "" {
+		http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
+		return
+	}
+
+	if err := s.apps.MoveApp(r.Context(), owner.ID, name, slug); err != nil {
+		s.log.Error("move app",
+			slog.String("app", name), slog.String("project", slug),
+			slog.String("error", err.Error()))
+		s.appActionFailed(w, r, name, "settings", err)
+		return
+	}
+
+	// Back to the app, which is now on another canvas — the redirect resolves
+	// the project from the app, so this lands on the one it moved to rather
+	// than on the one it left.
+	http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
 }
 
 func (s *Server) appRedeploy(w http.ResponseWriter, r *http.Request) {

@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"github.com/kingzion24/ozymandis/internal/web/ui/selectbox"
 	"github.com/kingzion24/ozymandis/internal/web/ui/sheet"
 	"strconv"
 
@@ -312,6 +313,13 @@ type AppDetailData struct {
 
 	// WebhookURL is what to paste into a repository's webhook settings.
 	WebhookURL string
+
+	// Projects is every project this team has, for the Settings tab's move
+	// control, and ProjectSlug is the one this app is on now. Both are set
+	// together; fewer than two projects draws no control, because a move with
+	// one destination that is also the origin is not a choice.
+	Projects    []app.Project
+	ProjectSlug string
 }
 
 // AppDetail is the Railway-shaped view: a rail of every app on the left so you
@@ -691,6 +699,48 @@ templ appMetrics(d AppDetailData) {
 	</div>
 }
 
+// appProject moves an app to another canvas.
+//
+// Drawn only when there is somewhere to move to. One project is the ordinary
+// state of an install nobody has organised, and offering a select whose only
+// option is where the app already is reads as a broken control.
+templ appProject(d AppDetailData) {
+	if len(d.Projects) > 1 {
+		<div class="panel mb-5">
+			<div class="panel-header"><span class="panel-title">Project</span></div>
+			<div class="panel-body">
+				<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/project") } class="flex flex-wrap items-end gap-4">
+					<div class="field grow">
+						<label class="label" for="project">Canvas</label>
+						@selectbox.SelectBox() {
+							@selectbox.Trigger(selectbox.TriggerProps{ID: "project", Name: "project"}) {
+								@selectbox.Value(selectbox.ValueProps{Placeholder: "Choose a project"})
+							}
+							@selectbox.Content() {
+								for _, p := range d.Projects {
+									@selectbox.Item(selectbox.ItemProps{
+										Value: p.Slug, Selected: p.Slug == d.ProjectSlug,
+									}) {
+										{ p.Name }
+									}
+								}
+							}
+						}
+						<span class="hint">Which project's canvas this app is drawn on.</span>
+					</div>
+					<button class="btn btn-primary mb-6" type="submit">Move</button>
+				</form>
+				<p class="text-[12px] text-muted-foreground">
+					Moving is not a deploy. The namespace, the image and the running pods
+					are untouched — a project is only how apps are grouped on screen. The
+					card's position is forgotten, so it is laid out with the rest of its
+					new canvas rather than landing wherever the old arrangement put it.
+				</p>
+			</div>
+		</div>
+	}
+}
+
 // ---- settings tab
 templ appSettings(d AppDetailData) {
 	{{ a := d.App }}
@@ -704,6 +754,7 @@ templ appSettings(d AppDetailData) {
 			<div class="min-w-0 text-muted-foreground">{ d.Notice }</div>
 		</div>
 	}
+	@appProject(d)
 	@publicNetworking(netOf(d))
 	@customDomains(netOf(d))
 	@routingOptions(netOf(d))

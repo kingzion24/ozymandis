@@ -35,6 +35,14 @@ type fakeApps struct {
 	// that it answered 303.
 	commands        map[string]string
 	releaseCommands map[string]string
+
+	// moved is the app name and destination slug of the last MoveApp.
+	moved [2]string
+
+	// extraProjects are returned by Projects alongside the default one, so a
+	// test can render the move control — which is drawn only when there is
+	// somewhere to move to.
+	extraProjects []app.Project
 }
 
 func newFakeApps(apps ...app.App) *fakeApps {
@@ -669,7 +677,7 @@ func (f *fakeApps) Projects(_ context.Context, ownerID string) ([]app.Project, e
 	p := fakeProject
 	p.OwnerID = ownerID
 	p.Apps = int64(len(f.byOwner[ownerID]))
-	return []app.Project{p}, nil
+	return append([]app.Project{p}, f.extraProjects...), nil
 }
 
 func (f *fakeApps) Project(_ context.Context, ownerID, slug string) (app.Project, error) {
@@ -702,6 +710,24 @@ func (f *fakeApps) ListInProject(_ context.Context, ownerID string, _ uuid.UUID)
 		return nil, f.err
 	}
 	return f.byOwner[ownerID], nil
+}
+
+// moved records the last move, so a test can assert the handler asked for the
+// right app and the right destination rather than only that it did not fail.
+func (f *fakeApps) MoveApp(_ context.Context, ownerID, appName, slug string) error {
+	if f.err != nil {
+		return f.err
+	}
+	if slug != "" && slug != app.DefaultProjectSlug && slug != "other" {
+		return app.ErrProjectNotFound
+	}
+	for _, a := range f.byOwner[ownerID] {
+		if a.Name == appName {
+			f.moved = [2]string{appName, slug}
+			return nil
+		}
+	}
+	return app.ErrNotFound
 }
 
 func (f *fakeApps) SetPosition(_ context.Context, ownerID, name string, x, y int32) error {
@@ -774,5 +800,74 @@ func TestAnUnknownProjectIsNotFound(t *testing.T) {
 
 	if code := get(t, h, "/projects/someone-elses").Code; code != http.StatusNotFound {
 		t.Fatalf("unknown project returned %d, want 404", code)
+	}
+}
+
+// The Settings form reaches the service with the app and the destination it
+// named. A handler that answers 303 having done nothing looks identical from
+// the browser, which is why this asserts on what the service was asked for
+// rather than only on the status.
+func TestMoveAppFormReachesTheService(t *testing.T) {
+	apps := newFakeApps(sampleApp("owner-1", "web"))
+	h := testServer(t, Options{Apps: apps})
+
+	rec := post(t, h, "/apps/web/project", url.Values{"project": {"other"}})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", rec.Code)
+	}
+	if apps.moved != [2]string{"web", "other"} {
+		t.Errorf("moved = %v, want the app and slug from the form", apps.moved)
+	}
+}
+
+// An empty selection is a form submitted without a choice, not a request to
+// move somewhere unnamed. Passing "" through would reach Project, which reads
+// it as the default project — silently moving an app the person did not ask to
+// move.
+func TestMoveAppIgnoresAnEmptyChoice(t *testing.T) {
+	apps := newFakeApps(sampleApp("owner-1", "web"))
+	h := testServer(t, Options{Apps: apps})
+
+	rec := post(t, h, "/apps/web/project", url.Values{"project": {""}})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", rec.Code)
+	}
+	if apps.moved != [2]string{} {
+		t.Errorf("moved = %v, want no move attempted", apps.moved)
+	}
+}
+
+// Another team's app must not be movable, the same way it is not readable.
+func TestMoveAppIsScopedToOwner(t *testing.T) {
+	apps := newFakeApps(sampleApp("owner-2", "theirs"))
+	h := testServer(t, Options{Apps: apps})
+
+	post(t, h, "/apps/theirs/project", url.Values{"project": {"other"}})
+	if apps.moved != [2]string{} {
+		t.Errorf("moved = %v, want another owner's app left alone", apps.moved)
+	}
+}
+
+// The move control is drawn only when there is somewhere to move to.
+//
+// One project is the ordinary state of an install nobody has organised, and a
+// select whose only option is where the app already is reads as broken.
+func TestMoveControlAppearsOnlyWithSomewhereToGo(t *testing.T) {
+	only := newFakeApps(sampleApp("owner-1", "web"))
+	body := get(t, testServer(t, Options{Apps: only}), "/apps/web/settings").Body.String()
+	if strings.Contains(body, `/apps/web/project`) {
+		t.Error("the move control was drawn with only one project to choose")
+	}
+
+	two := newFakeApps(sampleApp("owner-1", "web"))
+	two.extraProjects = []app.Project{{
+		ID: uuid.New(), OwnerID: "owner-1", Slug: "billing", Name: "Billing",
+	}}
+	body = get(t, testServer(t, Options{Apps: two}), "/apps/web/settings").Body.String()
+	if !strings.Contains(body, `/apps/web/project`) {
+		t.Fatal("the move control is missing though there are two projects")
+	}
+	if !strings.Contains(body, "Billing") {
+		t.Error("the other project is not offered as a destination")
 	}
 }

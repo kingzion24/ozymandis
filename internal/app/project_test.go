@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -133,5 +134,123 @@ func TestAnotherTeamCannotMoveYourCards(t *testing.T) {
 
 	if err := s.SetPosition(ctx, theirs, "web", 10, 20); err == nil {
 		t.Fatal("another team moved a card on a canvas that is not theirs")
+	}
+}
+
+// Moving an app is what makes projects usable on an install that already has
+// apps. Everything created before somebody organised anything is in the default
+// project, and without this there is no way to take it out of there.
+func TestAnAppCanBeMovedToAnotherProject(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{})
+	ownerID := owner(t, s, pool, "owner-project-move")
+
+	if _, err := s.Create(ctx, ownerID, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
+	}); err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+
+	billing, err := s.CreateProject(ctx, ownerID, "Billing")
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	// Dragged somewhere on the canvas it is leaving. The coordinates mean
+	// nothing on the new one, so the move has to forget them — otherwise the
+	// card arrives wherever the old arrangement put it, over another app or
+	// outside the visible area.
+	if err := s.SetPosition(ctx, ownerID, "web", 640, 480); err != nil {
+		t.Fatalf("set position: %v", err)
+	}
+
+	if err := s.MoveApp(ctx, ownerID, "web", billing.Slug); err != nil {
+		t.Fatalf("MoveApp: %v", err)
+	}
+
+	moved, err := s.ListInProject(ctx, ownerID, billing.ID)
+	if err != nil {
+		t.Fatalf("list apps in project: %v", err)
+	}
+	if len(moved) != 1 || moved[0].Name != "web" {
+		t.Fatalf("apps in billing = %+v, want web", moved)
+	}
+	if moved[0].X != nil || moved[0].Y != nil {
+		t.Errorf("position = (%v, %v), want none: the old canvas's coordinates "+
+			"do not describe a place on this one",
+			moved[0].X, moved[0].Y)
+	}
+
+	def, err := s.DefaultProject(ctx, ownerID)
+	if err != nil {
+		t.Fatalf("default project: %v", err)
+	}
+	left, err := s.ListInProject(ctx, ownerID, def.ID)
+	if err != nil {
+		t.Fatalf("list apps in default: %v", err)
+	}
+	if len(left) != 0 {
+		t.Errorf("apps still in default = %+v, want none — an app on two "+
+			"canvases is two pictures of one system", left)
+	}
+}
+
+// Re-submitting the form must not scatter the arrangement.
+//
+// A move to where the app already is writes nothing, because the position is
+// cleared as part of moving: without the early return, opening Settings and
+// pressing Move would send a card that somebody had placed deliberately back
+// into the automatic layout.
+func TestMovingAnAppNowhereKeepsItsPosition(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{})
+	ownerID := owner(t, s, pool, "owner-project-nomove")
+
+	if _, err := s.Create(ctx, ownerID, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
+	}); err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+	if err := s.SetPosition(ctx, ownerID, "web", 120, 240); err != nil {
+		t.Fatalf("set position: %v", err)
+	}
+
+	if err := s.MoveApp(ctx, ownerID, "web", DefaultProjectSlug); err != nil {
+		t.Fatalf("MoveApp: %v", err)
+	}
+
+	def, err := s.DefaultProject(ctx, ownerID)
+	if err != nil {
+		t.Fatalf("default project: %v", err)
+	}
+	apps, err := s.ListInProject(ctx, ownerID, def.ID)
+	if err != nil {
+		t.Fatalf("list apps in project: %v", err)
+	}
+	if len(apps) != 1 {
+		t.Fatalf("apps = %+v, want one", apps)
+	}
+	if apps[0].X == nil || *apps[0].X != 120 ||
+		apps[0].Y == nil || *apps[0].Y != 240 {
+		t.Errorf("position = (%v, %v), want (120, 240) kept",
+			apps[0].X, apps[0].Y)
+	}
+}
+
+// A project that does not exist is a refusal, not a silent move to the default.
+func TestMovingToANonexistentProjectIsRefused(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{})
+	ownerID := owner(t, s, pool, "owner-project-missing")
+
+	if _, err := s.Create(ctx, ownerID, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
+	}); err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+
+	err := s.MoveApp(ctx, ownerID, "web", "no-such-project")
+	if !errors.Is(err, ErrProjectNotFound) {
+		t.Fatalf("err = %v, want ErrProjectNotFound", err)
 	}
 }

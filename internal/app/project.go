@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 
@@ -210,6 +211,58 @@ func (s *Service) ListInProject(ctx context.Context, ownerID string, projectID u
 		out = append(out, a)
 	}
 	return out, nil
+}
+
+// MoveApp draws an app on another project's canvas.
+//
+// The project is named by slug rather than id because that is what a URL and a
+// form carry, and because "" and "default" both have to mean the default
+// project — Project already resolves that, including creating it the first
+// time somebody asks.
+//
+// Moving is not a deploy. Nothing about the workload changes: the namespace,
+// the image and the pods are untouched, and a project is only which canvas the
+// app is drawn on. So this writes a row and stops, rather than applying.
+func (s *Service) MoveApp(ctx context.Context, ownerID, appName, slug string) error {
+	p, err := s.Project(ctx, ownerID, slug)
+	if err != nil {
+		return err
+	}
+
+	a, err := s.Get(ctx, ownerID, appName)
+	if err != nil {
+		return err
+	}
+	if a.ProjectID == p.ID {
+		// Already there. Returning early rather than writing keeps the
+		// position below from being cleared by a move that did not happen —
+		// re-submitting the form would otherwise scatter the arrangement.
+		return nil
+	}
+
+	n, err := s.q.SetAppProject(ctx, dbgen.SetAppProjectParams{
+		OwnerID: ownerID, ID: a.ID, ProjectID: pgUUID(p.ID),
+	})
+	if err != nil {
+		return fmt.Errorf("app: move %s: %w", appName, err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+
+	// The old canvas's coordinates mean nothing on the new one. Left alone,
+	// the card lands wherever the previous arrangement put it — over another
+	// app, or off the visible area entirely. Cleared, it is laid out with the
+	// rest on the next read.
+	if _, err := s.q.SetAppPosition(ctx, dbgen.SetAppPositionParams{
+		OwnerID: ownerID, Name: appName,
+	}); err != nil {
+		return fmt.Errorf("app: clear position after moving %s: %w", appName, err)
+	}
+
+	s.log.Info("app moved",
+		slog.String("app", appName), slog.String("project", p.Slug))
+	return nil
 }
 
 // SetPosition records where somebody dragged an app's card to.
