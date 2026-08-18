@@ -7,10 +7,10 @@ plane you can read in an afternoon.
 Runs on K3s, so a $5 VPS is enough to start.
 
 > [!WARNING]
-> **Not ready for production.** Ozymandis is under active development. Interfaces,
-> the database schema, and behaviour all still change without notice, there has
-> been no tagged release yet, and none of it has run anywhere long enough to
-> have earned your trust.
+> **Not ready for production.** Ozymandis is under active development.
+> Interfaces, the database schema, and behaviour all still change without
+> notice, and none of it has run anywhere long enough to have earned your
+> trust.
 >
 > Run it on something you can afford to lose, and keep backups you have actually
 > restored from. Do not put it in front of anything whose downtime or data loss
@@ -96,13 +96,6 @@ everything else still works and those figures read `—` rather than zero.
 
 ## Install on a VPS
 
-> **Not live yet.** The scripts below are written and tested, but the URLs do
-> not serve anything while this repository is private: GitHub Pages is not
-> available for private repositories on the free plan, and release assets need
-> a token, so an anonymous `curl` gets a 404 from both. They start working the
-> day the repository goes public and the first tag is pushed — no change to the
-> scripts is needed. Until then, use [Quick start](#quick-start).
-
 ```bash
 curl -sSL https://kingzion24.github.io/ozymandis/install.sh | sudo sh
 ```
@@ -111,9 +104,13 @@ Debian or Ubuntu, amd64 or arm64. It installs K3s, Postgres, and Ozymandis as a
 systemd service, then prints the dashboard URL and a token to sign in with.
 About ninety seconds on a fresh box.
 
-**Before there is a release** — which is where this repository stands today —
-the same installer will take a binary you built yourself. Everything else it
-does is unchanged:
+[USER_GUIDE.md](USER_GUIDE.md) covers the rest: DNS, your first app,
+`ozymandis.toml`, secrets, deploying from CI, and what to do when something is
+wrong.
+
+**To install a binary you built yourself** — a working tree, or a change not
+yet released — the same installer takes one directly. Everything else it does
+is unchanged:
 
 ```bash
 make build                      # leaves bin/ozymandis and bin/oz
