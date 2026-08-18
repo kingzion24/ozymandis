@@ -154,7 +154,15 @@ func secretsSet(ctx context.Context, env *Env, args []string) error {
 	// them back would put them in the terminal scrollback and the CI log of
 	// whatever ran the command.
 	fmt.Fprintf(env.Err, "%s %s on %s.\n", kind, strings.Join(keys, ", "), name)
-	fmt.Fprintln(env.Err, "Deploy to pick them up: `oz deploy`.")
+	// Setting a variable applies the app, so there is nothing further to run.
+	// This used to say "Deploy to pick them up", which was true before the pod
+	// template carried a hash of the secret material: the Secret changed, the
+	// template did not, and running pods kept the old value until something
+	// unrelated restarted them. Now the change to the secret IS a change to the
+	// template, and telling somebody to deploy sends them to do work that is
+	// already done — and teaches them the rollout does not happen on its own,
+	// which is the belief that made the original defect hard to see.
+	fmt.Fprintln(env.Err, "Applied — running pods roll now, with no deploy needed.")
 	return nil
 }
 
@@ -173,6 +181,7 @@ func secretsUnset(ctx context.Context, env *Env, args []string) error {
 		return err
 	}
 
+	unset := 0
 	for _, key := range fs.Args() {
 		if err := env.Client.DeleteVariable(ctx, name, key); err != nil {
 			var apiErr *APIError
@@ -183,6 +192,13 @@ func secretsUnset(ctx context.Context, env *Env, args []string) error {
 			return err
 		}
 		fmt.Fprintf(env.Err, "Unset %s on %s.\n", key, name)
+		unset++
+	}
+	if unset > 0 {
+		// Removing a variable applies the app for the same reason setting one
+		// does, and a person who has just taken a credential away has more
+		// reason than usual to want to know when it stops being live.
+		fmt.Fprintln(env.Err, "Applied — running pods roll now, with no deploy needed.")
 	}
 	return nil
 }

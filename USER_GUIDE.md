@@ -5,7 +5,9 @@ it, and run that app day to day. It assumes you have a fresh Debian or Ubuntu
 VPS and a domain you control.
 
 For what Ozymandis is and why it exists, see [README.md](README.md). For how it
-is built, see [ARCHITECTURE.md](ARCHITECTURE.md).
+is built, see [ARCHITECTURE.md](ARCHITECTURE.md). For deploying in detail —
+several apps from one repository, grouping them, and reading the logs — see
+[DEPLOY.md](DEPLOY.md).
 
 > [!WARNING]
 > Ozymandis is under active development. Run it on something you can afford to
@@ -309,6 +311,10 @@ It lives in your repository where you can read it back and diff it.
 
 ## Deploying
 
+[DEPLOY.md](DEPLOY.md) covers this properly: the five stages a deploy moves
+through, several apps from one repository, projects, and which log answers which
+question. The short version follows.
+
 ### From the CLI
 
 ```sh
@@ -365,6 +371,8 @@ oz apps                       # everything, with status and URL
 oz status --app web           # one app: replicas, image, source, port, URL
 oz logs --app web -f          # follow
 oz logs --app web -n 500      # history
+                              # the dashboard adds build, deploy and HTTP
+                              # views per deployment, plus previous-run output
 oz releases --app web         # recent deployments
 oz scale --app web 3
 ```

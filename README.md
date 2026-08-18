@@ -105,8 +105,9 @@ systemd service, then prints the dashboard URL and a token to sign in with.
 About ninety seconds on a fresh box.
 
 [USER_GUIDE.md](USER_GUIDE.md) covers the rest: DNS, your first app,
-`ozymandis.toml`, secrets, deploying from CI, and what to do when something is
-wrong.
+`ozymandis.toml`, secrets, and what to do when something is wrong.
+[DEPLOY.md](DEPLOY.md) goes deeper on deploying — the stages, several apps from
+one repository, projects, and reading the logs.
 
 **To install a binary you built yourself** — a working tree, or a change not
 yet released — the same installer takes one directly. Everything else it does
