@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/gorilla/websocket"
 )
@@ -136,40 +137,61 @@ func attach(
 	}
 	defer conn.Close()
 
+	w := &connWriter{conn: conn}
+
 	if tty {
 		if size, ok := t.Size(); ok {
-			_ = sendResize(conn, size)
+			_ = sendResize(w, size)
 		}
-		go pumpResizes(ctx, conn, t.Sizes())
+		go pumpResizes(ctx, w, t.Sizes())
 	}
 
-	go pumpStdin(conn)
+	go pumpStdin(w)
 
 	return pumpOutput(env, conn)
 }
 
 // pumpStdin sends keystrokes as binary frames.
-func pumpStdin(conn *websocket.Conn) {
+func pumpStdin(w *connWriter) {
 	buf := make([]byte, 4096)
 	for {
 		n, err := os.Stdin.Read(buf)
 		if n > 0 {
-			if wErr := conn.WriteMessage(websocket.BinaryMessage, buf[:n]); wErr != nil {
+			if wErr := w.write(websocket.BinaryMessage, buf[:n]); wErr != nil {
 				return
 			}
 		}
 		if err != nil {
-			// EOF on stdin is a ^D, which the far end should see as one. The
-			// close frame tells it; simply stopping would leave the shell
-			// waiting for input that will never come.
-			_ = conn.WriteMessage(websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+			// EOF on stdin is a ^D, which the far end should see as one — and
+			// as nothing more. Closing the socket to say so also ended the
+			// session, which killed the command before it could write a byte:
+			// `oz exec -- ls` has stdin at EOF from the start, so it printed
+			// nothing and exited 0 no matter what the command did.
+			//
+			// The end of input is now said in a frame that says only that.
+			_ = w.write(websocket.TextMessage, []byte(`{"stdin":"eof"}`))
 			return
 		}
 	}
 }
 
-func pumpResizes(ctx context.Context, conn *websocket.Conn, sizes <-chan TerminalSize) {
+// connWriter serialises writes to one connection.
+//
+// stdin, resizes and the closing frame are written from different goroutines,
+// and a gorilla connection permits one concurrent writer — without this, a
+// keystroke arriving as the window is resized corrupts the stream or panics.
+type connWriter struct {
+	mu   sync.Mutex
+	conn *websocket.Conn
+}
+
+func (w *connWriter) write(kind int, data []byte) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.conn.WriteMessage(kind, data)
+}
+
+func pumpResizes(ctx context.Context, w *connWriter, sizes <-chan TerminalSize) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -178,14 +200,14 @@ func pumpResizes(ctx context.Context, conn *websocket.Conn, sizes <-chan Termina
 			if !ok {
 				return
 			}
-			if err := sendResize(conn, size); err != nil {
+			if err := sendResize(w, size); err != nil {
 				return
 			}
 		}
 	}
 }
 
-func sendResize(conn *websocket.Conn, size TerminalSize) error {
+func sendResize(w *connWriter, size TerminalSize) error {
 	msg := map[string]any{
 		"resize": map[string]uint16{"cols": size.Cols, "rows": size.Rows},
 	}
@@ -193,7 +215,7 @@ func sendResize(conn *websocket.Conn, size TerminalSize) error {
 	if err != nil {
 		return err
 	}
-	return conn.WriteMessage(websocket.TextMessage, data)
+	return w.write(websocket.TextMessage, data)
 }
 
 // pumpOutput writes container output to stdout until the session ends.

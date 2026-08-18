@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -75,6 +76,13 @@ type control struct {
 		Cols uint16 `json:"cols"`
 		Rows uint16 `json:"rows"`
 	} `json:"resize,omitempty"`
+
+	// Stdin is "eof" and means the client will send no more input. It does
+	// NOT mean the session is over, which is the whole reason it exists: a
+	// non-interactive `oz exec -- ls` has stdin at EOF before the command has
+	// produced a byte, and closing the socket to say so killed the command
+	// mid-flight. The command keeps running; only its input ends.
+	Stdin string `json:"stdin,omitempty"`
 }
 
 // exit is the final text frame, carrying what the command exited with.
@@ -141,12 +149,24 @@ func (s *Server) runExecSession(
 	stdinR, stdinW := io.Pipe()
 	resize := make(chan orchestrator.TerminalSize, 1)
 
+	// One writer for both streams and for the frames below. A gorilla
+	// connection permits a single concurrent writer, and a non-TTY session has
+	// stdout and stderr live at once — two writers over one socket is a panic
+	// waiting for a command that writes to both at the same moment.
+	out := &wsWriter{conn: conn}
+
 	// The reader goroutine owns closing both, so the writer side of the pipe
 	// is closed exactly once and Exec's stdin sees a clean EOF rather than
 	// hanging on a pipe nobody will write to again.
 	go func() {
 		defer close(resize)
 		defer stdinW.Close()
+
+		// Set once the client says its input has ended. Writes after that are
+		// dropped rather than sent into a closed pipe, where the error would
+		// cancel the session the EOF was careful not to end.
+		stdinDone := false
+
 		for {
 			kind, data, err := conn.ReadMessage()
 			if err != nil {
@@ -158,13 +178,27 @@ func (s *Server) runExecSession(
 			}
 			switch kind {
 			case websocket.BinaryMessage:
+				if stdinDone {
+					continue
+				}
 				if _, err := stdinW.Write(data); err != nil {
 					cancel()
 					return
 				}
 			case websocket.TextMessage:
 				var c control
-				if err := json.Unmarshal(data, &c); err != nil || c.Resize == nil {
+				if err := json.Unmarshal(data, &c); err != nil {
+					continue
+				}
+				if c.Stdin == "eof" && !stdinDone {
+					// The command sees EOF on stdin and runs to completion.
+					// The socket stays open to carry its output and the exit
+					// frame, which is the whole point.
+					stdinDone = true
+					stdinW.Close()
+					continue
+				}
+				if c.Resize == nil {
 					continue
 				}
 				select {
@@ -181,8 +215,8 @@ func (s *Server) runExecSession(
 		Command: argv,
 		TTY:     tty,
 		Stdin:   stdinR,
-		Stdout:  &wsWriter{conn: conn},
-		Stderr:  &wsWriter{conn: conn},
+		Stdout:  out,
+		Stderr:  out,
 		Resize:  resize,
 	})
 
@@ -199,9 +233,9 @@ func (s *Server) runExecSession(
 		final.Exit, final.Error = -1, err.Error()
 	}
 	if data, mErr := json.Marshal(final); mErr == nil {
-		_ = conn.WriteMessage(websocket.TextMessage, data)
+		_ = out.writeMessage(websocket.TextMessage, data)
 	}
-	_ = conn.WriteMessage(websocket.CloseMessage,
+	_ = out.writeMessage(websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 }
 
@@ -211,12 +245,20 @@ func (s *Server) runExecSession(
 // valid UTF-8 — a program writing a control sequence or a partial multi-byte
 // rune through a text frame is a protocol violation gorilla will refuse.
 type wsWriter struct {
+	mu   sync.Mutex
 	conn *websocket.Conn
 }
 
 func (w *wsWriter) Write(p []byte) (int, error) {
-	if err := w.conn.WriteMessage(websocket.BinaryMessage, p); err != nil {
+	if err := w.writeMessage(websocket.BinaryMessage, p); err != nil {
 		return 0, err
 	}
 	return len(p), nil
+}
+
+// writeMessage sends one frame, one writer at a time.
+func (w *wsWriter) writeMessage(kind int, data []byte) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.conn.WriteMessage(kind, data)
 }
