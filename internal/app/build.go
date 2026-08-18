@@ -247,20 +247,21 @@ func buildFrom(row dbgen.Build) Build {
 // credential, and putting the registry password in every tenant namespace to
 // pull nginx would spread it for nothing.
 //
-// A failure here returns no credential rather than failing the deploy. The
-// alternative is that a registry problem stops apps that do not use the
-// registry from deploying at all.
-func (s *Service) pullAuth(ctx context.Context, a App) []byte {
+// A failure here fails the deploy rather than returning no credential. The
+// early return has already let through every app that does not use the
+// registry, so anything reaching the read genuinely needs what it asks for —
+// and applying it without a credential does not avoid the failure, it defers
+// it into a pod that cannot pull its image, reported minutes later as
+// ImagePullBackOff and nowhere connected to the registry that actually broke.
+func (s *Service) pullAuth(ctx context.Context, a App) ([]byte, error) {
 	if a.Source != SourceGit || s.images == nil {
-		return nil
+		return nil, nil
 	}
 	auth, err := s.images.DockerConfig(ctx)
 	if err != nil {
-		s.log.Warn("no pull credential for a built image",
-			"app", a.Name, "error", err)
-		return nil
+		return nil, fmt.Errorf("app: %s: pull credential: %w", a.Name, err)
 	}
-	return auth
+	return auth, nil
 }
 
 // deployTimeout caps a background deploy.

@@ -143,6 +143,12 @@ func (s *Service) runRelease(
 		preamble = noVolumesNote
 	}
 
+	auth, err := s.pullAuth(ctx, a)
+	if err != nil {
+		s.recordRelease(ctx, ownerID, deployID, ReleaseFailed, err.Error())
+		return err
+	}
+
 	spec := orchestrator.TaskSpec{
 		Ref: orchestrator.Ref{
 			Owner:     orchestrator.OwnerID(ownerID),
@@ -159,7 +165,7 @@ func (s *Service) runRelease(
 		// migration that succeeded and broke the app.
 		RunAsUser: runtimeOf(a).RunAsUser,
 
-		RegistryAuth: s.pullAuth(ctx, a),
+		RegistryAuth: auth,
 		Timeout:      releaseTimeout,
 	}
 

@@ -106,13 +106,6 @@ func (o *Orchestrator) applyDeployment(ctx context.Context, spec orchestrator.Ap
 		WithAutomountServiceAccountToken(false).
 		WithSecurityContext(restrictedPodSecurityContext(spec)).
 		WithContainers(container).
-		// An image this install built lives in a private registry, so the
-		// kubelet needs a credential to pull it. Referenced unconditionally
-		// and created only when there is one: a pull secret that does not
-		// exist is ignored, whereas a missing reference means an app that
-		// deploys and then cannot start, reported as ImagePullBackOff.
-		WithImagePullSecrets(corev1ac.LocalObjectReference().
-			WithName(orchestrator.PullSecretName)).
 		WithVolumes(append(
 			[]*corev1ac.VolumeApplyConfiguration{
 				corev1ac.Volume().
@@ -121,6 +114,24 @@ func (o *Orchestrator) applyDeployment(ctx context.Context, spec orchestrator.Ap
 			},
 			volumeSources(spec)...,
 		)...)
+
+	// An image this install built lives in a private registry, so the kubelet
+	// needs a credential to pull it. Referenced under exactly the condition
+	// ensurePullSecret above creates it, so the reference and the object it
+	// names always appear together.
+	//
+	// Naming it unconditionally instead would look harmless — a pull secret
+	// that does not exist is ignored — but it makes every namespace holding a
+	// public image report FailedToRetrieveImagePullSecret on every pod sync,
+	// which is most of them: pullAuth returns nothing for an image app or a
+	// datastore, both of which pull from a public registry. The guard that
+	// arrangement bought, an app surviving a credential that failed to load,
+	// now lives where the credential is read rather than here.
+	if len(spec.RegistryAuth) > 0 {
+		podSpec = podSpec.WithImagePullSecrets(
+			corev1ac.LocalObjectReference().
+				WithName(orchestrator.PullSecretName))
+	}
 
 	// A rolling update starts the replacement before the original stops. With a
 	// ReadWriteOnce claim the replacement cannot mount what the original still

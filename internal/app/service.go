@@ -641,11 +641,16 @@ func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
 		return fmt.Errorf("app: %s: %w", a.Name, err)
 	}
 
+	auth, err := s.pullAuth(ctx, a)
+	if err != nil {
+		return err
+	}
+
 	return s.orch.ApplyApp(ctx, orchestrator.AppSpec{
 		Ref:           a.Ref(),
 		Image:         a.Image,
 		Command:       command,
-		RegistryAuth:  s.pullAuth(ctx, a),
+		RegistryAuth:  auth,
 		Replicas:      a.Replicas,
 		Port:          a.Port,
 		Env:           plain,
