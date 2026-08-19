@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kingzion24/ozymandis/internal/app"
 	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
@@ -185,6 +186,49 @@ func TestSortedKeysIsDeterministic(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("sortedKeys = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestRedeployLabel(t *testing.T) {
+	// A git app's redeploy builds the current commit before it applies
+	// anything, so a button reading only "Redeploy" hides the rebuild somebody
+	// is looking for and sends them hunting for a feature already on screen.
+	git := app.App{Source: app.SourceGit, Repo: app.Repo{Branch: "main"}}
+	if got := redeployLabel(git); got != "Rebuild & deploy" {
+		t.Errorf("redeployLabel(git) = %q, want %q", got, "Rebuild & deploy")
+	}
+
+	// Everything else has nothing to build, and the plain word is accurate.
+	for _, src := range []app.Source{app.SourceImage, app.SourceRedis, app.SourcePostgres, app.SourceTemplate} {
+		if got := redeployLabel(app.App{Source: src}); got != "Redeploy" {
+			t.Errorf("redeployLabel(%s) = %q, want %q", src, got, "Redeploy")
+		}
+	}
+}
+
+func TestRedeployHint(t *testing.T) {
+	cases := map[string]struct {
+		in   app.App
+		want string
+	}{
+		"git names the branch it will build": {
+			in:   app.App{Source: app.SourceGit, Repo: app.Repo{Branch: "ozymandis-deploy"}},
+			want: "Builds the current commit on ozymandis-deploy and deploys it",
+		},
+		"git with no branch recorded still says it builds": {
+			in:   app.App{Source: app.SourceGit},
+			want: "Builds the current commit and deploys it",
+		},
+		"an image app restarts and nothing more": {
+			in:   app.App{Source: app.SourceImage},
+			want: "Reapplies the current spec, which restarts this app's pods",
+		},
+	}
+
+	for name, c := range cases {
+		if got := redeployHint(c.in); got != c.want {
+			t.Errorf("%s: redeployHint() = %q, want %q", name, got, c.want)
 		}
 	}
 }

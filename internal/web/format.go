@@ -532,3 +532,33 @@ func methodsIn(lines []orchestrator.HTTPLogLine) []string {
 	sort.Strings(out)
 	return out
 }
+
+// redeployLabel says what the redeploy button will actually do, which depends
+// on where the app's code comes from.
+//
+// Redeploy on a git-sourced app is not a restart: Service.Redeploy sends it
+// through buildIfNeeded, which builds the current commit on the app's branch
+// and deploys the image that comes out. Naming that "Redeploy" hides the only
+// button anybody looking for a rebuild would want, and sends them off to find a
+// feature that is already here. Every other source has nothing to build, so for
+// those the plain word is the accurate one.
+func redeployLabel(a app.App) string {
+	if a.Source == app.SourceGit {
+		return "Rebuild & deploy"
+	}
+	return "Redeploy"
+}
+
+// redeployHint is the button's hover text, naming the consequence rather than
+// repeating the label.
+func redeployHint(a app.App) string {
+	if a.Source != app.SourceGit {
+		return "Reapplies the current spec, which restarts this app's pods"
+	}
+
+	branch := strings.TrimSpace(a.Repo.Branch)
+	if branch == "" {
+		return "Builds the current commit and deploys it"
+	}
+	return "Builds the current commit on " + branch + " and deploys it"
+}

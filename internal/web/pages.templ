@@ -429,7 +429,7 @@ templ appDetailHeader(a app.App) {
 		</div>
 		<div class="flex items-center gap-2">
 			<form method="post" action={ templ.URL("/apps/" + a.Name + "/redeploy") }>
-				<button class="btn" type="submit">Redeploy</button>
+				<button class="btn" type="submit" title={ redeployHint(a) }>{ redeployLabel(a) }</button>
 			</form>
 			<form
 				method="post"

@@ -1042,7 +1042,18 @@ func (s *Service) Scale(ctx context.Context, ownerID, name string, replicas int3
 	return updated, nil
 }
 
-// Redeploy reapplies the current spec, which restarts the workload's pods.
+// Redeploy reapplies the current spec — and, for a git-sourced app, builds it
+// first.
+//
+// That second half is easy to miss and is the whole behaviour for the source
+// most apps use: the branch below sends a git app through deployInBackground,
+// which calls buildIfNeeded, which builds the current commit and records the
+// image before anything is applied. So "redeploy" on a git app means rebuild,
+// and the pods restart onto a new image rather than the same one.
+//
+// For every other source there is nothing to build and this is what it sounds
+// like: reapply, restart. A release command still runs, which is why an
+// image-sourced app with one also takes the background path.
 func (s *Service) Redeploy(ctx context.Context, ownerID, name string) error {
 	a, err := s.Get(ctx, ownerID, name)
 	if err != nil {

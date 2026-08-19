@@ -202,7 +202,7 @@ templ appPanelBody(d AppDetailData) {
 	}
 	<div class="canvas-sheet-actions">
 		<form method="post" action={ templ.URL("/apps/" + d.App.Name + "/redeploy") }>
-			<button class="btn btn-sm" type="submit">Redeploy</button>
+			<button class="btn btn-sm" type="submit" title={ redeployHint(d.App) }>{ redeployLabel(d.App) }</button>
 		</form>
 		<form
 			method="post"
