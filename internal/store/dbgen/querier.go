@@ -305,6 +305,14 @@ type Querier interface {
 	SetAppWebhookSecret(ctx context.Context, arg SetAppWebhookSecretParams) error
 	SetBuildJob(ctx context.Context, arg SetBuildJobParams) error
 	SetClusterJoin(ctx context.Context, arg SetClusterJoinParams) (ClusterJoin, error)
+	// The image a build produced, recorded on the deployment that produced it.
+	//
+	// CreateDeployment can only store the image the app had when the deploy was
+	// asked for, which for a git app is the *previous* deploy's image: the build
+	// that makes the new one has not run yet. Left there, every row in the history
+	// names the image it replaced, and rolling back to what a row says would
+	// redeploy the wrong one.
+	SetDeploymentImage(ctx context.Context, arg SetDeploymentImageParams) (Deployment, error)
 	// Written whether the release passed or failed.
 	//
 	// A failed release's reason is in its log, and dropping the log on failure is

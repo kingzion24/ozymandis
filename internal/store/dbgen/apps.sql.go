@@ -1241,6 +1241,45 @@ func (q *Queries) SetAppWebhookSecret(ctx context.Context, arg SetAppWebhookSecr
 	return err
 }
 
+const setDeploymentImage = `-- name: SetDeploymentImage :one
+UPDATE deployments
+SET image = $3
+WHERE owner_id = $1 AND id = $2
+RETURNING id, owner_id, app_id, image, revision, status, message, started_at, finished_at, release_log, release_status
+`
+
+type SetDeploymentImageParams struct {
+	OwnerID string
+	ID      uuid.UUID
+	Image   string
+}
+
+// The image a build produced, recorded on the deployment that produced it.
+//
+// CreateDeployment can only store the image the app had when the deploy was
+// asked for, which for a git app is the *previous* deploy's image: the build
+// that makes the new one has not run yet. Left there, every row in the history
+// names the image it replaced, and rolling back to what a row says would
+// redeploy the wrong one.
+func (q *Queries) SetDeploymentImage(ctx context.Context, arg SetDeploymentImageParams) (Deployment, error) {
+	row := q.db.QueryRow(ctx, setDeploymentImage, arg.OwnerID, arg.ID, arg.Image)
+	var i Deployment
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.AppID,
+		&i.Image,
+		&i.Revision,
+		&i.Status,
+		&i.Message,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.ReleaseLog,
+		&i.ReleaseStatus,
+	)
+	return i, err
+}
+
 const setDeploymentRelease = `-- name: SetDeploymentRelease :exec
 UPDATE deployments
 SET release_status = $1,

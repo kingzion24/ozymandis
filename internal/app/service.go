@@ -1162,6 +1162,23 @@ func (s *Service) buildIfNeeded(
 	}
 	a.Image = image
 
+	// And on the deployment, which until now names the image this one replaces.
+	// beginDeployment runs before the build and has nothing else to record. A
+	// row left saying the old image reads as "this deploy shipped that", which
+	// is the tag somebody rolls back to.
+	//
+	// Warned about rather than returned: history is not load-bearing here, and
+	// failing a build over an audit row is the trade beginDeployment already
+	// declined to make.
+	if deployID != uuid.Nil {
+		if _, err := s.q.SetDeploymentImage(ctx, dbgen.SetDeploymentImageParams{
+			OwnerID: ownerID, ID: deployID, Image: image,
+		}); err != nil {
+			s.log.Warn("could not record the built image on its deployment",
+				slog.String("app", a.Name), slog.String("error", err.Error()))
+		}
+	}
+
 	// Re-read rather than patched by hand: the build wrote the image and,
 	// when it could work it out, the uid the image runs as. Applying the
 	// caller's stale copy would deploy the new image with the old answer to

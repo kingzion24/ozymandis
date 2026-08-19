@@ -69,6 +69,19 @@ INSERT INTO deployments (owner_id, app_id, image, revision, status)
 VALUES ($1, $2, $3, $4, $5)
 RETURNING *;
 
+-- name: SetDeploymentImage :one
+-- The image a build produced, recorded on the deployment that produced it.
+--
+-- CreateDeployment can only store the image the app had when the deploy was
+-- asked for, which for a git app is the *previous* deploy's image: the build
+-- that makes the new one has not run yet. Left there, every row in the history
+-- names the image it replaced, and rolling back to what a row says would
+-- redeploy the wrong one.
+UPDATE deployments
+SET image = $3
+WHERE owner_id = $1 AND id = $2
+RETURNING *;
+
 -- name: FinishDeployment :one
 UPDATE deployments
 SET status = $3, message = $4, finished_at = now()
