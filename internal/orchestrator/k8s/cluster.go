@@ -160,11 +160,14 @@ func (o *Orchestrator) Pods(
 			Namespace:  p.Namespace,
 			DrainMoves: !skipOnDrain(&p),
 			Phase:      string(p.Status.Phase),
-			Node:       p.Spec.NodeName,
-			Total:      int32(len(p.Status.ContainerStatuses)),
-			CreatedAt:  p.CreationTimestamp.Time,
-			App:        p.Labels[orchestrator.LabelApp],
-			Owner:      orchestrator.OwnerID(p.Labels[orchestrator.LabelOwner]),
+			// Set the moment a delete is accepted, and the only signal that
+			// separates a pod being replaced from the one replacing it.
+			Terminating: p.DeletionTimestamp != nil,
+			Node:        p.Spec.NodeName,
+			Total:       int32(len(p.Status.ContainerStatuses)),
+			CreatedAt:   p.CreationTimestamp.Time,
+			App:         p.Labels[orchestrator.LabelApp],
+			Owner:       orchestrator.OwnerID(p.Labels[orchestrator.LabelOwner]),
 		}
 		for _, cs := range p.Status.ContainerStatuses {
 			if cs.Ready {

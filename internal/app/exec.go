@@ -49,10 +49,18 @@ type ExecTarget struct {
 //
 //   - only READY pods are attachable. A crashlooping container's logs are the
 //     most useful thing about it; a shell in one is a race against the restart.
-//   - among those, the lowest name, sorted. Deterministic rather than
-//     meaningful — there is no "best" replica — so that two consecutive
-//     consoles land in the same place and a person can reason about what they
-//     just did.
+//   - a TERMINATING pod is never attachable, however ready it looks. It keeps
+//     phase Running with every container ready for the whole of its grace
+//     period, so readiness alone hands out shells in the pod that is on its
+//     way out — which during a rollout is the one running the OLD image. A
+//     command run there reports the previous release as though it were the
+//     current one, and "did my change deploy?" is exactly what a console gets
+//     opened to answer.
+//   - among those, the NEWEST. Replicas of one release are interchangeable and
+//     any of them would do, but mid-rollout they are not replicas of the same
+//     thing, and the new release is the one somebody asking now means. Ties
+//     break on the lowest name, so a settled app still sends two consecutive
+//     consoles to the same place.
 //   - the caller is TOLD which one, always. The choice being arbitrary is
 //     exactly why it has to be visible.
 //
@@ -92,7 +100,16 @@ func (s *Service) resolveExecTarget(
 		return target, nil
 	}
 
-	target.Pod = target.Pods[0]
+	// Newest first, lowest name to break a tie. Sorting a copy of the ready
+	// pods rather than target.Pods, which stays in name order because it is
+	// the list a person reads and picks from.
+	slices.SortFunc(ready, func(x, y orchestrator.PodInfo) int {
+		if c := y.CreatedAt.Compare(x.CreatedAt); c != 0 {
+			return c
+		}
+		return strings.Compare(x.Name, y.Name)
+	})
+	target.Pod = ready[0].Name
 
 	if wantPod != "" {
 		if !slices.Contains(target.Pods, wantPod) {
@@ -114,6 +131,9 @@ func (s *Service) resolveExecTarget(
 // and whose app container is still starting is Running, and a shell opened into
 // it races the thing that is about to restart it.
 func execReady(p orchestrator.PodInfo) bool {
+	if p.Terminating {
+		return false
+	}
 	return strings.EqualFold(p.Phase, "Running") && p.Total > 0 && p.Ready == p.Total
 }
 
@@ -131,6 +151,21 @@ func whyNoPod(pods []orchestrator.PodInfo, a App) string {
 		}
 		return "This app has no pods yet. If it was just deployed, give it a " +
 			"moment; if it stays this way, the cluster could not schedule it."
+	}
+
+	// Every pod is on its way out. Worth saying plainly: readiness is not the
+	// problem, so the generic "still starting" line below would send somebody
+	// looking for a fault that is not there.
+	live := false
+	for _, p := range pods {
+		if !p.Terminating {
+			live = true
+			break
+		}
+	}
+	if !live {
+		return "Every container is shutting down, so there is nothing to " +
+			"open yet. A replacement is on its way up — try again in a moment."
 	}
 
 	// Pods exist but none are ready. The reason is on the pod, where Kubernetes

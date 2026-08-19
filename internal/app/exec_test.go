@@ -2,8 +2,11 @@ package app
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
@@ -217,5 +220,113 @@ func TestCanExecReportsTheOrchestratorsCapability(t *testing.T) {
 	s, _ := execService(t)
 	if s.CanExec() {
 		t.Error("an orchestrator with no Exec reported that it can open a console")
+	}
+}
+
+// created returns a ready pod with an age, so a rollout can be described.
+func created(name string, age time.Duration) orchestrator.PodInfo {
+	p := running(name)
+	p.CreatedAt = time.Now().Add(-age)
+	return p
+}
+
+// The gap this closes.
+//
+// A terminating pod keeps phase Running with every container ready for the
+// whole of its grace period, so readiness alone cannot tell it from the pod
+// replacing it. Sorting by name then hands out a shell in whichever sorts
+// first — and mid-rollout that is a coin toss between the old image and the
+// new one. Somebody opening a console to check a deploy gets told the previous
+// release is live.
+func TestExecSkipsAPodThatIsShuttingDown(t *testing.T) {
+	outgoing := created("web-a", 2*time.Hour) // sorts first, and is going away
+	outgoing.Terminating = true
+	incoming := created("web-b", time.Minute)
+
+	s, ownerID := execService(t, outgoing, incoming)
+	makeApp(t, s, ownerID, 1)
+
+	target, err := s.ExecTargetFor(context.Background(), ownerID, "web", "")
+	if err != nil {
+		t.Fatalf("ExecTargetFor: %v", err)
+	}
+	if target.Pod != "web-b" {
+		t.Errorf("pod = %q, want web-b — web-a is terminating however ready it looks", target.Pod)
+	}
+	// And it is not offered as an alternative either: a pod nobody may attach
+	// to has no business in the list somebody picks from.
+	if slices.Contains(target.Pods, "web-a") {
+		t.Errorf("pods = %v, still offers the terminating pod", target.Pods)
+	}
+}
+
+// Naming it explicitly is refused for the same reason choosing it is.
+func TestExecRefusesAnExplicitPodThatIsShuttingDown(t *testing.T) {
+	outgoing := created("web-a", 2*time.Hour)
+	outgoing.Terminating = true
+	s, ownerID := execService(t, outgoing, created("web-b", time.Minute))
+	makeApp(t, s, ownerID, 1)
+
+	if _, err := s.ExecTargetFor(context.Background(), ownerID, "web", "web-a"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// Replicas of one release are interchangeable; mid-rollout they are not
+// replicas of the same thing. The new one is what somebody asking now means,
+// even when the old one sorts first and is not yet terminating.
+func TestExecPrefersTheNewestPod(t *testing.T) {
+	s, ownerID := execService(t,
+		created("web-a", 3*time.Hour), // older release, still up
+		created("web-c", time.Minute), // the one just rolled out
+		created("web-b", 2*time.Hour),
+	)
+	makeApp(t, s, ownerID, 3)
+
+	target, err := s.ExecTargetFor(context.Background(), ownerID, "web", "")
+	if err != nil {
+		t.Fatalf("ExecTargetFor: %v", err)
+	}
+	if target.Pod != "web-c" {
+		t.Errorf("pod = %q, want web-c — the newest, not the lowest name", target.Pod)
+	}
+}
+
+// Same age is the settled case, and there the old rule still holds: pick by
+// name so two consecutive consoles land together.
+func TestExecStillBreaksTiesByName(t *testing.T) {
+	at := time.Now().Add(-time.Hour)
+	a, b, c := running("web-c"), running("web-a"), running("web-b")
+	a.CreatedAt, b.CreatedAt, c.CreatedAt = at, at, at
+
+	s, ownerID := execService(t, a, b, c)
+	makeApp(t, s, ownerID, 3)
+
+	target, err := s.ExecTargetFor(context.Background(), ownerID, "web", "")
+	if err != nil {
+		t.Fatalf("ExecTargetFor: %v", err)
+	}
+	if target.Pod != "web-a" {
+		t.Errorf("pod = %q, want web-a — same age, so the lowest name decides", target.Pod)
+	}
+}
+
+// "Still starting" would send somebody hunting a fault that is not there.
+func TestExecSaysWhenEveryPodIsShuttingDown(t *testing.T) {
+	a, b := created("web-a", time.Hour), created("web-b", time.Hour)
+	a.Terminating, b.Terminating = true, true
+
+	s, ownerID := execService(t, a, b)
+	makeApp(t, s, ownerID, 2)
+
+	target, err := s.ExecTargetFor(context.Background(), ownerID, "web", "")
+	if err != nil {
+		t.Fatalf("ExecTargetFor: %v", err)
+	}
+	if target.Pod != "" {
+		t.Fatalf("attached to %q, which is shutting down", target.Pod)
+	}
+	if !strings.Contains(target.Note, "shutting down") {
+		t.Errorf("the note does not say they are shutting down: %q", target.Note)
 	}
 }

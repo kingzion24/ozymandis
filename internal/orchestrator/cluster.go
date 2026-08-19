@@ -59,6 +59,17 @@ type PodInfo struct {
 	Restarts  int32
 	CreatedAt time.Time
 
+	// Terminating reports that this pod has been asked to go away and is
+	// working through its grace period.
+	//
+	// Kubernetes says this with a deletion timestamp and nothing else: the
+	// phase stays "Running" and the containers stay ready until the process
+	// actually stops, so a pod on its way out is indistinguishable from a
+	// healthy one by phase and readiness alone. That gap is the whole reason
+	// this field exists — during a rolling update the outgoing pod answers
+	// every "is it ready" question exactly as the incoming one does.
+	Terminating bool
+
 	// App is the workload this pod belongs to, empty for pods the engine
 	// does not manage.
 	App   string
