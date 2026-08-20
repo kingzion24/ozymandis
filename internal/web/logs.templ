@@ -72,6 +72,7 @@ templ AppLogs(d LogsData) {
 		hx-swap="innerHTML"
 		if !d.Previous {
 			data-log-stream={ logsStreamHref(d) }
+			data-log-zone={ strconv.Itoa(zoneOffsetSeconds()) }
 		}
 	>
 		@AppLogLines(d)

@@ -17,6 +17,11 @@
 		var url = root.getAttribute("data-log-stream");
 		if (!url || typeof EventSource === "undefined") return;
 
+		// The server's offset from UTC, in seconds. Absent means no zone was
+		// sent, and a line is then rendered without a time rather than with a
+		// guessed one.
+		var offset = parseInt(root.getAttribute("data-log-zone"), 10);
+
 		var pane = root.querySelector(".logs");
 		if (!pane) return; // nothing rendered yet, the poll will fill it
 
@@ -29,7 +34,7 @@
 		source.addEventListener("message", function (e) {
 			// Read before appending: appending is what moves it.
 			var pinned = atBottom(pane);
-			pane.appendChild(lineNode(e.data));
+			pane.appendChild(lineNode(e.data, clock(e.lastEventId, offset)));
 			if (pinned) pane.scrollTop = pane.scrollHeight;
 		});
 
@@ -58,9 +63,47 @@
 		return pane.scrollHeight - pane.scrollTop - pane.clientHeight < 24;
 	}
 
-	function lineNode(text) {
+	// clock is the time an event carries, on the clock the server renders in.
+	//
+	// The id field is the line's timestamp in nanoseconds since the epoch — the
+	// same instant the tail above this pane was rendered from. Converting it
+	// with the browser's own zone is the obvious version and the wrong one:
+	// somebody reading this from another country would get the streamed half of
+	// one pane on a different clock from the half above it. Hence an offset
+	// from the server rather than Date's local getters.
+	//
+	// An empty id is a line whose timestamp could not be parsed. It gets no
+	// time, which is what the server-rendered lines do with the same case.
+	function clock(id, offsetSeconds) {
+		if (!id || isNaN(offsetSeconds)) return "";
+		var ns = Number(id);
+		if (!isFinite(ns)) return "";
+
+		var at = new Date(ns / 1e6 + offsetSeconds * 1000);
+		if (isNaN(at.getTime())) return "";
+
+		// UTC getters against an already-shifted instant, so the arithmetic is
+		// the server's zone and never the browser's.
+		return pad(at.getUTCHours()) + ":" +
+			pad(at.getUTCMinutes()) + ":" +
+			pad(at.getUTCSeconds());
+	}
+
+	function pad(n) {
+		return n < 10 ? "0" + n : String(n);
+	}
+
+	function lineNode(text, at) {
 		var line = document.createElement("div");
 		line.className = "log-line";
+		// Same element and class the server renders, so a streamed line and the
+		// tail above it line up in one column instead of two.
+		if (at) {
+			var time = document.createElement("span");
+			time.className = "log-time";
+			time.textContent = at;
+			line.appendChild(time);
+		}
 		var body = document.createElement("span");
 		body.className = "log-text";
 		// textContent, never innerHTML: this is untrusted output from somebody

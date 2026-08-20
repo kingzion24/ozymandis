@@ -460,6 +460,23 @@ func shortTime(t time.Time) string {
 	return t.Local().Format("15:04:05")
 }
 
+// zoneOffsetSeconds is the display zone's offset from UTC.
+//
+// Sent to the browser so a streamed log line can be stamped on the same clock
+// as the lines rendered above it. The browser's own zone would be the easy
+// answer and the wrong one: a reader in another country would then see one
+// pane keeping two clocks, which is the fault shortTime exists to prevent.
+//
+// This is the offset in force when the page was rendered, not at the instant
+// of each line. The two differ only across a daylight-saving transition, and
+// only for lines arriving in the seconds around it — a followed log is
+// seconds old by construction, and the tail beside it is rendered in Go with
+// the real zone anyway.
+func zoneOffsetSeconds() int {
+	_, offset := time.Now().In(time.Local).Zone()
+	return offset
+}
+
 // matchSpan is one piece of a line, and whether the search found it.
 type matchSpan struct {
 	Text  string

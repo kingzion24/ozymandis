@@ -308,7 +308,18 @@ func (s *Server) appLogsStream(w http.ResponseWriter, r *http.Request) {
 // name the client does not know, which drops it silently. A stack trace is
 // exactly such a line.
 func writeLogEvent(w io.Writer, line orchestrator.LogLine) {
-	fmt.Fprintf(w, "id: %d\n", line.At.UnixNano())
+	// The id carries the instant, which is what stamps the line in the browser.
+	//
+	// A line whose timestamp could not be parsed sends an empty id rather than
+	// no id at all. Omitting the field leaves the browser's last-event-id at
+	// the previous line's value, and the client would then stamp this line with
+	// the time of the one before it — a plausible-looking wrong answer, which
+	// is the worst kind.
+	if line.At.IsZero() {
+		fmt.Fprint(w, "id: \n")
+	} else {
+		fmt.Fprintf(w, "id: %d\n", line.At.UnixNano())
+	}
 	for _, part := range strings.Split(line.Text, "\n") {
 		fmt.Fprintf(w, "data: %s\n", part)
 	}

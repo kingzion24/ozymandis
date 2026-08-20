@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"iter"
 	"net/http"
 	"strings"
@@ -24,9 +25,13 @@ var testDeployID = uuid.MustParse("11111111-2222-3333-4444-555555555555")
 type recordingLogs struct {
 	readLogs bool
 	stream   []string
-	build    *app.Build
-	http     *app.HTTPLogs
-	enabled  bool
+
+	// lines is the stream when a test needs the timestamps too. It takes
+	// precedence over stream, which carries text alone.
+	lines   []orchestrator.LogLine
+	build   *app.Build
+	http    *app.HTTPLogs
+	enabled bool
 }
 
 func (l *recordingLogs) Logs(
@@ -336,6 +341,14 @@ func (l *recordingLogs) LogStream(
 ) (iter.Seq2[orchestrator.LogLine, error], error) {
 	l.readLogs = true
 	return func(yield func(orchestrator.LogLine, error) bool) {
+		if l.lines != nil {
+			for _, line := range l.lines {
+				if !yield(line, nil) {
+					return
+				}
+			}
+			return
+		}
 		for _, text := range l.stream {
 			if !yield(orchestrator.LogLine{At: time.Unix(0, 0), Text: text}, nil) {
 				return
@@ -434,5 +447,52 @@ func TestLogLinesAreShownOnTheServersClock(t *testing.T) {
 		t.Errorf("log line does not carry the local clock time 12:32:15: %q", got)
 	} else if strings.Contains(got, "09:32:15") {
 		t.Errorf("log line still shows the stored UTC time 09:32:15: %q", got)
+	}
+}
+
+// A streamed line has to say when it happened, or half a log pane keeps time
+// and the other half does not.
+//
+// The instant travels in the event's id, which the client turns into the same
+// clock the tail above was rendered on. Sent as nanoseconds rather than as
+// formatted text so the text field stays exactly the container's own output —
+// splitting a time back off a log line is how a stack trace loses its first
+// line.
+func TestAStreamedLineCarriesTheInstantItHappened(t *testing.T) {
+	at := time.Date(2026, 8, 20, 9, 32, 15, 0, time.UTC)
+	logs := &recordingLogs{lines: []orchestrator.LogLine{
+		{At: at, Text: "listening"},
+		{Text: "a line whose timestamp would not parse"},
+	}}
+	h := testServer(t, Options{Logs: logs})
+
+	body := get(t, h, "/apps/web/logs/stream").Body.String()
+
+	if want := fmt.Sprintf("id: %d\n", at.UnixNano()); !strings.Contains(body, want) {
+		t.Errorf("stream does not carry the line's instant as %q: %q", want, body)
+	}
+
+	// The empty id is the load-bearing half. An event with no id field at all
+	// leaves the browser's last-event-id at the previous line's value, and the
+	// line without a timestamp would then be stamped with the time of the one
+	// before it — wrong, and plausible enough that nobody would question it.
+	if !strings.Contains(body, "id: \n") {
+		t.Errorf("a line with no timestamp did not clear the id: %q", body)
+	}
+	if n := strings.Count(body, "id: "); n != 2 {
+		t.Errorf("got %d id fields for 2 lines: %q", n, body)
+	}
+}
+
+// The browser cannot be trusted to pick the zone: its own would put a reader
+// abroad on a different clock from the tail rendered beside them.
+func TestTheLogPaneSendsTheZoneToRenderStreamedLinesIn(t *testing.T) {
+	h := testServer(t, Options{Logs: &recordingLogs{}})
+
+	body := get(t, h, "/apps/web/logs").Body.String()
+
+	_, offset := time.Now().In(time.Local).Zone()
+	if want := fmt.Sprintf(`data-log-zone="%d"`, offset); !strings.Contains(body, want) {
+		t.Errorf("the log pane does not carry %s", want)
 	}
 }
