@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +12,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/kingzion24/ozymandis/internal/appspec"
+	"github.com/kingzion24/ozymandis/internal/envfile"
 )
 
 func init() {
@@ -107,21 +107,15 @@ func secretsSet(ctx context.Context, env *Env, args []string) error {
 		// being an argument. Command lines are visible in `ps` output and land
 		// in shell history; a credential passed that way is a credential
 		// somebody else on the machine can read.
-		sc := bufio.NewScanner(os.Stdin)
-		for sc.Scan() {
-			line := strings.TrimSpace(sc.Text())
-			if line == "" || strings.HasPrefix(line, "#") {
-				continue
-			}
-			k, v, ok := strings.Cut(line, "=")
-			if !ok {
-				return fmt.Errorf("oz: %q on stdin is not KEY=value", line)
-			}
-			vars[strings.TrimSpace(k)] = v
+		//
+		// Shared with the dashboard's paste box rather than parsed here, so
+		// that piping a file and pasting the same file cannot disagree about
+		// what it says.
+		parsed, err := envfile.Parse(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("oz: stdin: %w", err)
 		}
-		if err := sc.Err(); err != nil {
-			return fmt.Errorf("oz: read stdin: %w", err)
-		}
+		vars = parsed
 	}
 
 	for _, arg := range fs.Args() {
