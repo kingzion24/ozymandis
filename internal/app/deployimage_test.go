@@ -48,6 +48,15 @@ func TestADeploymentRecordsTheImageItBuilt(t *testing.T) {
 		t.Fatalf("a git app starts at %q, not %q", PendingImage, a.Image)
 	}
 
+	// Create deploys on its own, so this app already has a build in flight.
+	// Let it land before starting another: buildIfNeeded writes apps.image
+	// when its build finishes, two overlapping deploys therefore write it in
+	// completion order rather than start order, and the app is left recorded
+	// as running whichever finished last. That is worth knowing and is not
+	// what this test is about — asserting on apps.image while a second build
+	// is still running only measures which goroutine won.
+	waitForDeployment(t, s, ownerID, latestDeployment(t, s, ownerID, a.ID).ID)
+
 	if err := s.Redeploy(ctx, ownerID, a.Name); err != nil {
 		t.Fatalf("Redeploy: %v", err)
 	}
