@@ -1,0 +1,60 @@
+name: smoke
+
+# Proves the deploy path without deploying anything.
+#
+# release.yml's deploy job depends on four things that cannot be checked from a
+# laptop: the OAuth client's scope, its tag, the tailnet ACL granting tag:ci
+# SSH to root on tag:server, and that the grant is `accept` rather than `check`
+# — a browser prompt no runner can answer. This runs exactly that path and then
+# stops, so the first time any of it is exercised is not during a release.
+#
+# Temporary. Delete once it has passed; a workflow that only ever proved a
+# one-time setup is a workflow nobody will remember the purpose of.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    if: github.repository == 'kingzion24/ozymandis'
+
+    steps:
+      - name: Join the tailnet
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      # Printed because the two likely failures look nothing alike here: an
+      # OAuth client with the wrong scope never gets this far, and one with the
+      # wrong tag gets here and is then refused by the ACL.
+      - name: Who the runner is on the tailnet
+        run: tailscale status --self --peers=false
+
+      # Read-only on purpose. Nothing here writes, restarts or installs — the
+      # question is whether the session is authorised at all, and `id -un`
+      # answering "root" settles it.
+      #
+      # ConnectTimeout so a rule that silently drops packets fails in 20
+      # seconds rather than sitting on GitHub's six-hour job limit.
+      - name: SSH to the server as root
+        env:
+          HOST: ${{ secrets.OZYMANDIS_SSH_HOST }}
+        run: |
+          set -eu
+          ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 \
+            "root@${HOST}" '
+              set -eu
+              echo "user     : $(id -un)"
+              echo "host     : $(hostname)"
+              echo "service  : $(systemctl is-active ozymandis)"
+              echo "installed: $(ls -l /usr/local/bin/ozymandis | awk "{print \$5\" bytes\"}")"
+              # The value is never printed, only whether the line is there:
+              # this file holds the key that seals every stored secret.
+              echo "TZ set   : $(grep -c "^TZ=." /etc/ozymandis/ozymandis.env || true)"
+            '
