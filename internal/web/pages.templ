@@ -320,6 +320,17 @@ type AppDetailData struct {
 	// one destination that is also the origin is not a choice.
 	Projects    []app.Project
 	ProjectSlug string
+
+	// EditKey is the variable the Variables tab should open its form on,
+	// prefilled and ready to overwrite.
+	//
+	// The form has always been an upsert, so editing was possible before this
+	// existed — but only if you knew that, and nothing on the page said so.
+	// The only control beside a row was Remove, which is the one thing you must
+	// not do to rotate a credential: it takes the variable away from a running
+	// app for as long as it takes to type the new value. This turns the
+	// discoverable action into the safe one.
+	EditKey string
 }
 
 // AppDetail is the Railway-shaped view: a rail of every app on the left so you
@@ -620,9 +631,12 @@ templ appVariables(d AppDetailData) {
 								}
 							</td>
 							<td class="text-right">
-								<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/variables/" + v.Key + "/delete") }>
-									<button class="btn btn-sm btn-danger" type="submit">Remove</button>
-								</form>
+								<div class="flex items-center justify-end gap-2">
+									<a class="btn btn-sm" href={ editVariableHref(d.App.Name, v.Key) }>Edit</a>
+									<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/variables/" + v.Key + "/delete") }>
+										<button class="btn btn-sm btn-danger" type="submit">Remove</button>
+									</form>
+								</div>
 							</td>
 						</tr>
 					}
@@ -631,23 +645,58 @@ templ appVariables(d AppDetailData) {
 			</div>
 		}
 	</div>
-	<div class="panel">
-		<div class="panel-header"><span class="panel-title">Set a variable</span></div>
+	{{ editing := d.EditVariable() }}
+	<div class="panel mb-5" id="set-variable">
+		<div class="panel-header">
+			<span class="panel-title">
+				if editing != nil {
+					Replace { editing.Key }
+				} else {
+					Set a variable
+				}
+			</span>
+		</div>
 		<div class="panel-body">
 			<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/variables") } class="flex flex-wrap items-end gap-4">
 				<div class="field">
 					<label class="label" for="var-key">Key</label>
-					<input class="control mono" id="var-key" name="key" required placeholder="DATABASE_URL"/>
+					if editing != nil {
+						// Read-only rather than absent: the form still posts the
+						// key, and renaming a variable by typing over it would be
+						// an add and a leak, not a rename — the old one would stay
+						// set on a running app under its old name.
+						<input class="control mono" id="var-key" name="key" required readonly value={ editing.Key }/>
+					} else {
+						<input class="control mono" id="var-key" name="key" required placeholder="DATABASE_URL"/>
+					}
 				</div>
 				<div class="field grow">
 					<label class="label" for="var-value">Value</label>
-					<input class="control mono" id="var-value" name="value" placeholder="postgres://…"/>
+					if editing != nil {
+						// Empty and focused. A sealed value cannot be prefilled —
+						// this page has never been given it — and prefilling a
+						// plaintext one would put a credential on screen for an
+						// onlooker in exchange for saving a paste.
+						<input class="control mono" id="var-value" name="value" autofocus
+							placeholder={ "a new value for " + editing.Key }/>
+					} else {
+						<input class="control mono" id="var-value" name="value" placeholder="postgres://…"/>
+					}
 				</div>
 				<label class="check-field">
-					<input type="checkbox" name="secret" value="1"/>
+					if editing != nil && editing.Secret {
+						<input type="checkbox" id="var-secret" name="secret" value="1" checked/>
+					} else {
+						<input type="checkbox" id="var-secret" name="secret" value="1"/>
+					}
 					Secret
 				</label>
-				<button class="btn btn-primary" type="submit">Save</button>
+				if editing != nil {
+					<button class="btn btn-primary" type="submit">Replace</button>
+					<a class="btn btn-sm" href={ templ.SafeURL("/apps/" + d.App.Name + "/variables") }>Cancel</a>
+				} else {
+					<button class="btn btn-primary" type="submit">Save</button>
+				}
 			</form>
 			<p class="mt-3 text-[12px] text-muted-foreground">
 				A secret is encrypted before it is stored and mounted from a Kubernetes
@@ -655,6 +704,35 @@ templ appVariables(d AppDetailData) {
 				<code class="mono">kubectl get deploy -o yaml</code>. It cannot be shown
 				again afterwards — replace it instead. Setting one requires
 				<code class="mono">OZYMANDIS_SECRET_KEY</code>.
+			</p>
+			<p class="mt-2 text-[12px] text-muted-foreground">
+				Saving applies the app. The pod template carries a hash of the secret
+				material, so running pods roll onto the new value on their own — there
+				is no deploy to run afterwards.
+			</p>
+		</div>
+	</div>
+	<div class="panel">
+		<div class="panel-header"><span class="panel-title">Paste a .env</span></div>
+		<div class="panel-body">
+			<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/variables/import") }>
+				<div class="field">
+					<label class="label" for="var-env">KEY=value lines</label>
+					<textarea class="control mono" id="var-env" name="env" rows="8"
+						placeholder="ANTHROPIC_API_KEY=sk-ant-…&#10;DEEPSEEK_MODEL=deepseek-chat&#10;# comments and blank lines are skipped"></textarea>
+				</div>
+				<div class="flex flex-wrap items-center gap-4 mt-4">
+					<label class="check-field">
+						<input type="checkbox" name="secret" value="1" checked/>
+						Secret
+					</label>
+					<button class="btn btn-primary" type="submit">Set all</button>
+				</div>
+			</form>
+			<p class="mt-3 text-[12px] text-muted-foreground">
+				Additive: this sets the keys it names and leaves every other one alone,
+				so pasting a file that has drifted cannot silently unset what it has
+				stopped mentioning. Removing a variable is still its own button.
 			</p>
 		</div>
 	</div>

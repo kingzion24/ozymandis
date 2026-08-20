@@ -608,6 +608,7 @@ func (s *Server) Handler() http.Handler {
 				r.Post("/apps/{name}/deploy-key", s.deployKeyGenerate)
 			}
 			r.Post("/apps/{name}/variables", s.variableSet)
+			r.Post("/apps/{name}/variables/import", s.variableImport)
 			r.Post("/apps/{name}/variables/{key}/delete", s.variableDelete)
 
 			if s.nets != nil {

@@ -2,14 +2,18 @@ package web
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/kingzion24/ozymandis/internal/app"
+	"github.com/kingzion24/ozymandis/internal/envfile"
 	"github.com/kingzion24/ozymandis/internal/identity"
 )
 
@@ -152,6 +156,50 @@ func (s *Server) variableSet(w http.ResponseWriter, r *http.Request) {
 }
 
 // variableDelete removes one.
+// variableImport sets every KEY=value line in a pasted block.
+//
+// The alternative to this is twelve round-trips through the single-key form to
+// seed one app, which is enough friction that the credentials end up somewhere
+// easier instead. Additive for the same reason the API's PUT is: a paste that
+// has drifted from what the app runs must not unset what it has stopped
+// mentioning, because that is an outage produced by a stale clipboard.
+func (s *Server) variableImport(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name := chi.URLParam(r, "name")
+
+	vars, err := envfile.Parse(strings.NewReader(r.FormValue("env")))
+	if err != nil {
+		s.variableFailed(w, r, name, err)
+		return
+	}
+	if len(vars) == 0 {
+		s.variableFailed(w, r, name,
+			errors.New("there is nothing to set: paste KEY=value lines"))
+		return
+	}
+
+	sealed := r.FormValue("secret") != ""
+
+	// Sorted so a partial failure is deterministic — the same paste against the
+	// same app stops at the same key rather than at whichever one map iteration
+	// happened to reach first.
+	for _, k := range slices.Sorted(maps.Keys(vars)) {
+		err := s.apps.SetVariable(ctx, owner.ID, name, app.VariableInput{
+			Key: k, Value: vars[k], Secret: sealed,
+		})
+		if err != nil {
+			// Named, because the keys before it are written and there is no
+			// transaction spanning them. Saying which one it stopped at is the
+			// difference between resuming and starting again.
+			s.variableFailed(w, r, name, fmt.Errorf("setting %s: %w", k, err))
+			return
+		}
+	}
+
+	http.Redirect(w, r, "/apps/"+name+"/variables", http.StatusSeeOther)
+}
+
 func (s *Server) variableDelete(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	owner := identity.MustFromContext(ctx)

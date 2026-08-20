@@ -106,6 +106,10 @@ func (s *Server) renderCanvas(w http.ResponseWriter, r *http.Request, slug, appN
 			return
 		}
 		open = s.appPanel(ctx, a, detailTab(r))
+		// Which variable the form opens on rides in the URL rather than in
+		// session state, so the Edit control is an ordinary link: it survives
+		// a refresh, it can be shared, and it needs no JavaScript to work.
+		open.EditKey = r.URL.Query().Get("edit")
 	}
 
 	// An app with no project yet resolves to the default one, which is where

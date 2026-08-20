@@ -39,6 +39,17 @@ type fakeApps struct {
 	// moved is the app name and destination slug of the last MoveApp.
 	moved [2]string
 
+	// variables records what SetVariable was asked for, in the order it was
+	// asked, so a test of the paste box can assert every key reached the
+	// service — and that a batch that stops halfway wrote the keys before the
+	// one it stopped at, which is what the handler promises in its error.
+	variables []app.VariableInput
+
+	// varErr, when set, makes SetVariable fail for that key. A batch has no
+	// transaction spanning it, so how it fails partway is behaviour worth
+	// pinning rather than an accident.
+	varErr string
+
 	// extraProjects are returned by Projects alongside the default one, so a
 	// test can render the move control — which is drawn only when there is
 	// somewhere to move to.
@@ -619,8 +630,14 @@ func varsFrom(env map[string]string) []app.Variable {
 	return out
 }
 
-func (f *fakeApps) SetVariable(context.Context, string, string, app.VariableInput) error {
-	return errors.New("fakeApps has no variables")
+func (f *fakeApps) SetVariable(
+	_ context.Context, _, _ string, in app.VariableInput,
+) error {
+	if f.varErr != "" && in.Key == f.varErr {
+		return errors.New("sealing " + in.Key + " failed")
+	}
+	f.variables = append(f.variables, in)
+	return nil
 }
 
 func (f *fakeApps) DeleteVariable(context.Context, string, string, string) error {

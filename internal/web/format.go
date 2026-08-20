@@ -3,11 +3,14 @@ package web
 import (
 	"fmt"
 	"maps"
+	"net/url"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/a-h/templ"
 
 	"github.com/kingzion24/ozymandis/internal/account"
 	"github.com/kingzion24/ozymandis/internal/app"
@@ -589,4 +592,33 @@ func redeployHint(a app.App) string {
 		return "Builds the current commit and deploys it"
 	}
 	return "Builds the current commit on " + branch + " and deploys it"
+}
+
+// EditVariable is the variable the Variables tab's form should open on, or nil
+// to draw the form as a blank add.
+//
+// Resolved against the app's own variables rather than trusted from the URL:
+// ?edit= is whatever somebody typed, and a form that opened on a key the app
+// does not have would offer to "replace" something that was about to be
+// created, with the Secret box guessed rather than carried over.
+func (d AppDetailData) EditVariable() *app.Variable {
+	if d.EditKey == "" {
+		return nil
+	}
+	for i, v := range d.App.Variables {
+		if v.Key == d.EditKey {
+			return &d.App.Variables[i]
+		}
+	}
+	return nil
+}
+
+// editVariableHref links a row's Edit control to the form below it.
+//
+// The key goes through query escaping because it is a key, not a path segment:
+// nothing in the variable rules stops one containing a character that would
+// otherwise end the path.
+func editVariableHref(appName, key string) templ.SafeURL {
+	return templ.SafeURL("/apps/" + url.PathEscape(appName) +
+		"/variables?edit=" + url.QueryEscape(key) + "#set-variable")
 }
