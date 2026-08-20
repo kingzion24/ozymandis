@@ -1,0 +1,118 @@
+# Cut a release.
+#
+# The deploy path has always been complete — release.yml builds, publishes,
+# joins the tailnet, upgrades the server and checks what is serving. What it
+# needed was a tag, and cutting one by hand is the step that gets skipped,
+# which is how manhattan ends up several commits ahead of what the VPS runs.
+#
+# Deliberately not on push. Every commit becoming a release fills the releases
+# page with versions that mark nothing, and "put back the last good one" stops
+# being a question with an answer. This is the middle: one command to deploy,
+# and still a named version to go back to.
+name: tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Which part of the version to raise.
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      dry_run:
+        description: Work out the next version and stop, without tagging.
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+    steps:
+      # Full history, because the next version is derived from the tags and a
+      # shallow clone has none of them — which would silently restart the
+      # numbering at v0.1.0 on top of a repository that is already at v0.2.2.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Work out the next version
+        id: next
+        run: |
+          set -eu
+
+          # The highest version, not the most recent. A tag cut from an older
+          # branch would otherwise make the next one go backwards, and the
+          # repository also carries tags that are not versions at all.
+          latest=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1)
+          latest="${latest:-v0.0.0}"
+          echo "latest: ${latest}"
+
+          IFS=. read -r major minor patch <<EOF
+          ${latest#v}
+          EOF
+
+          case "${{ inputs.bump }}" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+
+          version="v${major}.${minor}.${patch}"
+          echo "next:   ${version}"
+
+          # Refused rather than overwritten. A tag that already exists has
+          # artifacts published against it, and moving one makes every checksum
+          # somebody has recorded wrong.
+          if git rev-parse -q --verify "refs/tags/${version}" >/dev/null; then
+            echo "::error::${version} already exists"
+            exit 1
+          fi
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Tag it
+        if: ${{ !inputs.dry_run }}
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+        run: |
+          set -eu
+          # Annotated, so the tag carries an author and a date of its own and
+          # `git describe` has something to name. install.sh and upgrade.sh
+          # both resolve versions by tag name, so this is the record of when a
+          # given binary became the one being served.
+          git -c user.name="${GITHUB_ACTOR}" \
+              -c user.email="${GITHUB_ACTOR}@users.noreply.github.com" \
+              tag -a "${VERSION}" -m "${VERSION}"
+          git push origin "${VERSION}"
+
+      - name: Say what happened
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "### Dry run: the next ${{ inputs.bump }} would be ${VERSION}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Cut ${VERSION}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # Called rather than triggered. The push above used GITHUB_TOKEN, and a tag
+  # pushed with that token does not start a workflow — GitHub blocks it to stop
+  # workflows looping, and the same restriction covers dispatching one. Calling
+  # release.yml directly does the same work without a Personal Access Token
+  # sitting in the secrets to work around the guard.
+  release:
+    needs: tag
+    if: ${{ !inputs.dry_run }}
+    uses: ./.github/workflows/release.yml
+    with:
+      version: ${{ needs.tag.outputs.version }}
+    # The deploy needs the tailnet OAuth client, the host and the base URL. A
+    # called workflow is given nothing by default, and inheriting is the only
+    # option that does not mean restating every secret in two places and
+    # discovering the drift at the moment of a deploy.
+    secrets: inherit
