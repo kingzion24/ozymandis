@@ -437,6 +437,7 @@ configure() {
 	# Preserved across re-runs like every other value, so an operator who named
 	# their controller's resolver by hand does not lose it by upgrading.
 	cert_resolver=$(env_get OZYMANDIS_CERT_RESOLVER || printf '')
+	tz=$(env_get TZ || printf '')
 
 	umask 077
 	cat > "${ENV_FILE}.new" <<-EOF
@@ -464,6 +465,16 @@ configure() {
 		# http instead — visibly wrong rather than invisibly wrong. Set this once
 		# you have installed a controller, to the name of ITS resolver.
 		OZYMANDIS_CERT_RESOLVER=${cert_resolver}
+
+		# The zone the dashboard prints clock times in — log lines, cluster events,
+		# request logs. An IANA name such as "Africa/Nairobi" or "Europe/Lisbon".
+		#
+		# Empty means the machine's own zone, which on a server installed from an
+		# image is almost always UTC. That is not wrong so much as unreadable:
+		# instants are stored in UTC and should be, but a log you are reading
+		# because something broke half an hour ago is one you line up against the
+		# clock on the wall, not against a three-hour subtraction.
+		TZ=${tz}
 
 		# Set OZYMANDIS_BASE_URL to a public https URL to turn magic-link sign-in on,
 		# and OZYMANDIS_APP_DOMAIN to the domain apps get a hostname under.

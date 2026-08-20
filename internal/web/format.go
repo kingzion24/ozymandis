@@ -437,11 +437,22 @@ func requestTiming(l orchestrator.HTTPLogLine) string {
 	return out
 }
 
-// shortTime is the clock time an event was last seen.
+// shortTime is the clock time something happened: a cluster event, a container
+// log line, a request through the ingress.
 //
-// Just the time, not the date. Kubernetes expires events after about an hour,
-// so every row on this page happened today — a date on each one would be the
-// same date repeated down the column.
+// Just the time, not the date. Kubernetes expires events after about an hour
+// and a log pane shows a tail, so every row on these pages happened today — a
+// date on each one would be the same date repeated down the column.
+//
+// .Local() is the load-bearing half. Kubernetes stamps log lines in UTC and
+// the ingress controller's access log does the same, which is right for
+// recording an instant and wrong for reading one: a line written at 09:32 UTC
+// is a line somebody in Nairobi watched go past at 12:32, and a log that
+// disagrees with the wall clock cannot be lined up against "it broke around
+// noon". Local is the zone Go resolves from TZ at startup, so the machine
+// running the dashboard decides which clock its logs are read on — set TZ in
+// the service's environment file, not here, because that answer differs per
+// install and this file ships to all of them.
 func shortTime(t time.Time) string {
 	if t.IsZero() {
 		return "—"

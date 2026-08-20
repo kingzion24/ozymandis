@@ -105,7 +105,7 @@ templ AppLogLines(d LogsData) {
 				for _, l := range d.Logs.Lines {
 					<div class="log-line">
 						if !l.At.IsZero() {
-							<span class="log-time">{ l.At.Format("15:04:05") }</span>
+							<span class="log-time">{ shortTime(l.At) }</span>
 						}
 						<span class="log-text">{ l.Text }</span>
 					</div>
@@ -225,7 +225,7 @@ templ deployLogView(d DeployLogsData) {
 					for _, l := range d.Deploy.Logs.Lines {
 						<div class="log-line">
 							if !l.At.IsZero() {
-								<span class="log-time">{ l.At.Format("15:04:05") }</span>
+								<span class="log-time">{ shortTime(l.At) }</span>
 							}
 							<span class="log-text">
 								@highlight(l.Text, d.Find)
@@ -393,7 +393,7 @@ templ httpLogView(d DeployLogsData) {
 				for _, l := range d.HTTP.Lines {
 					<div class="log-line">
 						if !l.At.IsZero() {
-							<span class="log-time">{ l.At.Format("15:04:05") }</span>
+							<span class="log-time">{ shortTime(l.At) }</span>
 						}
 						<span class={ "shrink-0 tabular-nums", statusClass(l.Status) }>
 							{ strconv.Itoa(l.Status) }

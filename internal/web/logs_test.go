@@ -404,3 +404,35 @@ func TestLogStreamEscapesNewlinesWithinALine(t *testing.T) {
 		t.Errorf("event lost part of the line: %q", body)
 	}
 }
+
+// A log line is stamped in UTC by Kubernetes and read by somebody sitting in a
+// zone. Rendering the stored instant verbatim is the easy mistake — it looks
+// right to whoever wrote it, because CI and most servers run in UTC, and it is
+// three hours wrong for everyone reading this particular dashboard.
+//
+// The zone is forced here rather than taken from the environment, so this fails
+// on a UTC runner too. Without that the whole assertion is satisfied by the bug.
+func TestLogLinesAreShownOnTheServersClock(t *testing.T) {
+	// +03:00 with no DST, so the expected string is arithmetic and not a
+	// question about which side of a transition the test date falls on.
+	zone := time.FixedZone("EAT", 3*60*60)
+	saved := time.Local
+	time.Local = zone
+	t.Cleanup(func() { time.Local = saved })
+
+	at := time.Date(2026, 8, 20, 9, 32, 15, 0, time.UTC)
+	d := LogsData{App: "web", Logs: app.Logs{
+		Lines: []orchestrator.LogLine{{At: at, Text: "listening"}},
+	}}
+
+	var out strings.Builder
+	if err := AppLogLines(d).Render(context.Background(), &out); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	if got := out.String(); !strings.Contains(got, "12:32:15") {
+		t.Errorf("log line does not carry the local clock time 12:32:15: %q", got)
+	} else if strings.Contains(got, "09:32:15") {
+		t.Errorf("log line still shows the stored UTC time 09:32:15: %q", got)
+	}
+}
