@@ -30,11 +30,22 @@ jobs:
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
 
-      # Printed because the two likely failures look nothing alike here: an
-      # OAuth client with the wrong scope never gets this far, and one with the
-      # wrong tag gets here and is then refused by the ACL.
-      - name: Who the runner is on the tailnet
-        run: tailscale status --self --peers=false
+      # tailscale/github-action retries `tailscale up` and then finishes green
+      # whether or not it worked — five failed attempts in a row still report
+      # the step as a success. Without this the next thing to go wrong is ssh
+      # timing out, which reads like a firewall or a routing problem and is
+      # neither.
+      - name: Confirm the runner is actually on the tailnet
+        run: |
+          set -eu
+          status=$(tailscale status --self --peers=false 2>&1) || true
+          printf '%s\n' "$status"
+          case "$status" in
+            ""|*"Logged out"*)
+              echo "::error::the runner never joined. Check TS_OAUTH_SECRET for a trailing newline or space — the action appends ?preauthorized=true to it, and whitespace in the middle splits that into a second argument — and that the OAuth client carries tag:ci."
+              exit 1
+              ;;
+          esac
 
       # Read-only on purpose. Nothing here writes, restarts or installs — the
       # question is whether the session is authorised at all, and `id -un`

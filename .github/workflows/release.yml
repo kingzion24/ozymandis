@@ -172,6 +172,23 @@ jobs:
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
 
+      # tailscale/github-action retries `tailscale up` and then finishes green
+      # whether or not it worked — five failed attempts in a row still report
+      # the step as a success. Without this the next thing to go wrong is ssh
+      # timing out, which reads like a firewall or a routing problem and is
+      # neither.
+      - name: Confirm the runner is actually on the tailnet
+        run: |
+          set -eu
+          status=$(tailscale status --self --peers=false 2>&1) || true
+          printf '%s\n' "$status"
+          case "$status" in
+            ""|*"Logged out"*)
+              echo "::error::the runner never joined. Check TS_OAUTH_SECRET for a trailing newline or space — the action appends ?preauthorized=true to it, and whitespace in the middle splits that into a second argument — and that the OAuth client carries tag:ci."
+              exit 1
+              ;;
+          esac
+
       # No SSH key. The server runs Tailscale SSH, which authenticates the
       # connection by the calling node's tailnet identity — the ACL decides,
       # not a key file, so there is no private key in this repository's secrets
