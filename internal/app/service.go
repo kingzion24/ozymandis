@@ -160,21 +160,12 @@ type Deployment struct {
 	// same answer.
 	ReleaseStatus string
 	ReleaseLog    string
-}
 
-// Source describes where a deployment was triggered from.
-//
-// Only "image" exists today. It is a method rather than a stored column
-// because the answer is derived from the revision, and a column would need a
-// migration the first time a build pipeline is added.
-func (d Deployment) Source() string {
-	switch {
-	case strings.HasPrefix(d.Revision, "git:"):
-		return "Git"
-	case d.Revision == "initial", d.Revision == "":
-		return "image"
-	}
-	return "image"
+	// Source is what the app was built from — "git", "image", "redis" and so
+	// on. Read from the app rather than stored per row, which is exact rather
+	// than an approximation: apps.source is written by CreateApp and never
+	// updated, so it cannot have been anything else when this deploy ran.
+	Source string
 }
 
 // Ref converts an App to an orchestrator reference.
@@ -888,6 +879,7 @@ func (s *Service) Deployments(
 
 			ReleaseStatus: row.ReleaseStatus,
 			ReleaseLog:    row.ReleaseLog,
+			Source:        row.AppSource,
 		}
 		if row.FinishedAt.Valid {
 			finished := row.FinishedAt.Time
@@ -926,6 +918,7 @@ func (s *Service) RecentActivity(
 				ID: row.ID, AppID: row.AppID, Image: row.Image,
 				Revision: row.Revision, Status: row.Status,
 				Message: row.Message, StartedAt: row.StartedAt,
+				Source: row.AppSource,
 			},
 			AppName:      row.AppName,
 			AppNamespace: row.AppNamespace,

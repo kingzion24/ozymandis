@@ -89,16 +89,23 @@ WHERE owner_id = $1 AND id = $2
 RETURNING *;
 
 -- name: ListDeployments :many
-SELECT * FROM deployments
-WHERE owner_id = $1 AND app_id = $2
-ORDER BY started_at DESC
+-- Joined to apps for the source, which the deployment row does not carry.
+--
+-- Correct for old rows as well as new ones: apps.source is written by
+-- CreateApp and by nothing else, so an app's source cannot have been anything
+-- different when an earlier deployment ran.
+SELECT d.*, a.source AS app_source
+FROM deployments d
+JOIN apps a ON a.id = d.app_id AND a.owner_id = d.owner_id
+WHERE d.owner_id = $1 AND d.app_id = $2
+ORDER BY d.started_at DESC
 LIMIT $3;
 
 -- name: ListRecentDeployments :many
 -- Joined to apps so the activity feed can name the workload without a second
 -- round trip per row. The join is on app_id AND owner_id: joining on app_id
 -- alone would be correct today and wrong the moment more than one owner exists.
-SELECT d.*, a.name AS app_name, a.namespace AS app_namespace
+SELECT d.*, a.name AS app_name, a.namespace AS app_namespace, a.source AS app_source
 FROM deployments d
 JOIN apps a ON a.id = d.app_id AND a.owner_id = d.owner_id
 WHERE d.owner_id = $1

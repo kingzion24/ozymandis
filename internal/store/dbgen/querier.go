@@ -220,7 +220,12 @@ type Querier interface {
 	// which is why this does not filter on enabled.
 	ListBackupPoliciesForReconcile(ctx context.Context) ([]ListBackupPoliciesForReconcileRow, error)
 	ListCustomDomains(ctx context.Context, arg ListCustomDomainsParams) ([]Domain, error)
-	ListDeployments(ctx context.Context, arg ListDeploymentsParams) ([]Deployment, error)
+	// Joined to apps for the source, which the deployment row does not carry.
+	//
+	// Correct for old rows as well as new ones: apps.source is written by
+	// CreateApp and by nothing else, so an app's source cannot have been anything
+	// different when an earlier deployment ran.
+	ListDeployments(ctx context.Context, arg ListDeploymentsParams) ([]ListDeploymentsRow, error)
 	ListDomainsByApp(ctx context.Context, appID uuid.UUID) ([]Domain, error)
 	ListExecSessions(ctx context.Context, arg ListExecSessionsParams) ([]ListExecSessionsRow, error)
 	ListMembersOfTeam(ctx context.Context, ownerID string) ([]ListMembersOfTeamRow, error)

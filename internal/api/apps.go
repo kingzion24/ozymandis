@@ -366,7 +366,7 @@ func deploymentOut(d app.Deployment) Deployment {
 	return Deployment{
 		ID:       d.ID.String(),
 		Status:   d.Status,
-		Source:   d.Source(),
+		Source:   d.Source,
 		Image:    d.Image,
 		Message:  d.Message,
 		Finished: d.FinishedAt != nil,

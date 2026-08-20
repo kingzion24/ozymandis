@@ -523,7 +523,7 @@ templ activeDeployment(d AppDetailData, dep app.Deployment) {
 				<div class="flex items-center gap-2">
 					@deploymentStatus(dep)
 					<span class="text-[12px] text-muted-foreground">
-						{ relativeTime(dep.StartedAt) } via { dep.Source() }
+						{ relativeTime(dep.StartedAt) } via { dep.Source }
 					</span>
 				</div>
 				if d.App.Port > 0 {
@@ -551,7 +551,7 @@ templ deploymentRow(appName string, dep app.Deployment) {
 			<span class="mono block truncate text-muted-foreground">{ dep.Image }</span>
 		</span>
 		<span class="shrink-0 text-right text-[12px] text-muted-foreground">
-			{ relativeTime(dep.StartedAt) } via { dep.Source() }
+			{ relativeTime(dep.StartedAt) } via { dep.Source }
 		</span>
 		@deployLogsButton(appName, dep)
 	</div>

@@ -621,9 +621,11 @@ func (q *Queries) ListAutoDeployAppsForOwner(ctx context.Context, ownerID string
 }
 
 const listDeployments = `-- name: ListDeployments :many
-SELECT id, owner_id, app_id, image, revision, status, message, started_at, finished_at, release_log, release_status FROM deployments
-WHERE owner_id = $1 AND app_id = $2
-ORDER BY started_at DESC
+SELECT d.id, d.owner_id, d.app_id, d.image, d.revision, d.status, d.message, d.started_at, d.finished_at, d.release_log, d.release_status, a.source AS app_source
+FROM deployments d
+JOIN apps a ON a.id = d.app_id AND a.owner_id = d.owner_id
+WHERE d.owner_id = $1 AND d.app_id = $2
+ORDER BY d.started_at DESC
 LIMIT $3
 `
 
@@ -633,15 +635,35 @@ type ListDeploymentsParams struct {
 	Limit   int32
 }
 
-func (q *Queries) ListDeployments(ctx context.Context, arg ListDeploymentsParams) ([]Deployment, error) {
+type ListDeploymentsRow struct {
+	ID            uuid.UUID
+	OwnerID       string
+	AppID         uuid.UUID
+	Image         string
+	Revision      string
+	Status        string
+	Message       string
+	StartedAt     time.Time
+	FinishedAt    pgtype.Timestamptz
+	ReleaseLog    string
+	ReleaseStatus string
+	AppSource     string
+}
+
+// Joined to apps for the source, which the deployment row does not carry.
+//
+// Correct for old rows as well as new ones: apps.source is written by
+// CreateApp and by nothing else, so an app's source cannot have been anything
+// different when an earlier deployment ran.
+func (q *Queries) ListDeployments(ctx context.Context, arg ListDeploymentsParams) ([]ListDeploymentsRow, error) {
 	rows, err := q.db.Query(ctx, listDeployments, arg.OwnerID, arg.AppID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []Deployment{}
+	items := []ListDeploymentsRow{}
 	for rows.Next() {
-		var i Deployment
+		var i ListDeploymentsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.OwnerID,
@@ -654,6 +676,7 @@ func (q *Queries) ListDeployments(ctx context.Context, arg ListDeploymentsParams
 			&i.FinishedAt,
 			&i.ReleaseLog,
 			&i.ReleaseStatus,
+			&i.AppSource,
 		); err != nil {
 			return nil, err
 		}
@@ -666,7 +689,7 @@ func (q *Queries) ListDeployments(ctx context.Context, arg ListDeploymentsParams
 }
 
 const listRecentDeployments = `-- name: ListRecentDeployments :many
-SELECT d.id, d.owner_id, d.app_id, d.image, d.revision, d.status, d.message, d.started_at, d.finished_at, d.release_log, d.release_status, a.name AS app_name, a.namespace AS app_namespace
+SELECT d.id, d.owner_id, d.app_id, d.image, d.revision, d.status, d.message, d.started_at, d.finished_at, d.release_log, d.release_status, a.name AS app_name, a.namespace AS app_namespace, a.source AS app_source
 FROM deployments d
 JOIN apps a ON a.id = d.app_id AND a.owner_id = d.owner_id
 WHERE d.owner_id = $1
@@ -693,6 +716,7 @@ type ListRecentDeploymentsRow struct {
 	ReleaseStatus string
 	AppName       string
 	AppNamespace  string
+	AppSource     string
 }
 
 // Joined to apps so the activity feed can name the workload without a second
@@ -721,6 +745,7 @@ func (q *Queries) ListRecentDeployments(ctx context.Context, arg ListRecentDeplo
 			&i.ReleaseStatus,
 			&i.AppName,
 			&i.AppNamespace,
+			&i.AppSource,
 		); err != nil {
 			return nil, err
 		}

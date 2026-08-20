@@ -60,6 +60,7 @@ func (s *Service) Deployment(
 		Revision: row.Revision, Status: row.Status,
 		Message: row.Message, StartedAt: row.StartedAt,
 		ReleaseStatus: row.ReleaseStatus, ReleaseLog: row.ReleaseLog,
+		Source: string(a.Source),
 	}
 	if row.FinishedAt.Valid {
 		finished := row.FinishedAt.Time
