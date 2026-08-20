@@ -10,7 +10,7 @@ name: pages
 #
 # The scripts are served straight from the repository root rather than kept as a
 # second copy under site/, so what the URL hands to a shell is the file that was
-# reviewed on main and nothing else.
+# reviewed on manhattan and nothing else.
 #
 # No CNAME file: this is a project site on the account's own Pages domain, which
 # needs no DNS and cannot be taken over by a dangling record. Adding a custom
@@ -19,7 +19,7 @@ name: pages
 
 on:
   push:
-    branches: [main]
+    branches: [manhattan]
     paths:
       - install.sh
       - upgrade.sh

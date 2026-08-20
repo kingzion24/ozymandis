@@ -29,7 +29,7 @@ bounty programme.
 ## Supported versions
 
 **None yet.** There has been no tagged release, so there is no released version
-to backport a fix to. Security fixes land on `main`, and the only supported
+to backport a fix to. Security fixes land on `manhattan`, and the only supported
 thing is the current commit.
 
 When releases begin, this section will say which ones get fixes.

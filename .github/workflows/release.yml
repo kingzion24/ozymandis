@@ -11,6 +11,32 @@ jobs:
   release:
     runs-on: ubuntu-latest
 
+    # The same database ci.yml gives the tests, for the same reason and then
+    # one more. Without it every store, account, domain, app and web test that
+    # needs Postgres skips, and a skip reports as a pass — so the release job
+    # was publishing on a green tick that covered rather less than it looked
+    # like. v0.2.1 shipped from a commit whose ci run was red and this job
+    # never noticed, because the test it would have failed on did not run here.
+    #
+    # 16 to match ci.yml, which matches what `apt-get install postgresql` gives
+    # on the releases install.sh supports.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ozymandis
+          POSTGRES_PASSWORD: ozymandis
+          POSTGRES_DB: ozymandis
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      OZYMANDIS_TEST_DATABASE_URL: postgres://ozymandis:ozymandis@localhost:5432/ozymandis?sslmode=disable
+
     steps:
       - uses: actions/checkout@v4
 
@@ -20,7 +46,7 @@ jobs:
           cache: true
 
       # A release is the one build nobody rebuilds by hand, so the drift checks
-      # that guard main guard it here too. Shipping a binary whose embedded
+      # that guard manhattan guard it here too. Shipping a binary whose embedded
       # stylesheet or templates are stale is a bug that only the people who
       # installed it ever see.
       - name: Verify generated output is current
@@ -29,6 +55,22 @@ jobs:
           make css
           git diff --exit-code -- '*_templ.go' internal/web/assets/css/app.css \
             || (echo "::error::generated output is stale — run 'make assets' and commit" && exit 1)
+
+      # The variable is read out of the test source rather than written here a
+      # second time. ci.yml carries the long version of why: a second copy of
+      # this name is exactly what drifted last time, and the failure mode is
+      # silence — the tests skip, the job passes, and the tag publishes.
+      - name: The database tests must be able to run
+        run: |
+          set -eu
+          names=$(grep -rhoE '"[A-Z_]+TEST_DATABASE_URL"' --include='*_test.go' ./internal \
+                  | tr -d '"' | sort -u)
+          [ "$(printf '%s\n' "$names" | grep -c .)" -eq 1 ] \
+            || { echo "::error::expected exactly one test DSN variable, found: ${names:-none}"; exit 1; }
+          eval "value=\${${names}:-}"
+          [ -n "$value" ] \
+            || { echo "::error::the tests read ${names}, which this workflow does not set"; exit 1; }
+          echo "database tests will run against ${names}"
 
       - name: Test
         run: go test ./... -count=1
@@ -95,3 +137,92 @@ jobs:
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
             dist/*.tar.gz dist/checksums.txt
+
+  # Puts the published release on the server.
+  #
+  # Separate from the release job so a deploy that fails leaves the artifacts
+  # up: the tarballs are what somebody else installs from, and withdrawing them
+  # because one particular machine did not restart cleanly helps nobody.
+  #
+  # needs: release, so this runs only after the tests, the drift checks and the
+  # artifact-name assertions have all passed and the release exists to install.
+  deploy:
+    needs: release
+    runs-on: ubuntu-latest
+
+    # Only this repository has a server to deploy to. A fork that tags a
+    # release should get the tarballs and nothing else — without this it gets a
+    # job that fails on absent secrets, on every release, forever.
+    if: github.repository == 'kingzion24/ozymandis'
+
+    steps:
+      # The server has no public SSH. It is reachable on the tailnet and
+      # nowhere else, so the runner joins the tailnet for the length of this
+      # job rather than the server opening a port to the internet for the
+      # length of its life.
+      #
+      # An OAuth client rather than an auth key: auth keys expire, and a deploy
+      # path that stops working every 90 days is one nobody trusts. The tag is
+      # what the tailnet ACL grants SSH to — a runner is not a person and
+      # should not carry a person's access.
+      - name: Join the tailnet
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      # No SSH key. The server runs Tailscale SSH, which authenticates the
+      # connection by the calling node's tailnet identity — the ACL decides,
+      # not a key file, so there is no private key in this repository's secrets
+      # to leak or rotate.
+      #
+      # StrictHostKeyChecking=accept-new, and that is not a shortcut: the bytes
+      # are already inside a WireGuard tunnel to a node the tailnet
+      # authenticated, so the host key is confirming something that has been
+      # established twice over. Refusing on an unknown key would only mean a
+      # deploy that fails whenever Tailscale reissues one.
+      #
+      # upgrade.sh puts the previous binary back if the new one does not come
+      # up healthy, so a bad release costs a restart here rather than an
+      # outage. --version pins it to the tag that triggered this run instead of
+      # letting the script resolve "latest", which is a different question with
+      # a different answer during a race between two releases.
+      - name: Upgrade the server
+        env:
+          HOST: ${{ secrets.OZYMANDIS_SSH_HOST }}
+        run: |
+          set -eu
+          ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 \
+            "root@${HOST}" \
+            "curl -sSL https://kingzion24.github.io/ozymandis/upgrade.sh \
+             | sh -s -- --version ${GITHUB_REF_NAME}"
+
+      # Asked over the public URL rather than over the tailnet, because the
+      # question is not "did the process restart" — it is "does the thing
+      # people actually reach answer, on the new version". /healthz reports
+      # degraded and a 503 when the control plane cannot reach the apiserver,
+      # so this covers the cluster connection too.
+      #
+      # Polled rather than checked once: systemd restarts the service and
+      # Traefik notices the endpoint come back, and neither is instant.
+      - name: Verify what is serving
+        env:
+          BASE: ${{ secrets.OZYMANDIS_BASE_URL }}
+        run: |
+          set -eu
+          want="${GITHUB_REF_NAME}"
+          for _ in $(seq 1 30); do
+            body=$(curl -fsS --max-time 10 "${BASE}/healthz" 2>/dev/null) || { sleep 5; continue; }
+            echo "$body"
+            case "$body" in
+              *"\"version\":\"${want}\""*)
+                case "$body" in
+                  *'"status":"ok"'*) echo "serving ${want}"; exit 0 ;;
+                esac
+                ;;
+            esac
+            sleep 5
+          done
+          echo "::error::${BASE} did not report a healthy ${want} within 150s"
+          exit 1
