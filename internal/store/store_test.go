@@ -1,5 +1,16 @@
 package store
 
+// Every hostname here sits under .store.test, and that is not decoration.
+// `go test ./...` runs packages in parallel against the one database
+// OZYMANDIS_TEST_DATABASE_URL names, domains.host is globally unique by
+// design, and internal/app issues web.apps.example.com while internal/domain
+// issues shop.customer.test. Sharing either name makes this package fail
+// whenever it loses the race, reporting a duplicate key that reads like stale
+// data rather than like another package running at the same moment.
+//
+// internal/domain carries the same note over apps.domain.test. This package
+// was missed when that one was fixed.
+
 import (
 	"context"
 	"io"
@@ -344,14 +355,14 @@ func TestManagedDomainIsUniquePerApp(t *testing.T) {
 	}
 
 	if _, err := q.UpsertManagedDomain(ctx, dbgen.UpsertManagedDomainParams{
-		OwnerID: appRow.OwnerID, AppID: appRow.ID, Host: "web.apps.example.com", Tls: true,
+		OwnerID: appRow.OwnerID, AppID: appRow.ID, Host: "web.apps.store.test", Tls: true,
 	}); err != nil {
 		t.Fatalf("first managed domain: %v", err)
 	}
 
 	// The upsert must move the host rather than insert a second managed row.
 	if _, err := q.UpsertManagedDomain(ctx, dbgen.UpsertManagedDomainParams{
-		OwnerID: appRow.OwnerID, AppID: appRow.ID, Host: "web.apps.acme.com", Tls: true,
+		OwnerID: appRow.OwnerID, AppID: appRow.ID, Host: "web.reissued.store.test", Tls: true,
 	}); err != nil {
 		t.Fatalf("reissue managed domain: %v", err)
 	}
@@ -365,8 +376,8 @@ func TestManagedDomainIsUniquePerApp(t *testing.T) {
 	for _, r := range rows {
 		if r.Managed {
 			managed++
-			if r.Host != "web.apps.acme.com" {
-				t.Fatalf("managed host = %q, want it reissued to web.apps.acme.com", r.Host)
+			if r.Host != "web.reissued.store.test" {
+				t.Fatalf("managed host = %q, want it reissued to web.reissued.store.test", r.Host)
 			}
 			if !r.Verified {
 				t.Fatal("a platform-issued host needs no proof of ownership; want verified")
@@ -400,7 +411,7 @@ func TestPartialIndexLeavesCustomDomainsUnconstrained(t *testing.T) {
 	}
 
 	if _, err := q.UpsertManagedDomain(ctx, dbgen.UpsertManagedDomainParams{
-		OwnerID: ownerID, AppID: appRow.ID, Host: "web.apps.example.com", Tls: true,
+		OwnerID: ownerID, AppID: appRow.ID, Host: "web.partial.store.test", Tls: true,
 	}); err != nil {
 		t.Fatalf("managed domain: %v", err)
 	}
@@ -408,7 +419,7 @@ func TestPartialIndexLeavesCustomDomainsUnconstrained(t *testing.T) {
 	// Inserted directly: there is deliberately no production query for custom
 	// domains yet, and adding one purely to satisfy a test would ship an
 	// unused code path.
-	for _, host := range []string{"www.customer.test", "shop.customer.test"} {
+	for _, host := range []string{"www.custom.store.test", "shop.custom.store.test"} {
 		if _, err := pool.Exec(ctx,
 			`INSERT INTO domains (owner_id, app_id, host, tls, verified, managed)
 			 VALUES ($1, $2, $3, true, false, false)`,
