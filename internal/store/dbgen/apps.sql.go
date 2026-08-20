@@ -251,10 +251,42 @@ func (q *Queries) DeployActivity(ctx context.Context, arg DeployActivityParams) 
 	return items, nil
 }
 
+const deploymentIsCurrent = `-- name: DeploymentIsCurrent :one
+SELECT (
+  $1::uuid = '00000000-0000-0000-0000-000000000000'::uuid
+  OR EXISTS (
+    SELECT 1 FROM deployments d
+    WHERE d.id = $1 AND d.owner_id = $2 AND d.status = 'running'
+  )
+)::boolean
+`
+
+type DeploymentIsCurrentParams struct {
+	ID      uuid.UUID
+	OwnerID string
+}
+
+// Whether this deployment is still the one that should be acting.
+//
+// For the steps that cannot be folded into a single statement: running a
+// release command and applying to the cluster. Checking immediately before
+// each does not make them atomic, but it closes the window from "the length of
+// a build" — minutes — to the microseconds between this query and the next
+// call, which is the difference between a race that happens and one that does
+// not.
+//
+// True for the nil id, for the reason given on SetBuiltImage.
+func (q *Queries) DeploymentIsCurrent(ctx context.Context, arg DeploymentIsCurrentParams) (bool, error) {
+	row := q.db.QueryRow(ctx, deploymentIsCurrent, arg.ID, arg.OwnerID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const finishDeployment = `-- name: FinishDeployment :one
 UPDATE deployments
 SET status = $3, message = $4, finished_at = now()
-WHERE owner_id = $1 AND id = $2
+WHERE owner_id = $1 AND id = $2 AND status = 'running'
 RETURNING id, owner_id, app_id, image, revision, status, message, started_at, finished_at, release_log, release_status
 `
 
@@ -265,6 +297,16 @@ type FinishDeploymentParams struct {
 	Message string
 }
 
+// Only a deployment that is still running can be finished.
+//
+// A retired row has to stay retired. Two deploys of one app overlap whenever a
+// redeploy starts while an earlier build is still going, and the older
+// goroutine reaching this line last would otherwise flip its superseded row
+// back to 'active' — leaving an app with two active deployments, one of which
+// names an image nobody is running.
+//
+// Returns no row when it matched nothing, which the caller reads as "something
+// newer took over" rather than as a failure.
 func (q *Queries) FinishDeployment(ctx context.Context, arg FinishDeploymentParams) (Deployment, error) {
 	row := q.db.QueryRow(ctx, finishDeployment,
 		arg.OwnerID,
@@ -757,6 +799,32 @@ func (q *Queries) ListRecentDeployments(ctx context.Context, arg ListRecentDeplo
 	return items, nil
 }
 
+const lockAppForDeploy = `-- name: LockAppForDeploy :one
+SELECT id FROM apps WHERE owner_id = $1 AND id = $2 FOR UPDATE
+`
+
+type LockAppForDeployParams struct {
+	OwnerID string
+	ID      uuid.UUID
+}
+
+// Serialises the deploys of one app, and nothing else.
+//
+// beginDeployment retires the previous deployment and then opens a new one.
+// Two of those interleaving — two clicks, or a webhook arriving on top of a
+// redeploy — each retire nothing, because neither has created its row yet, and
+// then each create one. The app ends up with two deployments that both believe
+// they are current, which is the same failure by a different route.
+//
+// Taking the app's own row first makes the pair atomic. It blocks only another
+// deploy of the same app.
+func (q *Queries) LockAppForDeploy(ctx context.Context, arg LockAppForDeployParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, lockAppForDeploy, arg.OwnerID, arg.ID)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const setAppAutoDeploy = `-- name: SetAppAutoDeploy :one
 UPDATE apps
 SET auto_deploy = $1, updated_at = now()
@@ -912,63 +980,6 @@ func (q *Queries) SetAppHealth(ctx context.Context, arg SetAppHealthParams) (App
 		arg.OwnerID,
 		arg.ID,
 	)
-	var i App
-	err := row.Scan(
-		&i.ID,
-		&i.OwnerID,
-		&i.Name,
-		&i.Namespace,
-		&i.Image,
-		&i.Replicas,
-		&i.Port,
-		&i.CpuRequest,
-		&i.CpuLimit,
-		&i.MemoryRequest,
-		&i.MemoryLimit,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.HealthPath,
-		&i.HealthLiveness,
-		&i.Source,
-		&i.Internal,
-		&i.ProjectID,
-		&i.CanvasX,
-		&i.CanvasY,
-		&i.HttpsOnly,
-		&i.CnameOnly,
-		&i.RepoUrl,
-		&i.RepoBranch,
-		&i.RepoSubdir,
-		&i.RunAsUser,
-		&i.Command,
-		&i.ReleaseCommand,
-		&i.AutoDeploy,
-		&i.WebhookSecret,
-		&i.DeployKey,
-		&i.DeployKeyPublic,
-		&i.LastDeployedSha,
-	)
-	return i, err
-}
-
-const setAppImage = `-- name: SetAppImage :one
-UPDATE apps
-SET image = $3, updated_at = now()
-WHERE owner_id = $1 AND id = $2
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command, release_command, auto_deploy, webhook_secret, deploy_key, deploy_key_public, last_deployed_sha
-`
-
-type SetAppImageParams struct {
-	OwnerID string
-	ID      uuid.UUID
-	Image   string
-}
-
-// The image a build produced. Separate from UpdateApp because a build sets
-// only this: the replicas and limits a person configured are not a build's to
-// overwrite, and passing them through would make every build a chance to.
-func (q *Queries) SetAppImage(ctx context.Context, arg SetAppImageParams) (App, error) {
-	row := q.db.QueryRow(ctx, setAppImage, arg.OwnerID, arg.ID, arg.Image)
 	var i App
 	err := row.Scan(
 		&i.ID,
@@ -1264,6 +1275,94 @@ type SetAppWebhookSecretParams struct {
 func (q *Queries) SetAppWebhookSecret(ctx context.Context, arg SetAppWebhookSecretParams) error {
 	_, err := q.db.Exec(ctx, setAppWebhookSecret, arg.WebhookSecret, arg.OwnerID, arg.ID)
 	return err
+}
+
+const setBuiltImage = `-- name: SetBuiltImage :one
+UPDATE apps
+SET image = $1, updated_at = now()
+WHERE apps.owner_id = $2 AND apps.id = $3
+  AND (
+    $4::uuid = '00000000-0000-0000-0000-000000000000'::uuid
+    OR EXISTS (
+      SELECT 1 FROM deployments d
+      WHERE d.id = $4 AND d.owner_id = apps.owner_id
+        AND d.app_id = apps.id AND d.status = 'running'
+    )
+  )
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command, release_command, auto_deploy, webhook_secret, deploy_key, deploy_key_public, last_deployed_sha
+`
+
+type SetBuiltImageParams struct {
+	Image        string
+	OwnerID      string
+	ID           uuid.UUID
+	DeploymentID uuid.UUID
+}
+
+// The image a build produced. Separate from UpdateApp because a build sets
+// only this: the replicas and limits a person configured are not a build's to
+// overwrite, and passing them through would make every build a chance to.
+//
+// Written only while the deployment that produced it is still current. Both
+// halves of an overlapping pair finish by writing this column, in completion
+// order rather than start order, so without the guard an app is left recorded
+// as running the older build while its own newest deployment row names the
+// newer one. That is a rollback menu offering an image nobody is running.
+// beginDeployment already retires the earlier deployment; this is what makes
+// the retirement bite.
+//
+// Guarded here rather than checked in Go because a check and a write are two
+// statements, and the whole problem is what happens between two statements.
+//
+// The nil id is the case where CreateDeployment itself failed and the deploy
+// went ahead without history. There is nothing that could have superseded it,
+// so the image is written rather than silently dropped.
+// Every column qualified: the correlated subquery puts two tables in scope,
+// and a bare owner_id is then ambiguous rather than merely unclear.
+func (q *Queries) SetBuiltImage(ctx context.Context, arg SetBuiltImageParams) (App, error) {
+	row := q.db.QueryRow(ctx, setBuiltImage,
+		arg.Image,
+		arg.OwnerID,
+		arg.ID,
+		arg.DeploymentID,
+	)
+	var i App
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.Name,
+		&i.Namespace,
+		&i.Image,
+		&i.Replicas,
+		&i.Port,
+		&i.CpuRequest,
+		&i.CpuLimit,
+		&i.MemoryRequest,
+		&i.MemoryLimit,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.HealthPath,
+		&i.HealthLiveness,
+		&i.Source,
+		&i.Internal,
+		&i.ProjectID,
+		&i.CanvasX,
+		&i.CanvasY,
+		&i.HttpsOnly,
+		&i.CnameOnly,
+		&i.RepoUrl,
+		&i.RepoBranch,
+		&i.RepoSubdir,
+		&i.RunAsUser,
+		&i.Command,
+		&i.ReleaseCommand,
+		&i.AutoDeploy,
+		&i.WebhookSecret,
+		&i.DeployKey,
+		&i.DeployKeyPublic,
+		&i.LastDeployedSha,
+	)
+	return i, err
 }
 
 const setDeploymentImage = `-- name: SetDeploymentImage :one

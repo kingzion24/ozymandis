@@ -954,14 +954,37 @@ const (
 func (s *Service) beginDeployment(
 	ctx context.Context, ownerID string, a App, revision string,
 ) uuid.UUID {
-	if _, err := s.q.SupersedeDeployments(ctx, dbgen.SupersedeDeploymentsParams{
+	// Retiring the previous deployment and opening the new one is one
+	// decision, so it is one transaction, and it takes the app's row first.
+	// Two of these interleaving would each retire nothing — neither has
+	// created its row yet — and then each create one, leaving an app with two
+	// deployments that both believe they are current.
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		s.log.Warn("could not record deployment",
+			slog.String("app", a.Name), slog.String("error", err.Error()))
+		return uuid.Nil
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+	q := s.q.WithTx(tx)
+
+	if _, err := q.LockAppForDeploy(ctx, dbgen.LockAppForDeployParams{
+		OwnerID: ownerID, ID: a.ID,
+	}); err != nil {
+		s.log.Warn("could not take the app's deploy lock",
+			slog.String("app", a.Name), slog.String("error", err.Error()))
+		return uuid.Nil
+	}
+
+	if _, err := q.SupersedeDeployments(ctx, dbgen.SupersedeDeploymentsParams{
 		OwnerID: ownerID, AppID: a.ID,
 	}); err != nil {
 		s.log.Warn("could not retire earlier deployments",
 			slog.String("app", a.Name), slog.String("error", err.Error()))
+		return uuid.Nil
 	}
 
-	row, err := s.q.CreateDeployment(ctx, dbgen.CreateDeploymentParams{
+	row, err := q.CreateDeployment(ctx, dbgen.CreateDeploymentParams{
 		OwnerID: ownerID, AppID: a.ID, Image: a.Image,
 		Revision: revision, Status: DeployRunning,
 	})
@@ -970,7 +993,36 @@ func (s *Service) beginDeployment(
 			slog.String("app", a.Name), slog.String("error", err.Error()))
 		return uuid.Nil
 	}
+	if err := tx.Commit(ctx); err != nil {
+		s.log.Warn("could not record deployment",
+			slog.String("app", a.Name), slog.String("error", err.Error()))
+		return uuid.Nil
+	}
 	return row.ID
+}
+
+// ErrSuperseded means a newer deployment took over while this one was working.
+//
+// Not a failure, and deliberately not recorded as one: the deploy did what it
+// was asked and was overtaken. The row is already 'superseded', which is a
+// truer answer than 'failed' and the only one that leaves the list readable.
+var ErrSuperseded = errors.New("app: a newer deployment took over")
+
+// stillCurrent reports whether this deployment is the one that should act.
+//
+// A database error answers true. Abandoning a deploy because a status query
+// blipped would turn a transient fault into a deploy that silently did
+// nothing, which is the worse of the two outcomes by some distance.
+func (s *Service) stillCurrent(ctx context.Context, ownerID string, id uuid.UUID) bool {
+	ok, err := s.q.DeploymentIsCurrent(ctx, dbgen.DeploymentIsCurrentParams{
+		OwnerID: ownerID, ID: id,
+	})
+	if err != nil {
+		s.log.Warn("could not check whether the deployment is still current",
+			slog.String("error", err.Error()))
+		return true
+	}
+	return ok
 }
 
 // endDeployment says how it went.
@@ -988,9 +1040,14 @@ func (s *Service) endDeployment(
 	if cause != nil {
 		status, message = DeployFailed, cause.Error()
 	}
-	if _, err := s.q.FinishDeployment(ctx, dbgen.FinishDeploymentParams{
+	switch _, err := s.q.FinishDeployment(ctx, dbgen.FinishDeploymentParams{
 		OwnerID: ownerID, ID: id, Status: status, Message: message,
-	}); err != nil {
+	}); {
+	case errors.Is(err, pgx.ErrNoRows):
+		// Matched nothing, because the row was retired while this deploy was
+		// working and the query declines to un-retire it. There is nothing to
+		// record: the newer deployment is the one anybody is looking at.
+	case err != nil:
 		s.log.Warn("could not finish deployment record",
 			slog.String("error", err.Error()))
 	}
@@ -1101,6 +1158,20 @@ func (s *Service) deployInBackground(
 
 		built, err := s.buildIfNeeded(ctx, ownerID, a, deployID)
 
+		// Checked before each remaining step, because from here on every one
+		// has an effect outside this goroutine: a release command runs a
+		// migration, and an apply changes what the cluster is serving. Neither
+		// belongs to a deployment something newer has already retired. A build
+		// is exempt — it only produces an image nobody is obliged to use.
+		//
+		// This does not make those steps atomic and nothing could: one runs a
+		// command in a pod and the other talks to the apiserver. It shrinks the
+		// window from the length of a build, which is minutes, to the moment
+		// between this check and the call after it.
+		if err == nil && !s.stillCurrent(ctx, ownerID, deployID) {
+			err = ErrSuperseded
+		}
+
 		// Between the build and the apply, and a veto. A release that fails
 		// leaves apply uncalled, so the previous image keeps serving — which is
 		// the entire point: a migration that cannot run is caught before the
@@ -1108,9 +1179,23 @@ func (s *Service) deployInBackground(
 		if err == nil {
 			err = s.runRelease(ctx, ownerID, built, deployID)
 		}
+		if err == nil && !s.stillCurrent(ctx, ownerID, deployID) {
+			err = ErrSuperseded
+		}
 		if err == nil {
 			err = s.apply(ctx, s.q, built)
 		}
+
+		// Left alone rather than finished. The row already says 'superseded'
+		// with the time it was retired, and endDeployment would only try to
+		// overwrite that with a status describing a deploy nobody is waiting
+		// on.
+		if errors.Is(err, ErrSuperseded) {
+			s.log.Info("deploy abandoned, a newer one took over",
+				slog.String("owner", ownerID), slog.String("app", a.Name))
+			return
+		}
+
 		s.endDeployment(ctx, ownerID, deployID, err)
 
 		if err != nil {
@@ -1148,9 +1233,15 @@ func (s *Service) buildIfNeeded(
 
 	// Stored before the apply. If the apply fails, the image is still the one
 	// that was built, and retrying deploys it rather than building it again.
-	if _, err := s.q.SetAppImage(ctx, dbgen.SetAppImageParams{
-		OwnerID: ownerID, ID: a.ID, Image: image,
-	}); err != nil {
+	switch _, err := s.q.SetBuiltImage(ctx, dbgen.SetBuiltImageParams{
+		OwnerID: ownerID, ID: a.ID, Image: image, DeploymentID: deployID,
+	}); {
+	case errors.Is(err, pgx.ErrNoRows):
+		// The guard matched nothing: this deployment was retired while its
+		// build ran, so the column belongs to whatever retired it. Writing here
+		// is how the app came to be recorded as running the older build.
+		return a, ErrSuperseded
+	case err != nil:
 		return a, fmt.Errorf("app: record built image: %w", err)
 	}
 	a.Image = image

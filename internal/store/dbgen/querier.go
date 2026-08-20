@@ -97,6 +97,17 @@ type Querier interface {
 	// Days with no deploys are absent from this result. The caller fills them in;
 	// see app.DeployActivity for why that cannot be skipped.
 	DeployActivity(ctx context.Context, arg DeployActivityParams) ([]DeployActivityRow, error)
+	// Whether this deployment is still the one that should be acting.
+	//
+	// For the steps that cannot be folded into a single statement: running a
+	// release command and applying to the cluster. Checking immediately before
+	// each does not make them atomic, but it closes the window from "the length of
+	// a build" — minutes — to the microseconds between this query and the next
+	// call, which is the difference between a race that happens and one that does
+	// not.
+	//
+	// True for the nil id, for the reason given on SetBuiltImage.
+	DeploymentIsCurrent(ctx context.Context, arg DeploymentIsCurrentParams) (bool, error)
 	// Written on a detached, bounded context at teardown.
 	//
 	// Scoped by owner as well as id: an audit row is not something a caller should
@@ -108,6 +119,16 @@ type Querier interface {
 	// restart a silent credential reset.
 	EnsureSuperuser(ctx context.Context, arg EnsureSuperuserParams) (User, error)
 	FinishBuild(ctx context.Context, arg FinishBuildParams) (Build, error)
+	// Only a deployment that is still running can be finished.
+	//
+	// A retired row has to stay retired. Two deploys of one app overlap whenever a
+	// redeploy starts while an earlier build is still going, and the older
+	// goroutine reaching this line last would otherwise flip its superseded row
+	// back to 'active' — leaving an app with two active deployments, one of which
+	// names an image nobody is running.
+	//
+	// Returns no row when it matched nothing, which the caller reads as "something
+	// newer took over" rather than as a failure.
 	FinishDeployment(ctx context.Context, arg FinishDeploymentParams) (Deployment, error)
 	// Resolves a token only while the membership behind it still exists, and
 	// returns the role in the same row.
@@ -259,6 +280,17 @@ type Querier interface {
 	ListUsers(ctx context.Context) ([]User, error)
 	ListVariablesForApp(ctx context.Context, appID uuid.UUID) ([]Variable, error)
 	ListVolumesForApp(ctx context.Context, appID uuid.UUID) ([]Volume, error)
+	// Serialises the deploys of one app, and nothing else.
+	//
+	// beginDeployment retires the previous deployment and then opens a new one.
+	// Two of those interleaving — two clicks, or a webhook arriving on top of a
+	// redeploy — each retire nothing, because neither has created its row yet, and
+	// then each create one. The app ends up with two deployments that both believe
+	// they are current, which is the same failure by a different route.
+	//
+	// Taking the app's own row first makes the pair atomic. It blocks only another
+	// deploy of the same app.
+	LockAppForDeploy(ctx context.Context, arg LockAppForDeployParams) (uuid.UUID, error)
 	// A role change reads the owner count and then writes; taking the team row
 	// first serialises those pairs, so two concurrent demotions cannot both see
 	// two owners and both proceed.
@@ -282,10 +314,6 @@ type Querier interface {
 	SetAppCommand(ctx context.Context, arg SetAppCommandParams) (App, error)
 	SetAppDeployKey(ctx context.Context, arg SetAppDeployKeyParams) error
 	SetAppHealth(ctx context.Context, arg SetAppHealthParams) (App, error)
-	// The image a build produced. Separate from UpdateApp because a build sets
-	// only this: the replicas and limits a person configured are not a build's to
-	// overwrite, and passing them through would make every build a chance to.
-	SetAppImage(ctx context.Context, arg SetAppImageParams) (App, error)
 	SetAppLastDeployedSHA(ctx context.Context, arg SetAppLastDeployedSHAParams) error
 	SetAppNetworking(ctx context.Context, arg SetAppNetworkingParams) (int64, error)
 	SetAppPosition(ctx context.Context, arg SetAppPositionParams) (int64, error)
@@ -309,6 +337,27 @@ type Querier interface {
 	SetAppService(ctx context.Context, arg SetAppServiceParams) (App, error)
 	SetAppWebhookSecret(ctx context.Context, arg SetAppWebhookSecretParams) error
 	SetBuildJob(ctx context.Context, arg SetBuildJobParams) error
+	// The image a build produced. Separate from UpdateApp because a build sets
+	// only this: the replicas and limits a person configured are not a build's to
+	// overwrite, and passing them through would make every build a chance to.
+	//
+	// Written only while the deployment that produced it is still current. Both
+	// halves of an overlapping pair finish by writing this column, in completion
+	// order rather than start order, so without the guard an app is left recorded
+	// as running the older build while its own newest deployment row names the
+	// newer one. That is a rollback menu offering an image nobody is running.
+	// beginDeployment already retires the earlier deployment; this is what makes
+	// the retirement bite.
+	//
+	// Guarded here rather than checked in Go because a check and a write are two
+	// statements, and the whole problem is what happens between two statements.
+	//
+	// The nil id is the case where CreateDeployment itself failed and the deploy
+	// went ahead without history. There is nothing that could have superseded it,
+	// so the image is written rather than silently dropped.
+	// Every column qualified: the correlated subquery puts two tables in scope,
+	// and a bare owner_id is then ambiguous rather than merely unclear.
+	SetBuiltImage(ctx context.Context, arg SetBuiltImageParams) (App, error)
 	SetClusterJoin(ctx context.Context, arg SetClusterJoinParams) (ClusterJoin, error)
 	// The image a build produced, recorded on the deployment that produced it.
 	//
