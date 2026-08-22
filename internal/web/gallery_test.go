@@ -167,6 +167,23 @@ func galleryPages() []galleryPage {
 
 	allApps := []app.App{running, degraded, pending, stopped, unknown, failing}
 
+	// Repositories on all but the cache, which is a stock image: the apps list
+	// groups by the repository each was built from, and the state worth
+	// picturing is a couple of systems side by side with the images that belong
+	// to neither of them underneath.
+	const shop = "ssh://git@github.com/codeblocktz/storefront.git"
+	byRepo := make([]app.App, len(allApps))
+	copy(byRepo, allApps)
+	for i, url := range map[int]string{
+		0: shop,
+		1: shop,
+		2: shop,
+		3: "https://github.com/codeblocktz/batch-tools.git",
+		5: "https://github.com/codeblocktz/batch-tools.git",
+	} {
+		byRepo[i].Repo = app.Repo{URL: url, Branch: "main"}
+	}
+
 	pods := []orchestrator.PodInfo{
 		{Name: "web-7d9f4b6c85-2xk9p", Namespace: "ozymandis-a1b2", Phase: "Running",
 			Node: "ozymandis-cp", Ready: 1, Total: 1, CreatedAt: now.Add(-4 * time.Hour)},
@@ -227,6 +244,9 @@ func galleryPages() []galleryPage {
 			page: stack(
 				section("App states", "running · degraded · pending · stopped · unknown · image pull failure",
 					panelWrap(appRows(allApps))),
+				section("Grouped by repository",
+					"two repositories, and the stock images no repository claims",
+					appGroups(groupAppsByRepo(byRepo))),
 				section("Empty state", "no workloads yet", panelWrap(emptyApps())),
 				section("Cluster unreachable", "records still render; live status does not",
 					clusterCallout(`Get "https://10.0.0.4:6443/version": dial tcp: i/o timeout`)),

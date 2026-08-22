@@ -103,3 +103,102 @@ func (r Repo) Normalise() Repo {
 		Subdir: strings.Trim(strings.TrimSpace(r.Subdir), "/"),
 	}
 }
+
+// RepoIdentity is which repository an app came from, split into the parts a
+// person recognises.
+//
+// Parsed rather than stored: the URL is already on every app that builds from
+// source, and a second column recording the same fact is a second thing that
+// can disagree with the first.
+type RepoIdentity struct {
+	// Host is the forge, without a port: "github.com".
+	Host string
+
+	// Owner is everything between the host and the last path segment. Usually
+	// one account, but a GitLab subgroup nests, and the whole path is what
+	// makes two repositories with the same last segment different.
+	Owner string
+
+	// Name is the last path segment, without ".git": "mali-daftari-dashboard".
+	Name string
+}
+
+// Set reports whether a URL parsed into anything nameable.
+func (i RepoIdentity) Set() bool { return i.Name != "" }
+
+// Path is what a forge calls the repository: "harehaDET/mali-daftari-dashboard".
+func (i RepoIdentity) Path() string {
+	if i.Owner == "" {
+		return i.Name
+	}
+	return i.Owner + "/" + i.Name
+}
+
+// String is the whole identity, host included, for showing next to a project.
+//
+// The host is part of it because two forges can carry the same owner and name,
+// and a project claiming to be "acme/api" when the apps came from a private
+// GitLab is a picture of the wrong system.
+func (i RepoIdentity) String() string {
+	switch {
+	case !i.Set():
+		return ""
+	case i.Host == "":
+		return i.Path()
+	default:
+		return i.Host + "/" + i.Path()
+	}
+}
+
+// Key is what decides whether two apps came from one repository.
+//
+// Lowercased, because a forge that treats "harehaDET/App" and "harehadet/app"
+// as one repository would otherwise get two projects — one per spelling
+// somebody happened to paste — and the grouping would be worse than none.
+func (i RepoIdentity) Key() string { return strings.ToLower(i.String()) }
+
+// Identity reads the repository's identity out of its URL.
+//
+// Lenient where Validate is strict: this runs against URLs already stored,
+// including any a stricter Validate would refuse today, and an identity it
+// cannot read is the zero value rather than an error. Nothing here decides
+// whether a clone will work — only what to call the group.
+func (r Repo) Identity() RepoIdentity {
+	raw := strings.TrimSpace(r.URL)
+	if raw == "" {
+		return RepoIdentity{}
+	}
+
+	// scp-style "git@github.com:owner/name.git" is not a URL and url.Parse
+	// reads the whole thing as an opaque path. Validate refuses it, so it
+	// cannot be stored by this version — but an install that predates that
+	// check can still be holding one.
+	if !strings.Contains(raw, "://") {
+		if host, path, ok := strings.Cut(raw, ":"); ok {
+			raw = "ssh://" + host + "/" + path
+		}
+	}
+
+	u, err := url.Parse(raw)
+	if err != nil {
+		return RepoIdentity{}
+	}
+
+	segments := strings.Split(strings.Trim(u.Path, "/"), "/")
+	// A trailing ".git" is a transport detail, not part of the name.
+	last := strings.TrimSuffix(segments[len(segments)-1], ".git")
+	// Nothing nameable is the zero value, not a group called ":". The identity
+	// is only ever used as a label, and a label with no letter or digit in it
+	// tells a reader less than no label at all.
+	if !strings.ContainsFunc(last, func(r rune) bool {
+		return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+	}) {
+		return RepoIdentity{}
+	}
+
+	return RepoIdentity{
+		Host:  u.Hostname(),
+		Owner: strings.Join(segments[:len(segments)-1], "/"),
+		Name:  last,
+	}
+}

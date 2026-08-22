@@ -227,13 +227,59 @@ templ emptyApps() {
 
 // ---------------------------------------------------------------- apps list
 templ AppList(apps []app.App) {
-	@pageHead("Apps", "Workloads managed by this install.", deployButton())
-	<div class="panel">
-		if len(apps) == 0 {
+	@pageHead("Apps", "Workloads managed by this install, by the repository they came from.", deployButton())
+	if len(apps) == 0 {
+		<div class="panel">
 			@emptyApps()
+		</div>
+	} else {
+		{{ groups := groupAppsByRepo(apps) }}
+		if grouped(groups) {
+			@appGroups(groups)
 		} else {
-			@appRows(apps)
+			<div class="panel">
+				@appRows(apps)
+			</div>
 		}
+	}
+}
+
+// appGroups draws one panel per repository, its apps beneath it.
+//
+// A panel each, rather than headings inside one list. The repository is the
+// parent here, and two systems sharing a border reads as one list with labels
+// in it — which is the list this replaced.
+templ appGroups(groups []AppGroup) {
+	<div class="flex flex-col gap-4">
+		for _, g := range groups {
+			<div class="panel">
+				@appGroupHeader(g)
+				@appRows(g.Apps)
+			</div>
+		}
+	</div>
+}
+
+// appGroupHeader names the repository a group's apps were built from.
+templ appGroupHeader(g AppGroup) {
+	<div class="panel-header">
+		<span class="flex min-w-0 items-center gap-2">
+			if g.Titled() {
+				@icon("git-branch")
+				<span class="truncate text-[13px] font-medium text-foreground">{ g.Name }</span>
+				// The host and owner are hidden on a narrow screen rather than
+				// truncated: half an identity is worse than the name alone.
+				<span class="mono hidden truncate text-[11px] text-muted-foreground sm:block">
+					{ g.Repo }
+				</span>
+			} else {
+				@icon("package")
+				<span class="panel-title">Deployed from an image</span>
+			}
+		</span>
+		<span class="shrink-0 text-[12px] text-muted-foreground tabular-nums">
+			{ plural(len(g.Apps), "app") }
+		</span>
 	</div>
 }
 

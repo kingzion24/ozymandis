@@ -94,3 +94,80 @@ func TestNormaliseTrimsWhatAPersonTyped(t *testing.T) {
 		t.Errorf("a normalised repository was refused: %v", err)
 	}
 }
+
+// The identity is what groups apps in the dashboard, so it has to survive the
+// several ways one repository gets written down: cloned over ssh by one app and
+// https by the next, with or without the .git, through a port, and in the
+// scp-style form an older install may still be holding.
+func TestRepoIdentityReadsOneRepositoryOutOfEveryWayOfWritingIt(t *testing.T) {
+	for _, tc := range []struct {
+		url                     string
+		host, owner, name, full string
+	}{
+		{
+			url:  "ssh://git@github.com/kingzion24/MD_chatbot.git",
+			host: "github.com", owner: "kingzion24", name: "MD_chatbot",
+			full: "github.com/kingzion24/MD_chatbot",
+		},
+		{
+			url:  "https://github.com/kingzion24/MD_chatbot",
+			host: "github.com", owner: "kingzion24", name: "MD_chatbot",
+			full: "github.com/kingzion24/MD_chatbot",
+		},
+		{
+			url:  "git@github.com:harehaDET/mali-daftari-dashboard.git",
+			host: "github.com", owner: "harehaDET", name: "mali-daftari-dashboard",
+			full: "github.com/harehaDET/mali-daftari-dashboard",
+		},
+		{
+			// A port is not part of which repository this is.
+			url:  "https://git.example.com:8443/team/api.git",
+			host: "git.example.com", owner: "team", name: "api",
+			full: "git.example.com/team/api",
+		},
+		{
+			// A GitLab subgroup nests, and the whole path is what makes two
+			// repositories ending in "api" different.
+			url:  "https://gitlab.com/beta/group/api.git",
+			host: "gitlab.com", owner: "beta/group", name: "api",
+			full: "gitlab.com/beta/group/api",
+		},
+	} {
+		got := Repo{URL: tc.url}.Identity()
+		if got.Host != tc.host || got.Owner != tc.owner || got.Name != tc.name {
+			t.Errorf("Repo{%q}.Identity() = %+v, want host=%q owner=%q name=%q",
+				tc.url, got, tc.host, tc.owner, tc.name)
+		}
+		if got.String() != tc.full {
+			t.Errorf("Repo{%q}.Identity().String() = %q, want %q", tc.url, got.String(), tc.full)
+		}
+	}
+}
+
+// The same repository written two ways is one group, and two repositories that
+// merely end in the same word are not.
+func TestRepoIdentityKeyIgnoresHowTheURLWasSpelled(t *testing.T) {
+	ssh := Repo{URL: "ssh://git@github.com/KingZion24/MD_chatbot.git"}.Identity()
+	https := Repo{URL: "https://github.com/kingzion24/md_chatbot"}.Identity()
+	if ssh.Key() != https.Key() {
+		t.Errorf("one repository split into two groups: %q and %q", ssh.Key(), https.Key())
+	}
+
+	acme := Repo{URL: "https://github.com/acme/api.git"}.Identity()
+	beta := Repo{URL: "https://github.com/beta/api.git"}.Identity()
+	if acme.Key() == beta.Key() {
+		t.Errorf("two repositories collapsed into one group: %q", acme.Key())
+	}
+}
+
+// An app that was never built from source has no identity, and neither has a
+// URL with nothing nameable in it. Both are the zero value rather than an
+// error: nothing here decides whether a clone would work, only what to call a
+// group, and a heading is not worth failing a page over.
+func TestRepoIdentityIsEmptyWhenThereIsNothingToName(t *testing.T) {
+	for _, url := range []string{"", "   ", "https://github.com", "https://github.com/", "::"} {
+		if got := (Repo{URL: url}).Identity(); got.Set() {
+			t.Errorf("Repo{%q}.Identity() = %+v, want unset", url, got)
+		}
+	}
+}
