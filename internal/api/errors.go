@@ -135,6 +135,9 @@ func writeServiceError(w http.ResponseWriter, log *slog.Logger, op string, err e
 	case errors.Is(err, app.ErrVolumeShrink):
 		writeError(w, http.StatusUnprocessableEntity, CodeInvalid, err.Error())
 
+	case errors.Is(err, app.ErrInvalidResources):
+		writeError(w, http.StatusUnprocessableEntity, CodeInvalid, err.Error())
+
 	case errors.Is(err, app.ErrNoBuilder),
 		errors.Is(err, app.ErrNoSecretKey),
 		errors.Is(err, app.ErrSourceUnavailable),

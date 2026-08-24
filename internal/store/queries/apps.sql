@@ -174,6 +174,20 @@ SET port       = @port,
 WHERE owner_id = @owner_id AND id = @id
 RETURNING *;
 
+-- Empty string, not null, means "fall back to the namespace default" — the
+-- same convention Create writes and the orchestrator already reads, so a
+-- cleared field behaves identically whether it was never set or set and then
+-- cleared.
+-- name: SetAppResources :one
+UPDATE apps
+SET cpu_request    = @cpu_request,
+    cpu_limit      = @cpu_limit,
+    memory_request = @memory_request,
+    memory_limit   = @memory_limit,
+    updated_at     = now()
+WHERE owner_id = @owner_id AND id = @id
+RETURNING *;
+
 -- name: SetAppNetworking :execrows
 UPDATE apps
 SET https_only = @https_only, cname_only = @cname_only, updated_at = now()

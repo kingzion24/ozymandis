@@ -25,6 +25,7 @@ import (
 	"iter"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -126,6 +127,65 @@ var DefaultLimits = ResourceLimits{
 	DefaultMemory: "128Mi",
 	MaxCPU:        "2",
 	MaxMemory:     "4Gi",
+}
+
+// ParseCPUQuantity reads a Kubernetes CPU quantity — "500m" or "2" — as
+// millicores.
+//
+// Not k8s.io/apimachinery's own parser: this package takes no Kubernetes
+// dependency, by the rule at the top of this file, so any implementation —
+// not only the Kubernetes one in the k8s subpackage — can validate a spec
+// before doing anything with it. This covers what a person actually types;
+// it is not a full implementation of the quantity grammar.
+func ParseCPUQuantity(s string) (millicores int64, err error) {
+	if s == "" {
+		return 0, errors.New("empty")
+	}
+	if whole, ok := strings.CutSuffix(s, "m"); ok {
+		n, err := strconv.ParseInt(whole, 10, 64)
+		if err != nil || n < 0 {
+			return 0, fmt.Errorf("%q is not a whole number of millicores", s)
+		}
+		return n, nil
+	}
+	cores, err := strconv.ParseFloat(s, 64)
+	if err != nil || cores < 0 {
+		return 0, fmt.Errorf("%q is not a cpu quantity — try \"500m\" or \"2\"", s)
+	}
+	return int64(cores * 1000), nil
+}
+
+// ParseMemoryQuantity reads a Kubernetes memory quantity — "512Mi", "2Gi", or
+// a bare byte count — as bytes. Binary suffixes (Ki, Mi, Gi, Ti) are powers of
+// 1024; decimal ones (K, M, G, T) are powers of 1000, matching Kubernetes.
+//
+// See ParseCPUQuantity for why this package parses its own rather than taking
+// the apimachinery dependency.
+func ParseMemoryQuantity(s string) (bytes int64, err error) {
+	if s == "" {
+		return 0, errors.New("empty")
+	}
+	units := []struct {
+		suffix string
+		factor int64
+	}{
+		{"Ki", 1 << 10}, {"Mi", 1 << 20}, {"Gi", 1 << 30}, {"Ti", 1 << 40},
+		{"K", 1_000}, {"M", 1_000_000}, {"G", 1_000_000_000}, {"T", 1_000_000_000_000},
+	}
+	for _, u := range units {
+		if whole, ok := strings.CutSuffix(s, u.suffix); ok {
+			n, err := strconv.ParseInt(whole, 10, 64)
+			if err != nil || n < 0 {
+				return 0, fmt.Errorf("%q is not a memory quantity — try \"512Mi\" or \"2Gi\"", s)
+			}
+			return n * u.factor, nil
+		}
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("%q is not a memory quantity — try \"512Mi\" or \"2Gi\"", s)
+	}
+	return n, nil
 }
 
 // OrEmpty returns l, substituting DefaultLimits for any unset field.
@@ -401,6 +461,98 @@ func (s AppSpec) Validate() error {
 	}
 	if err := s.validateHealth(); err != nil {
 		return err
+	}
+	if err := s.validateResources(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateResources checks CPU and memory as syntax only.
+//
+// Not against the namespace's actual ceiling: this spec carries no namespace,
+// and Limits lives on NamespaceSpec, resolved separately at apply time. A
+// caller that wants "does this fit" — which the CLI and the eventual web form
+// both do, so a bad request fails with a clear message before it reaches the
+// cluster — calls FitsWithinLimits itself, with the ceiling in hand.
+func (s AppSpec) validateResources() error {
+	for _, f := range []struct {
+		label string
+		value string
+		parse func(string) (int64, error)
+	}{
+		{"cpu request", s.CPURequest, ParseCPUQuantity},
+		{"cpu limit", s.CPULimit, ParseCPUQuantity},
+		{"memory request", s.MemoryRequest, ParseMemoryQuantity},
+		{"memory limit", s.MemoryLimit, ParseMemoryQuantity},
+	} {
+		if f.value == "" {
+			continue
+		}
+		if _, err := f.parse(f.value); err != nil {
+			return fmt.Errorf("app spec: %s: %w", f.label, err)
+		}
+	}
+	if s.CPURequest != "" && s.CPULimit != "" {
+		req, _ := ParseCPUQuantity(s.CPURequest)
+		lim, _ := ParseCPUQuantity(s.CPULimit)
+		if req > lim {
+			return fmt.Errorf("app spec: cpu request %q is more than cpu limit %q",
+				s.CPURequest, s.CPULimit)
+		}
+	}
+	if s.MemoryRequest != "" && s.MemoryLimit != "" {
+		req, _ := ParseMemoryQuantity(s.MemoryRequest)
+		lim, _ := ParseMemoryQuantity(s.MemoryLimit)
+		if req > lim {
+			return fmt.Errorf("app spec: memory request %q is more than memory limit %q",
+				s.MemoryRequest, s.MemoryLimit)
+		}
+	}
+	return nil
+}
+
+// FitsWithinLimits reports whether this spec's resources are inside a
+// namespace's ceiling. Empty fields always fit — they fall back to the
+// namespace default rather than requesting anything.
+//
+// Split from Validate because Validate has no namespace to check against; a
+// caller that does — the app service, sizing a request before it writes one —
+// calls this once it has resolved which ceiling applies.
+func (s AppSpec) FitsWithinLimits(limits ResourceLimits) error {
+	limits = limits.OrDefaults()
+	maxCPU, err := ParseCPUQuantity(limits.MaxCPU)
+	if err != nil {
+		return fmt.Errorf("app spec: namespace max cpu %q: %w", limits.MaxCPU, err)
+	}
+	maxMemory, err := ParseMemoryQuantity(limits.MaxMemory)
+	if err != nil {
+		return fmt.Errorf("app spec: namespace max memory %q: %w", limits.MaxMemory, err)
+	}
+
+	for _, f := range []struct {
+		label string
+		value string
+		max   int64
+		parse func(string) (int64, error)
+		unit  string
+	}{
+		{"cpu request", s.CPURequest, maxCPU, ParseCPUQuantity, limits.MaxCPU},
+		{"cpu limit", s.CPULimit, maxCPU, ParseCPUQuantity, limits.MaxCPU},
+		{"memory request", s.MemoryRequest, maxMemory, ParseMemoryQuantity, limits.MaxMemory},
+		{"memory limit", s.MemoryLimit, maxMemory, ParseMemoryQuantity, limits.MaxMemory},
+	} {
+		if f.value == "" {
+			continue
+		}
+		got, err := f.parse(f.value)
+		if err != nil {
+			return fmt.Errorf("app spec: %s: %w", f.label, err)
+		}
+		if got > f.max {
+			return fmt.Errorf("app spec: %s %q is more than this install's ceiling of %s",
+				f.label, f.value, f.unit)
+		}
 	}
 	return nil
 }

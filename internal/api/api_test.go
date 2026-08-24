@@ -40,6 +40,7 @@ type fakeApps struct {
 	health      map[string]string
 	commands    map[string]string
 	services    map[string]string
+	resources   map[string]string
 	releases    map[string]string
 	builds      map[uuid.UUID]app.Build
 
@@ -48,14 +49,15 @@ type fakeApps struct {
 
 func newFakeApps() *fakeApps {
 	return &fakeApps{
-		byOwner:  map[string]map[string]app.App{},
-		scaled:   map[string]int32{},
-		vars:     map[string]string{},
-		health:   map[string]string{},
-		commands: map[string]string{},
-		services: map[string]string{},
-		releases: map[string]string{},
-		builds:   map[uuid.UUID]app.Build{},
+		byOwner:   map[string]map[string]app.App{},
+		scaled:    map[string]int32{},
+		vars:      map[string]string{},
+		health:    map[string]string{},
+		commands:  map[string]string{},
+		services:  map[string]string{},
+		resources: map[string]string{},
+		releases:  map[string]string{},
+		builds:    map[uuid.UUID]app.Build{},
 	}
 }
 
@@ -220,6 +222,23 @@ func (f *fakeApps) SetService(
 	a.Port, a.Internal = port, internal
 	f.byOwner[ownerID][name] = a
 	return nil
+}
+
+func (f *fakeApps) SetResources(
+	_ context.Context, ownerID, name, cpuRequest, cpuLimit, memoryRequest, memoryLimit string,
+) (app.App, error) {
+	if f.err != nil {
+		return app.App{}, f.err
+	}
+	a, ok := f.byOwner[ownerID][name]
+	if !ok {
+		return app.App{}, app.ErrNotFound
+	}
+	f.resources[name] = fmt.Sprintf("%s/%s/%s/%s", cpuRequest, cpuLimit, memoryRequest, memoryLimit)
+	a.CPURequest, a.CPULimit = cpuRequest, cpuLimit
+	a.MemoryRequest, a.MemoryLimit = memoryRequest, memoryLimit
+	f.byOwner[ownerID][name] = a
+	return a, nil
 }
 
 func (f *fakeApps) SetReleaseCommand(_ context.Context, ownerID, name, command string) error {
@@ -398,6 +417,7 @@ func TestTokenCannotMutateAnotherTeamsApp(t *testing.T) {
 		{http.MethodDelete, "/api/v1/apps/victim", ""},
 		{http.MethodPost, "/api/v1/apps/victim/deploy", "{}"},
 		{http.MethodPost, "/api/v1/apps/victim/scale", `{"replicas":9}`},
+		{http.MethodPut, "/api/v1/apps/victim/resources", `{"cpu_limit":"500m"}`},
 		{http.MethodPut, "/api/v1/apps/victim/secrets", `{"variables":{"K":"v"}}`},
 		{http.MethodDelete, "/api/v1/apps/victim/secrets/K", ""},
 	} {
@@ -407,9 +427,9 @@ func TestTokenCannotMutateAnotherTeamsApp(t *testing.T) {
 		}
 	}
 
-	if len(apps.deleted) != 0 || len(apps.redeployed) != 0 || len(apps.scaled) != 0 {
-		t.Errorf("another team's app was mutated: deleted=%v redeployed=%v scaled=%v",
-			apps.deleted, apps.redeployed, apps.scaled)
+	if len(apps.deleted) != 0 || len(apps.redeployed) != 0 || len(apps.scaled) != 0 || len(apps.resources) != 0 {
+		t.Errorf("another team's app was mutated: deleted=%v redeployed=%v scaled=%v resources=%v",
+			apps.deleted, apps.redeployed, apps.scaled, apps.resources)
 	}
 	if _, ok := apps.byOwner["team-b"]["victim"]; !ok {
 		t.Error("team B's app was deleted by team A")
@@ -533,6 +553,7 @@ func TestMemberMayReadButNotWrite(t *testing.T) {
 		{http.MethodDelete, "/api/v1/apps/web", ""},
 		{http.MethodPost, "/api/v1/apps/web/deploy", "{}"},
 		{http.MethodPost, "/api/v1/apps/web/scale", `{"replicas":3}`},
+		{http.MethodPut, "/api/v1/apps/web/resources", `{"cpu_limit":"500m"}`},
 		{http.MethodPut, "/api/v1/apps/web/secrets", `{"variables":{"K":"v"}}`},
 		{http.MethodDelete, "/api/v1/apps/web/secrets/K", ""},
 	} {
@@ -655,6 +676,73 @@ func TestScaleToZeroIsNotTreatedAsMissing(t *testing.T) {
 	w = do(h, http.MethodPost, "/api/v1/apps/web/scale", "oz_team-a-token", `{}`)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("empty body: status = %d, want 400", w.Code)
+	}
+}
+
+// Resources replaces the whole set, the same convention SetService uses for
+// port and internal together — so unlike Scale, an empty body is a real
+// request too: clear every field back to the namespace default.
+func TestAppResources(t *testing.T) {
+	apps := newFakeApps()
+	apps.add("team-a", app.App{Name: "web"})
+	h, _ := testServer(t, apps, nil)
+
+	w := do(h, http.MethodPut, "/api/v1/apps/web/resources", "oz_team-a-token",
+		`{"cpu_request":"250m","cpu_limit":"500m","memory_request":"256Mi","memory_limit":"512Mi"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if got := apps.resources["web"]; got != "250m/500m/256Mi/512Mi" {
+		t.Errorf("resources set to %q, want 250m/500m/256Mi/512Mi", got)
+	}
+	var out App
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out.CPURequest != "250m" || out.MemoryLimit != "512Mi" {
+		t.Errorf("response body = %+v, missing the resources just set", out)
+	}
+
+	// An empty body clears every field — this is not a caller who forgot the
+	// fields, it is a caller undoing the call above.
+	w = do(h, http.MethodPut, "/api/v1/apps/web/resources", "oz_team-a-token", `{}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("empty body: status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if got := apps.resources["web"]; got != "///" {
+		t.Errorf("resources after clearing = %q, want all empty", got)
+	}
+}
+
+// A value the service rejects — over the namespace ceiling, or unparsable —
+// must surface as 422 naming the problem, not a generic 500 that sends
+// somebody to the server log for a mistake in their own request.
+func TestAppResourcesSurfacesServiceValidationErrors(t *testing.T) {
+	apps := newFakeApps()
+	apps.add("team-a", app.App{Name: "web"})
+	apps.err = fmt.Errorf("%w: %w", app.ErrInvalidResources,
+		errors.New(`app spec: cpu limit "4" is more than this install's ceiling of 2`))
+	h, _ := testServer(t, apps, nil)
+
+	w := do(h, http.MethodPut, "/api/v1/apps/web/resources", "oz_team-a-token",
+		`{"cpu_limit":"4"}`)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "ceiling") {
+		t.Errorf("body = %s, want it to name the actual problem", w.Body.String())
+	}
+}
+
+func TestAppResourcesUnknownFieldsAreRejected(t *testing.T) {
+	apps := newFakeApps()
+	apps.add("team-a", app.App{Name: "web"})
+	h, _ := testServer(t, apps, nil)
+
+	w := do(h, http.MethodPut, "/api/v1/apps/web/resources", "oz_team-a-token",
+		`{"cpu_limitt":"500m"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 — a typo'd field must not be silently ignored", w.Code)
 	}
 }
 

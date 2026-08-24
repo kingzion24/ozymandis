@@ -183,6 +183,11 @@ type App struct {
 	TLS       bool    `json:"tls"`
 	Status    *Status `json:"status"`
 	CreatedAt string  `json:"created_at"`
+
+	CPURequest    string `json:"cpu_request"`
+	CPULimit      string `json:"cpu_limit"`
+	MemoryRequest string `json:"memory_request"`
+	MemoryLimit   string `json:"memory_limit"`
 }
 
 // URL is where the app is reachable, or empty.
@@ -288,6 +293,20 @@ func (c *Client) Scale(ctx context.Context, name string, replicas int32) (App, e
 	var out App
 	body := map[string]any{"replicas": replicas}
 	err := c.do(ctx, http.MethodPost, "/api/v1/apps/"+name+"/scale", body, &out)
+	return out, err
+}
+
+// SetResources replaces an app's CPU and memory request and limit together.
+// Empty clears a field back to the namespace default.
+func (c *Client) SetResources(
+	ctx context.Context, name, cpuRequest, cpuLimit, memoryRequest, memoryLimit string,
+) (App, error) {
+	var out App
+	body := map[string]any{
+		"cpu_request": cpuRequest, "cpu_limit": cpuLimit,
+		"memory_request": memoryRequest, "memory_limit": memoryLimit,
+	}
+	err := c.do(ctx, http.MethodPut, "/api/v1/apps/"+name+"/resources", body, &out)
 	return out, err
 }
 

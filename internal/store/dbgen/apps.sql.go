@@ -1170,6 +1170,78 @@ func (q *Queries) SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) 
 	return i, err
 }
 
+const setAppResources = `-- name: SetAppResources :one
+UPDATE apps
+SET cpu_request    = $1,
+    cpu_limit      = $2,
+    memory_request = $3,
+    memory_limit   = $4,
+    updated_at     = now()
+WHERE owner_id = $5 AND id = $6
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, command, release_command, auto_deploy, webhook_secret, deploy_key, deploy_key_public, last_deployed_sha
+`
+
+type SetAppResourcesParams struct {
+	CpuRequest    string
+	CpuLimit      string
+	MemoryRequest string
+	MemoryLimit   string
+	OwnerID       string
+	ID            uuid.UUID
+}
+
+// Empty string, not null, means "fall back to the namespace default" — the
+// same convention Create writes and the orchestrator already reads, so a
+// cleared field behaves identically whether it was never set or set and then
+// cleared.
+func (q *Queries) SetAppResources(ctx context.Context, arg SetAppResourcesParams) (App, error) {
+	row := q.db.QueryRow(ctx, setAppResources,
+		arg.CpuRequest,
+		arg.CpuLimit,
+		arg.MemoryRequest,
+		arg.MemoryLimit,
+		arg.OwnerID,
+		arg.ID,
+	)
+	var i App
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.Name,
+		&i.Namespace,
+		&i.Image,
+		&i.Replicas,
+		&i.Port,
+		&i.CpuRequest,
+		&i.CpuLimit,
+		&i.MemoryRequest,
+		&i.MemoryLimit,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.HealthPath,
+		&i.HealthLiveness,
+		&i.Source,
+		&i.Internal,
+		&i.ProjectID,
+		&i.CanvasX,
+		&i.CanvasY,
+		&i.HttpsOnly,
+		&i.CnameOnly,
+		&i.RepoUrl,
+		&i.RepoBranch,
+		&i.RepoSubdir,
+		&i.RunAsUser,
+		&i.Command,
+		&i.ReleaseCommand,
+		&i.AutoDeploy,
+		&i.WebhookSecret,
+		&i.DeployKey,
+		&i.DeployKeyPublic,
+		&i.LastDeployedSha,
+	)
+	return i, err
+}
+
 const setAppRunAsUser = `-- name: SetAppRunAsUser :exec
 UPDATE apps SET run_as_user = $1, updated_at = now()
 WHERE owner_id = $2 AND id = $3

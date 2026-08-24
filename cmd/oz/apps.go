@@ -111,6 +111,14 @@ func runStatus(ctx context.Context, env *Env, args []string) error {
 	if a.Status != nil && a.Status.Message != "" {
 		fmt.Fprintf(tw, "message\t%s\n", a.Status.Message)
 	}
+	// Blank when unset, which most apps are: the namespace default applies and
+	// there is nothing of this app's own to show.
+	if a.CPURequest != "" || a.CPULimit != "" {
+		fmt.Fprintf(tw, "cpu\t%s\n", requestLimitOf(a.CPURequest, a.CPULimit))
+	}
+	if a.MemoryRequest != "" || a.MemoryLimit != "" {
+		fmt.Fprintf(tw, "memory\t%s\n", requestLimitOf(a.MemoryRequest, a.MemoryLimit))
+	}
 	if err := tw.Flush(); err != nil {
 		return err
 	}

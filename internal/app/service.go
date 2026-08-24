@@ -35,6 +35,13 @@ var ErrNotFound = errors.New("app: not found")
 // ErrNameTaken is returned when an owner already has an app with that name.
 var ErrNameTaken = errors.New("app: name already in use")
 
+// ErrInvalidResources means a cpu or memory value could not be parsed, a
+// request exceeded its own limit, or a value exceeded the namespace ceiling.
+// Wrapped around the specific complaint from AppSpec.Validate or
+// FitsWithinLimits, so the API layer can tell "your input is the problem"
+// from "something broke here" without hand-matching message text.
+var ErrInvalidResources = errors.New("app: invalid resource request")
+
 // App is a workload as the engine sees it: the stored record plus whatever the
 // cluster currently reports.
 type App struct {
@@ -1513,6 +1520,64 @@ func (s *Service) SetService(
 		slog.String("app", name), slog.Int("port", int(port)),
 		slog.Bool("internal", internal))
 	return nil
+}
+
+// SetResources sets an app's CPU and memory request and limit, as Kubernetes
+// quantity strings ("500m", "512Mi"). Empty clears a field back to the
+// namespace default.
+//
+// Checked against the namespace's ceiling here, not left to fail at apply:
+// the alternative is a person typing "5" for cpu limit and finding out the
+// install caps every container at 2 only when the pod refuses to schedule,
+// which names a Kubernetes admission error rather than the number they typed.
+func (s *Service) SetResources(
+	ctx context.Context, ownerID, name, cpuRequest, cpuLimit, memoryRequest, memoryLimit string,
+) (App, error) {
+	a, err := s.Get(ctx, ownerID, name)
+	if err != nil {
+		return App{}, err
+	}
+
+	next := a
+	next.CPURequest, next.CPULimit = strings.TrimSpace(cpuRequest), strings.TrimSpace(cpuLimit)
+	next.MemoryRequest, next.MemoryLimit = strings.TrimSpace(memoryRequest), strings.TrimSpace(memoryLimit)
+
+	spec := orchestrator.AppSpec{
+		Ref: next.Ref(), Image: next.Image, Replicas: next.Replicas,
+		Port: next.Port, HealthPath: next.HealthPath, Liveness: next.Liveness,
+		CPURequest: next.CPURequest, CPULimit: next.CPULimit,
+		MemoryRequest: next.MemoryRequest, MemoryLimit: next.MemoryLimit,
+	}
+	if err := spec.Validate(); err != nil {
+		return App{}, fmt.Errorf("%w: %w", ErrInvalidResources, err)
+	}
+	// DefaultLimits directly, not a value read from the namespace: nothing on
+	// this install ever sets NamespaceSpec.Limits away from it — see
+	// EnsureNamespace's caller — so it is what the LimitRange this app
+	// actually gets will enforce.
+	if err := spec.FitsWithinLimits(orchestrator.DefaultLimits); err != nil {
+		return App{}, fmt.Errorf("%w: %w", ErrInvalidResources, err)
+	}
+
+	row, err := s.q.SetAppResources(ctx, dbgen.SetAppResourcesParams{
+		OwnerID: ownerID, ID: a.ID,
+		CpuRequest: next.CPURequest, CpuLimit: next.CPULimit,
+		MemoryRequest: next.MemoryRequest, MemoryLimit: next.MemoryLimit,
+	})
+	if err != nil {
+		return App{}, fmt.Errorf("app: set resources: %w", err)
+	}
+
+	updated := toApp(row)
+	if err := s.apply(ctx, s.q, updated); err != nil {
+		return App{}, err
+	}
+
+	s.log.Info("resources set",
+		slog.String("app", name),
+		slog.String("cpu_request", next.CPURequest), slog.String("cpu_limit", next.CPULimit),
+		slog.String("memory_request", next.MemoryRequest), slog.String("memory_limit", next.MemoryLimit))
+	return updated, nil
 }
 
 // runtimeOf returns what the app's source knows about running its image.

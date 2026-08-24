@@ -320,6 +320,11 @@ type Querier interface {
 	SetAppProject(ctx context.Context, arg SetAppProjectParams) (int64, error)
 	SetAppReleaseCommand(ctx context.Context, arg SetAppReleaseCommandParams) (App, error)
 	SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) (App, error)
+	// Empty string, not null, means "fall back to the namespace default" — the
+	// same convention Create writes and the orchestrator already reads, so a
+	// cleared field behaves identically whether it was never set or set and then
+	// cleared.
+	SetAppResources(ctx context.Context, arg SetAppResourcesParams) (App, error)
 	// Recorded by a build, which is the only thing that can discover it.
 	SetAppRunAsUser(ctx context.Context, arg SetAppRunAsUserParams) error
 	// Both together, because they are one decision.

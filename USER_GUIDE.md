@@ -383,6 +383,23 @@ oz scale --app web 3
 > second form silently ignores `--app` and then complains it was given three
 > arguments instead of one.
 
+### Giving an app more than the default
+
+Every app starts on the namespace default — 100m CPU, 128Mi memory — until it
+asks for something else:
+
+```sh
+oz resources set --app web --cpu-request 250m --cpu-limit 500m \
+    --memory-request 256Mi --memory-limit 512Mi
+oz status --app web           # shows the request/limit for cpu and memory
+oz resources set --app web --cpu-limit ""   # clears it back to the default
+```
+
+Only the flags given are changed — `oz resources set --app web --cpu-limit
+500m` on its own leaves any memory request/limit exactly as it was. A value
+above this install's ceiling (2 CPU / 4Gi by default) is refused with the
+number that was rejected, before anything is written.
+
 ### Getting into a container
 
 ```sh

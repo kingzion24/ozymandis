@@ -40,6 +40,7 @@ type Apps interface {
 
 	SetHealth(ctx context.Context, ownerID, name, healthPath string, liveness bool) error
 	SetService(ctx context.Context, ownerID, name string, port int32, internal bool) error
+	SetResources(ctx context.Context, ownerID, name, cpuRequest, cpuLimit, memoryRequest, memoryLimit string) (app.App, error)
 	SetCommand(ctx context.Context, ownerID, name, command string) error
 	SetReleaseCommand(ctx context.Context, ownerID, name, command string) error
 }
@@ -207,6 +208,7 @@ func (s *Server) Handler() http.Handler {
 			r.Delete("/apps/{name}", s.appDelete)
 			r.Post("/apps/{name}/deploy", s.appDeploy)
 			r.Post("/apps/{name}/scale", s.appScale)
+			r.Put("/apps/{name}/resources", s.appResources)
 			r.Put("/apps/{name}/config", s.configPut)
 			r.Put("/apps/{name}/secrets", s.secretSet)
 			r.Delete("/apps/{name}/secrets/{key}", s.secretDelete)

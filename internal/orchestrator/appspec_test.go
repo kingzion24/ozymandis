@@ -228,3 +228,147 @@ func TestAppSpecRejectsLivenessWithNoHealthPath(t *testing.T) {
 		t.Fatal("Validate accepted liveness with nothing to probe")
 	}
 }
+
+// ---------------------------------------------------------------- resources
+
+func TestParseCPUQuantity(t *testing.T) {
+	for _, tc := range []struct {
+		in      string
+		want    int64
+		wantErr bool
+	}{
+		{"100m", 100, false},
+		{"1500m", 1500, false},
+		{"0m", 0, false},
+		{"1", 1000, false},
+		{"2", 2000, false},
+		{"0.5", 500, false},
+		{"", 0, true},
+		{"-100m", 0, true},
+		{"1x", 0, true},
+		{"m", 0, true},
+	} {
+		got, err := ParseCPUQuantity(tc.in)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("ParseCPUQuantity(%q) = %d, want an error", tc.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("ParseCPUQuantity(%q) unexpected error: %v", tc.in, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("ParseCPUQuantity(%q) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestParseMemoryQuantity(t *testing.T) {
+	for _, tc := range []struct {
+		in      string
+		want    int64
+		wantErr bool
+	}{
+		{"512Mi", 512 * (1 << 20), false},
+		{"1Gi", 1 << 30, false},
+		{"128Ki", 128 * (1 << 10), false},
+		{"1G", 1_000_000_000, false},
+		{"1024", 1024, false},
+		{"", 0, true},
+		{"-1Gi", 0, true},
+		{"1Xi", 0, true},
+		{"Mi", 0, true},
+	} {
+		got, err := ParseMemoryQuantity(tc.in)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("ParseMemoryQuantity(%q) = %d, want an error", tc.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("ParseMemoryQuantity(%q) unexpected error: %v", tc.in, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("ParseMemoryQuantity(%q) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
+// A spec with no resources of its own is always valid: it falls back to the
+// namespace default rather than requesting anything, which is every app
+// before this feature existed and must keep working unchanged.
+func TestAppSpecWithNoResourcesIsValid(t *testing.T) {
+	s := validSpec()
+	if err := s.Validate(); err != nil {
+		t.Fatalf("Validate rejected a spec with no resources: %v", err)
+	}
+	if err := s.FitsWithinLimits(DefaultLimits); err != nil {
+		t.Fatalf("FitsWithinLimits rejected a spec with no resources: %v", err)
+	}
+}
+
+func TestAppSpecRejectsUnparsableResources(t *testing.T) {
+	for name, mutate := range map[string]func(*AppSpec){
+		"cpu request":    func(s *AppSpec) { s.CPURequest = "not-a-quantity" },
+		"cpu limit":      func(s *AppSpec) { s.CPULimit = "2x" },
+		"memory request": func(s *AppSpec) { s.MemoryRequest = "lots" },
+		"memory limit":   func(s *AppSpec) { s.MemoryLimit = "512Xi" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := validSpec()
+			mutate(&s)
+			if err := s.Validate(); err == nil {
+				t.Fatalf("Validate accepted an unparsable %s", name)
+			}
+		})
+	}
+}
+
+// A request bigger than its own limit cannot be satisfied by Kubernetes and
+// should be refused here, where the error names the two values somebody
+// typed, rather than at the cluster as an admission rejection.
+func TestAppSpecRejectsRequestAboveItsOwnLimit(t *testing.T) {
+	s := validSpec()
+	s.CPURequest, s.CPULimit = "500m", "250m"
+	if err := s.Validate(); err == nil {
+		t.Fatal("Validate accepted a cpu request greater than its limit")
+	}
+
+	s = validSpec()
+	s.MemoryRequest, s.MemoryLimit = "1Gi", "512Mi"
+	if err := s.Validate(); err == nil {
+		t.Fatal("Validate accepted a memory request greater than its limit")
+	}
+}
+
+// FitsWithinLimits is the ceiling check Validate cannot do itself, since
+// Validate has no namespace to check against.
+func TestFitsWithinLimitsRejectsAboveTheCeiling(t *testing.T) {
+	for name, mutate := range map[string]func(*AppSpec){
+		"cpu request":    func(s *AppSpec) { s.CPURequest = "4" },
+		"cpu limit":      func(s *AppSpec) { s.CPULimit = "4" },
+		"memory request": func(s *AppSpec) { s.MemoryRequest = "8Gi" },
+		"memory limit":   func(s *AppSpec) { s.MemoryLimit = "8Gi" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := validSpec()
+			mutate(&s)
+			if err := s.FitsWithinLimits(DefaultLimits); err == nil {
+				t.Fatalf("FitsWithinLimits accepted a %s above the ceiling", name)
+			}
+		})
+	}
+}
+
+func TestFitsWithinLimitsAcceptsAtTheCeiling(t *testing.T) {
+	s := validSpec()
+	s.CPURequest, s.CPULimit = "1", DefaultLimits.MaxCPU
+	s.MemoryRequest, s.MemoryLimit = "1Gi", DefaultLimits.MaxMemory
+	if err := s.FitsWithinLimits(DefaultLimits); err != nil {
+		t.Fatalf("FitsWithinLimits rejected values exactly at the ceiling: %v", err)
+	}
+}

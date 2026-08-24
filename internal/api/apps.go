@@ -63,6 +63,13 @@ type App struct {
 	HealthPath string `json:"health_path,omitempty"`
 	Liveness   bool   `json:"liveness,omitempty"`
 
+	// Resources are Kubernetes quantity strings ("500m", "512Mi"), empty when
+	// this app runs on the namespace default rather than a request of its own.
+	CPURequest    string `json:"cpu_request,omitempty"`
+	CPULimit      string `json:"cpu_limit,omitempty"`
+	MemoryRequest string `json:"memory_request,omitempty"`
+	MemoryLimit   string `json:"memory_limit,omitempty"`
+
 	// Host is the platform-issued hostname, and TLS whether it is served over
 	// one. Both come from the install's configuration rather than the app row,
 	// so a client building a URL has what it needs without knowing the
@@ -119,6 +126,11 @@ func appOut(a app.App) App {
 
 		HealthPath: a.HealthPath,
 		Liveness:   a.Liveness,
+
+		CPURequest:    a.CPURequest,
+		CPULimit:      a.CPULimit,
+		MemoryRequest: a.MemoryRequest,
+		MemoryLimit:   a.MemoryLimit,
 
 		Host: a.Host,
 		TLS:  a.TLS,
@@ -329,6 +341,36 @@ func (s *Server) appScale(w http.ResponseWriter, r *http.Request) {
 	a, err := s.apps.Scale(r.Context(), ownerOf(r).ID, chi.URLParam(r, "name"), *in.Replicas)
 	if err != nil {
 		writeServiceError(w, s.log, "scale app", err)
+		return
+	}
+	writeJSON(w, s.log, http.StatusOK, appOut(a))
+}
+
+// Resources is the body of PUT /apps/{name}/resources.
+//
+// All four, not per-field pointers: this always replaces the whole set, the
+// same convention SetService uses for port and internal together — a form
+// that could write three of the four fields is one that will eventually leave
+// a memory limit stale while changing a cpu request. A caller that wants to
+// change one field reads the app first and resubmits the rest unchanged.
+type Resources struct {
+	CPURequest    string `json:"cpu_request"`
+	CPULimit      string `json:"cpu_limit"`
+	MemoryRequest string `json:"memory_request"`
+	MemoryLimit   string `json:"memory_limit"`
+}
+
+func (s *Server) appResources(w http.ResponseWriter, r *http.Request) {
+	var in Resources
+	if err := decodeJSON(r, &in); err != nil {
+		writeInvalid(w, "that body is not the JSON this expects: "+err.Error())
+		return
+	}
+
+	a, err := s.apps.SetResources(r.Context(), ownerOf(r).ID, chi.URLParam(r, "name"),
+		in.CPURequest, in.CPULimit, in.MemoryRequest, in.MemoryLimit)
+	if err != nil {
+		writeServiceError(w, s.log, "set resources", err)
 		return
 	}
 	writeJSON(w, s.log, http.StatusOK, appOut(a))
