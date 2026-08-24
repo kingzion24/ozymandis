@@ -178,6 +178,13 @@ type Querier interface {
 	// none: one registry serves every team's builds.
 	GetPlatformRegistry(ctx context.Context) (PlatformRegistry, error)
 	GetProjectByID(ctx context.Context, arg GetProjectByIDParams) (Project, error)
+	// The project standing for one repository.
+	//
+	// Matched on the "host/owner/name" identity rather than on the URL, so the
+	// same repository cloned over ssh by one app and https by the next is one
+	// project instead of two — and case-insensitively, for the reason the index
+	// carrying that comparison gives.
+	GetProjectByRepo(ctx context.Context, arg GetProjectByRepoParams) (Project, error)
 	GetProjectBySlug(ctx context.Context, arg GetProjectBySlugParams) (Project, error)
 	GetSession(ctx context.Context, id uuid.UUID) (Session, error)
 	// The team is joined in because the request that carries this cookie needs the

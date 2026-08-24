@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func TestSlugifyBuildsAnAddressFromAName(t *testing.T) {
@@ -252,5 +254,170 @@ func TestMovingToANonexistentProjectIsRefused(t *testing.T) {
 	err := s.MoveApp(ctx, ownerID, "web", "no-such-project")
 	if !errors.Is(err, ErrProjectNotFound) {
 		t.Fatalf("err = %v, want ErrProjectNotFound", err)
+	}
+}
+
+// An app built from a repository lands on that repository's own canvas, not in
+// Default — the reason this feature exists. Before it, a team deploying nine
+// apps out of two repositories got one bucket that only said how many there
+// were, not which system each came out of.
+func TestCreateFromARepositoryMakesAProjectNamedAfterIt(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{Builder: &okBuilder{}, Images: stubImages{}})
+	ownerID := owner(t, s, pool, "owner-project-repo-create")
+
+	a, err := s.Create(ctx, ownerID, CreateInput{
+		Name: "api", Source: SourceGit,
+		Repo: Repo{URL: "https://github.com/acme/widgets.git"},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	p, err := s.ProjectByID(ctx, ownerID, a.ProjectID)
+	if err != nil {
+		t.Fatalf("project by id: %v", err)
+	}
+	if p.Slug == DefaultProjectSlug {
+		t.Fatalf("app from a repository landed in Default")
+	}
+	if p.Name != "widgets" || p.Repo != "github.com/acme/widgets" {
+		t.Fatalf("project = %+v, want name=widgets repo=github.com/acme/widgets", p)
+	}
+}
+
+// Six apps out of one repository are one system, not six unrelated ones — the
+// project each lands in has to agree regardless of which URL form was pasted
+// into which app's [build] block.
+func TestAppsFromTheSameRepositoryShareOneProject(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{Builder: &okBuilder{}, Images: stubImages{}})
+	ownerID := owner(t, s, pool, "owner-project-repo-share")
+
+	web, err := s.Create(ctx, ownerID, CreateInput{
+		Name: "web", Source: SourceGit,
+		Repo: Repo{URL: "ssh://git@github.com/acme/widgets.git"},
+	})
+	if err != nil {
+		t.Fatalf("create web: %v", err)
+	}
+	worker, err := s.Create(ctx, ownerID, CreateInput{
+		Name: "worker", Source: SourceGit,
+		Repo: Repo{URL: "https://github.com/ACME/widgets"},
+	})
+	if err != nil {
+		t.Fatalf("create worker: %v", err)
+	}
+
+	if web.ProjectID != worker.ProjectID {
+		t.Fatalf("web landed in %s, worker in %s — one repository split into two projects",
+			web.ProjectID, worker.ProjectID)
+	}
+
+	apps, err := s.ListInProject(ctx, ownerID, web.ProjectID)
+	if err != nil {
+		t.Fatalf("list apps in project: %v", err)
+	}
+	if len(apps) != 2 {
+		t.Fatalf("apps in the shared project = %+v, want web and worker", apps)
+	}
+}
+
+// Two different repositories that happen to end in the same name cannot both
+// have the obvious address — the second one falls back to owner/name rather
+// than fail the deploy or silently take over the first project.
+func TestProjectForRepoFallsBackWhenTheNameIsTaken(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{Builder: &okBuilder{}, Images: stubImages{}})
+	ownerID := owner(t, s, pool, "owner-project-repo-fallback")
+
+	first, err := s.Create(ctx, ownerID, CreateInput{
+		Name: "acme-api", Source: SourceGit,
+		Repo: Repo{URL: "https://github.com/acme/api.git"},
+	})
+	if err != nil {
+		t.Fatalf("create acme-api: %v", err)
+	}
+	second, err := s.Create(ctx, ownerID, CreateInput{
+		Name: "beta-api", Source: SourceGit,
+		Repo: Repo{URL: "https://github.com/beta/api.git"},
+	})
+	if err != nil {
+		t.Fatalf("create beta-api: %v", err)
+	}
+
+	if first.ProjectID == second.ProjectID {
+		t.Fatal("two different repositories were merged into one project")
+	}
+
+	firstProject, err := s.ProjectByID(ctx, ownerID, first.ProjectID)
+	if err != nil {
+		t.Fatalf("first project: %v", err)
+	}
+	secondProject, err := s.ProjectByID(ctx, ownerID, second.ProjectID)
+	if err != nil {
+		t.Fatalf("second project: %v", err)
+	}
+	if firstProject.Slug != "api" {
+		t.Errorf("first project slug = %q, want api", firstProject.Slug)
+	}
+	if secondProject.Slug != "beta-api" {
+		t.Errorf("second project slug = %q, want beta-api (the fallback)", secondProject.Slug)
+	}
+}
+
+// An app built from an image, not a repository, has nothing to name a project
+// after. It is left unassigned exactly as it always was — adopted into
+// Default on the next read, the same as any other orphan — rather than routed
+// through repository placement it has no repository for.
+func TestCreateWithNoRepositoryStillGoesToDefault(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{})
+	ownerID := owner(t, s, pool, "owner-project-repo-none")
+
+	a, err := s.Create(ctx, ownerID, CreateInput{
+		Name: "cache", Image: "redis:7-alpine", Replicas: 1, Port: 6379,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if a.ProjectID != uuid.Nil {
+		t.Fatalf("image-sourced app got project %s at create time, want unassigned", a.ProjectID)
+	}
+
+	def, err := s.DefaultProject(ctx, ownerID)
+	if err != nil {
+		t.Fatalf("default project: %v", err)
+	}
+	apps, err := s.ListInProject(ctx, ownerID, def.ID)
+	if err != nil {
+		t.Fatalf("list apps in default: %v", err)
+	}
+	if len(apps) != 1 || apps[0].Name != "cache" {
+		t.Fatalf("apps in default = %+v, want the image-sourced app adopted into it", apps)
+	}
+}
+
+// A caller that named a project explicitly is not second-guessed — a person
+// choosing where an app goes on create must win over the automatic placement.
+func TestCreateWithAnExplicitProjectIsNotOverridden(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{Builder: &okBuilder{}, Images: stubImages{}})
+	ownerID := owner(t, s, pool, "owner-project-repo-explicit")
+
+	billing, err := s.CreateProject(ctx, ownerID, "Billing")
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	a, err := s.Create(ctx, ownerID, CreateInput{
+		Name: "api", Source: SourceGit, ProjectID: billing.ID,
+		Repo: Repo{URL: "https://github.com/acme/widgets.git"},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if a.ProjectID != billing.ID {
+		t.Fatalf("app landed in %s, want the explicitly chosen project %s", a.ProjectID, billing.ID)
 	}
 }

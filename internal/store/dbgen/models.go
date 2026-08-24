@@ -190,6 +190,7 @@ type Project struct {
 	Name      string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	Repo      string
 }
 
 type Session struct {

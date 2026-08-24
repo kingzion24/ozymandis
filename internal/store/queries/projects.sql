@@ -2,9 +2,20 @@
 -- the check, not a duplicate of one.
 
 -- name: CreateProject :one
-INSERT INTO projects (owner_id, slug, name)
-VALUES ($1, $2, $3)
+INSERT INTO projects (owner_id, slug, name, repo)
+VALUES ($1, $2, $3, $4)
 RETURNING *;
+
+-- The project standing for one repository.
+--
+-- Matched on the "host/owner/name" identity rather than on the URL, so the
+-- same repository cloned over ssh by one app and https by the next is one
+-- project instead of two — and case-insensitively, for the reason the index
+-- carrying that comparison gives.
+-- name: GetProjectByRepo :one
+SELECT * FROM projects
+WHERE owner_id = sqlc.arg(owner_id) AND repo <> ''
+  AND lower(repo) = lower(sqlc.arg(repo));
 
 -- name: GetProjectBySlug :one
 SELECT * FROM projects

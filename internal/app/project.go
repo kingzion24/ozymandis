@@ -34,6 +34,11 @@ type Project struct {
 	Slug    string
 	Name    string
 
+	// Repo is the repository this project stands for, as "host/owner/name".
+	// Empty on a project somebody named themselves, which is not a project
+	// with a missing repository but one that is not about a single repository.
+	Repo string
+
 	// Apps is how many apps it holds. Populated by List, because a list of
 	// projects that does not say how big each one is gives no reason to pick.
 	Apps int64
@@ -64,6 +69,21 @@ func Slugify(name string) string {
 
 // CreateProject makes a project for a team.
 func (s *Service) CreateProject(ctx context.Context, ownerID, name string) (Project, error) {
+	p, err := s.createProject(ctx, ownerID, name, "", "")
+	if isUniqueViolation(err) {
+		// Said in terms of the name, because the name is what somebody typed;
+		// the slug it collided on is a detail of how the address is built.
+		return Project{}, fmt.Errorf("a project called %q already exists", strings.TrimSpace(name))
+	}
+	return p, err
+}
+
+// createProject writes one project, at a slug caller and repository agree on.
+//
+// slug is passed rather than derived so ProjectForRepo can retry at a second
+// address when the obvious one is taken; empty means derive it from the name,
+// which is what somebody typing into the form wants.
+func (s *Service) createProject(ctx context.Context, ownerID, name, slug, repo string) (Project, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return Project{}, errors.New("a project needs a name")
@@ -72,7 +92,9 @@ func (s *Service) CreateProject(ctx context.Context, ownerID, name string) (Proj
 		return Project{}, errors.New("project name must be at most 100 characters")
 	}
 
-	slug := Slugify(name)
+	if slug == "" {
+		slug = Slugify(name)
+	}
 	if !slugRE.MatchString(slug) {
 		// Reached when the name is entirely punctuation or non-Latin: there is
 		// nothing to build an address out of, and a generated one would be a
@@ -82,15 +104,77 @@ func (s *Service) CreateProject(ctx context.Context, ownerID, name string) (Proj
 	}
 
 	row, err := s.q.CreateProject(ctx, dbgen.CreateProjectParams{
-		OwnerID: ownerID, Slug: slug, Name: name,
+		OwnerID: ownerID, Slug: slug, Name: name, Repo: repo,
 	})
 	if err != nil {
-		if isUniqueViolation(err) {
-			return Project{}, fmt.Errorf("a project called %q already exists", name)
-		}
+		// Returned as it came, so a caller can tell a name that is taken from a
+		// database that is unreachable. CreateProject turns the first into
+		// something worth showing a person.
 		return Project{}, fmt.Errorf("app: create project: %w", err)
 	}
 	return toProject(row), nil
+}
+
+// ErrNoRepoIdentity means a URL had nothing in it to name a project after.
+var ErrNoRepoIdentity = errors.New("app: that repository URL has no name in it")
+
+// ProjectForRepo returns the project standing for a repository, creating it the
+// first time an app is deployed from one.
+//
+// This is what makes the panel answer the question people ask it. Before, every
+// app landed in "Default" and the list said only how many there were; grouped by
+// repository it says which system each app came out of, using the name the team
+// already calls that system by.
+//
+// A repository, not a repository-and-branch: an app built from `main` and its
+// staging twin built from `release` are two deployments of one system, and
+// splitting them would put the two halves of a promotion on different canvases.
+func (s *Service) ProjectForRepo(ctx context.Context, ownerID string, repo Repo) (Project, error) {
+	identity := repo.Identity()
+	if !identity.Set() {
+		return Project{}, ErrNoRepoIdentity
+	}
+
+	row, err := s.q.GetProjectByRepo(ctx, dbgen.GetProjectByRepoParams{
+		OwnerID: ownerID, Repo: identity.String(),
+	})
+	switch {
+	case err == nil:
+		return toProject(row), nil
+	case !errors.Is(err, pgx.ErrNoRows):
+		return Project{}, fmt.Errorf("app: get project for repo: %w", err)
+	}
+
+	// The repository's own name first, because that is what the team calls it.
+	// "acme/api" and "beta/api" are different systems that would want the same
+	// address, so the loser falls back to including the owner — still a name
+	// somebody recognises, unlike a counter or a hash.
+	for _, slug := range []string{Slugify(identity.Name), Slugify(identity.Path())} {
+		if slug == "" {
+			continue
+		}
+		p, err := s.createProject(ctx, ownerID, identity.Name, slug, identity.String())
+		if err == nil {
+			s.log.Info("project created for repository",
+				slog.String("repo", identity.String()), slog.String("project", p.Slug))
+			return p, nil
+		}
+		if !isUniqueViolation(err) {
+			return Project{}, err
+		}
+		// Two deploys from one repository can arrive together — a workflow that
+		// creates a web app and its worker. The loser of that race reads the row
+		// the winner wrote rather than failing the deploy over a name.
+		if row, err := s.q.GetProjectByRepo(ctx, dbgen.GetProjectByRepoParams{
+			OwnerID: ownerID, Repo: identity.String(),
+		}); err == nil {
+			return toProject(row), nil
+		}
+	}
+
+	return Project{}, fmt.Errorf(
+		"app: %q and %q are both taken by other projects — rename one, or move the app yourself",
+		Slugify(identity.Name), Slugify(identity.Path()))
 }
 
 // Projects lists a team's projects.
@@ -117,7 +201,8 @@ func (s *Service) Projects(ctx context.Context, ownerID string) ([]Project, erro
 	out := make([]Project, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, Project{
-			ID: r.ID, OwnerID: r.OwnerID, Slug: r.Slug, Name: r.Name, Apps: r.AppCount,
+			ID: r.ID, OwnerID: r.OwnerID, Slug: r.Slug, Name: r.Name,
+			Repo: r.Repo, Apps: r.AppCount,
 		})
 	}
 	return out, nil
@@ -307,5 +392,8 @@ func pgUUID(id uuid.UUID) pgtype.UUID {
 }
 
 func toProject(row dbgen.Project) Project {
-	return Project{ID: row.ID, OwnerID: row.OwnerID, Slug: row.Slug, Name: row.Name}
+	return Project{
+		ID: row.ID, OwnerID: row.OwnerID,
+		Slug: row.Slug, Name: row.Name, Repo: row.Repo,
+	}
 }

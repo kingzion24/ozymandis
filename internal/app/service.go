@@ -410,6 +410,32 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 		return App{}, err
 	}
 
+	// An app built from a repository is drawn on that repository's canvas
+	// unless the caller named a project. Nobody deploying from CI passes one —
+	// there is no field for it in the workflow, the CLI or the API — so
+	// without this every app lands in "Default" and the panel can only say how
+	// many apps there are, not which system each came out of.
+	//
+	// Outside the transaction below, so a create that then fails leaves an
+	// empty project rather than a half-applied app. An empty project is a row
+	// somebody can delete or deploy into; it is the same thing the Create
+	// button on the projects page makes.
+	if in.ProjectID == uuid.Nil && in.Repo.Set() {
+		project, err := s.ProjectForRepo(ctx, ownerID, in.Repo)
+		if err != nil {
+			// Not fatal. Which canvas an app is drawn on is presentation, and
+			// refusing a deploy over it would make a cosmetic feature able to
+			// stop a release. It falls back to the default project, which is
+			// where it would have gone before any of this existed.
+			s.log.Warn("could not place app in its repository's project",
+				slog.String("app", in.Name),
+				slog.String("repo", in.Repo.URL),
+				slog.String("error", err.Error()))
+		} else {
+			in.ProjectID = project.ID
+		}
+	}
+
 	namespace := Namespace(ownerID, in.Name)
 
 	// Minted before the transaction so a failure here writes nothing. The
