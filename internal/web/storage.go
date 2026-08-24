@@ -266,6 +266,27 @@ func (s *Server) commandSet(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
 }
 
+// resourcesSet sets an app's cpu/memory request and limit, or clears them.
+//
+// Full replace, the same convention the form itself uses: every field is
+// always in the POST body, blank when its input was left empty, so there is
+// no "field omitted" case here to distinguish from "field cleared" the way
+// the CLI has to when a flag is simply absent.
+func (s *Server) resourcesSet(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name := chi.URLParam(r, "name")
+
+	_, err := s.apps.SetResources(ctx, owner.ID, name,
+		r.FormValue("cpu_request"), r.FormValue("cpu_limit"),
+		r.FormValue("memory_request"), r.FormValue("memory_limit"))
+	if err != nil {
+		s.appActionFailed(w, r, name, "settings", err)
+		return
+	}
+	http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
+}
+
 // releaseCommandSet sets what runs against a new image before traffic moves.
 func (s *Server) releaseCommandSet(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()

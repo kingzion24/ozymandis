@@ -400,6 +400,11 @@ Only the flags given are changed — `oz resources set --app web --cpu-limit
 above this install's ceiling (2 CPU / 4Gi by default) is refused with the
 number that was rejected, before anything is written.
 
+The dashboard has the same thing on an app's **Settings** tab, under
+**Resources** — four fields, pre-filled with whatever is set today, submitted
+together. Clearing a field there and saving is how you clear it back to the
+default from the browser.
+
 ### Getting into a container
 
 ```sh

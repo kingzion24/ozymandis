@@ -58,6 +58,10 @@ type Apps interface {
 	SetHealth(ctx context.Context, ownerID, name, healthPath string, liveness bool) error
 	SetCommand(ctx context.Context, ownerID, name, command string) error
 
+	// SetResources sets an app's cpu/memory request and limit. Empty clears a
+	// field back to the namespace default.
+	SetResources(ctx context.Context, ownerID, name, cpuRequest, cpuLimit, memoryRequest, memoryLimit string) (app.App, error)
+
 	// SetReleaseCommand is what runs against a new image before traffic moves
 	// to it. Not applied on save, unlike the others here: it is an instruction
 	// for the next deploy, and running it when somebody typed it into a form
@@ -597,6 +601,7 @@ func (s *Server) Handler() http.Handler {
 			r.Post("/apps/{name}/project", s.appMove)
 			r.Post("/apps/{name}/health", s.healthSet)
 			r.Post("/apps/{name}/command", s.commandSet)
+			r.Post("/apps/{name}/resources", s.resourcesSet)
 			r.Post("/apps/{name}/release-command", s.releaseCommandSet)
 
 			// Deploy on push. Gated on Pushes being wired, which needs a secret

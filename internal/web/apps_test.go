@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -36,6 +37,10 @@ type fakeApps struct {
 	commands        map[string]string
 	releaseCommands map[string]string
 
+	// resources records what SetResources was asked for, keyed by app name,
+	// the same way commands does for SetCommand.
+	resources map[string]string
+
 	// moved is the app name and destination slug of the last MoveApp.
 	moved [2]string
 
@@ -62,6 +67,7 @@ func newFakeApps(apps ...app.App) *fakeApps {
 		scaled:          map[string]int32{},
 		commands:        map[string]string{},
 		releaseCommands: map[string]string{},
+		resources:       map[string]string{},
 	}
 	for _, a := range apps {
 		f.byOwner[a.OwnerID] = append(f.byOwner[a.OwnerID], a)
@@ -659,6 +665,17 @@ func (f *fakeApps) SetCommand(_ context.Context, _, name, command string) error 
 	}
 	f.commands[name] = command
 	return nil
+}
+
+func (f *fakeApps) SetResources(
+	_ context.Context, _, name, cpuRequest, cpuLimit, memoryRequest, memoryLimit string,
+) (app.App, error) {
+	if f.err != nil {
+		return app.App{}, f.err
+	}
+	f.resources[name] = fmt.Sprintf("%s/%s/%s/%s", cpuRequest, cpuLimit, memoryRequest, memoryLimit)
+	return app.App{Name: name, CPURequest: cpuRequest, CPULimit: cpuLimit,
+		MemoryRequest: memoryRequest, MemoryLimit: memoryLimit}, nil
 }
 
 // SetReleaseCommand mirrors SetCommand: parsed on the way in, so a bad line is

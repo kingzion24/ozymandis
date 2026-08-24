@@ -934,6 +934,39 @@ templ appSettings(d AppDetailData) {
 			</p>
 		</div>
 	</div>
+	<div class="panel mb-5">
+		<div class="panel-header"><span class="panel-title">Resources</span></div>
+		<div class="panel-body">
+			<form method="post" action={ templ.SafeURL("/apps/" + a.Name + "/resources") } class="flex flex-wrap items-end gap-4">
+				<div class="field w-[130px]">
+					<label class="label" for="cpu-request">CPU request</label>
+					<input class="control mono" id="cpu-request" name="cpu_request" value={ a.CPURequest } placeholder="100m"/>
+				</div>
+				<div class="field w-[130px]">
+					<label class="label" for="cpu-limit">CPU limit</label>
+					<input class="control mono" id="cpu-limit" name="cpu_limit" value={ a.CPULimit } placeholder="500m"/>
+				</div>
+				<div class="field w-[130px]">
+					<label class="label" for="memory-request">Memory request</label>
+					<input class="control mono" id="memory-request" name="memory_request" value={ a.MemoryRequest } placeholder="128Mi"/>
+				</div>
+				<div class="field w-[130px]">
+					<label class="label" for="memory-limit">Memory limit</label>
+					<input class="control mono" id="memory-limit" name="memory_limit" value={ a.MemoryLimit } placeholder="512Mi"/>
+				</div>
+				<button class="btn btn-primary mb-6" type="submit">Save</button>
+			</form>
+			<p class="text-[12px] text-muted-foreground">
+				Empty falls back to the namespace default, currently
+				{ orchestrator.DefaultLimits.DefaultCPU } CPU /
+				{ orchestrator.DefaultLimits.DefaultMemory } memory, so no container
+				runs unbounded. A value above this install's ceiling of
+				{ orchestrator.DefaultLimits.MaxCPU } CPU /
+				{ orchestrator.DefaultLimits.MaxMemory } memory is refused, naming
+				what was typed and what the ceiling is.
+			</p>
+		</div>
+	</div>
 	if d.CanPush && a.Repo.Set() {
 		<div class="panel mb-5">
 			<div class="panel-header"><span class="panel-title">Deploy on push</span></div>
