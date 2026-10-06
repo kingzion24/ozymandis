@@ -2,8 +2,10 @@ package k8s
 
 import (
 	"fmt"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"strconv"
 	"strings"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -139,12 +141,19 @@ func buildJob(
 		"ozymandis/build":           "true",
 	}
 
+	deadline := int64((buildTimeout + buildDeadlineSlack).Seconds())
+
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name, Namespace: BuildNamespace, Labels: labels,
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit:            &backoff,
+			BackoffLimit: &backoff,
+			// The cluster's own cap, a little past the one this process
+			// enforces. That one lives in a goroutine, and a process restarted
+			// during a hung build takes it along: the Job then ran for ever,
+			// and the reconciler left it alone for as long as it was running.
+			ActiveDeadlineSeconds:   &deadline,
 			TTLSecondsAfterFinished: &ttl,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
@@ -189,10 +198,10 @@ func buildJob(
 						},
 					}, sshVolumes(sshSecret)...),
 					InitContainers: []corev1.Container{
-						cloneStep(req, sshSecret),
-						dockerfileStep(req),
+						bounded(cloneStep(req, sshSecret)),
+						bounded(dockerfileStep(req)),
 					},
-					Containers: []corev1.Container{buildpackStep(req)},
+					Containers: []corev1.Container{bounded(buildpackStep(req))},
 				},
 			},
 		},
@@ -528,4 +537,29 @@ echo "Pushed $IMAGE"
 			{Name: "registry", MountPath: "/registry", ReadOnly: true},
 		},
 	}
+}
+
+// buildDeadlineSlack is how far past buildTimeout the Job's own deadline sits,
+// so the process's cap — which can say why — is the one that normally fires.
+const buildDeadlineSlack = 5 * time.Minute
+
+// bounded gives a build step a memory ceiling.
+//
+// The build namespace has no LimitRange, so a step ran with whatever the node
+// had: a compiler with a leak, or three pushes building at once, took memory
+// from the apps and from the control plane's own Postgres, which share the
+// machine. The ceiling is high because builds are legitimately hungry, and it
+// is on memory alone — CPU is shared out by request when it is short, and a
+// CPU limit would only make every build slower on an idle node.
+func bounded(c corev1.Container) corev1.Container {
+	c.Resources = corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("100m"),
+			corev1.ResourceMemory: resource.MustParse("256Mi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceMemory: resource.MustParse("4Gi"),
+		},
+	}
+	return c
 }

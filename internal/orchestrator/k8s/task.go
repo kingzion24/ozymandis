@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"k8s.io/apimachinery/pkg/api/resource"
 	stdmaps "maps"
 	"slices"
 	"time"
@@ -263,6 +264,7 @@ func taskPodSpec(spec orchestrator.TaskSpec) corev1.PodSpec {
 			SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 		},
 		VolumeMounts: []corev1.VolumeMount{{Name: tmpVolumeName, MountPath: "/tmp"}},
+		Resources:    taskResources(),
 	}
 
 	// Sorted, so the same spec produces the same object every time. An unsorted
@@ -301,6 +303,27 @@ func taskPodSpec(spec orchestrator.TaskSpec) corev1.PodSpec {
 
 	pod.Containers = []corev1.Container{container}
 	return pod
+}
+
+// taskResources is what every task container asks for and may use.
+//
+// Stated rather than left to the namespace LimitRange, whose default is sized
+// for a small web process: 128Mi. A task is a release command, a pg_dump piped
+// into restic, a restore — work that is short and heavy — and under that
+// default a migration or a backup was killed for memory with the app it
+// belonged to already given more. The request stays small so a task never
+// fails to schedule on a busy node; the limit is where the room is.
+func taskResources() corev1.ResourceRequirements {
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("50m"),
+			corev1.ResourceMemory: resource.MustParse("64Mi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("1"),
+			corev1.ResourceMemory: resource.MustParse("1Gi"),
+		},
+	}
 }
 
 // taskJob wraps the pod as a one-off Job.
