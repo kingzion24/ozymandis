@@ -318,3 +318,33 @@ func TestOnlyTheCanvasIsFullBleed(t *testing.T) {
 		}
 	}
 }
+
+// A control plane that cannot reach its cluster or its database must fail the
+// health check. Every gate that decides whether an install is fit to keep —
+// the installer, the upgrader's rollback — reads nothing but this status code.
+func TestHealthzFailsWhenADependencyIsDown(t *testing.T) {
+	down := errors.New("dial tcp 10.0.0.1:6443: connect: connection refused")
+
+	for name, opts := range map[string]Options{
+		"cluster":  {Orchestrator: orchestrator.NewUnavailable(down)},
+		"database": {DatabasePing: func(context.Context) error { return down }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := get(t, testServer(t, opts), "/healthz")
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want 503", rec.Code)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if body[name] != "unreachable" {
+				t.Errorf("%s = %v, want it named as unreachable", name, body[name])
+			}
+			// Outside the sign-in, so the raw error must not be in the answer.
+			if strings.Contains(rec.Body.String(), "10.0.0.1") {
+				t.Errorf("the body leaks the underlying error: %s", rec.Body.String())
+			}
+		})
+	}
+}

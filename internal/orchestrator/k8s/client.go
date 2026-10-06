@@ -75,6 +75,24 @@ var _ orchestrator.Orchestrator = (*Orchestrator)(nil)
 // Connecting eagerly is deliberate: a misconfigured cluster should fail at
 // startup with a clear message, not at a customer's first deploy.
 func New(ctx context.Context, cfg Config, log *slog.Logger) (*Orchestrator, error) {
+	o, err := Connect(cfg, log)
+	if err != nil {
+		return nil, err
+	}
+	if err := o.Ping(ctx); err != nil {
+		return nil, err
+	}
+	return o, nil
+}
+
+// Connect builds the clients for a cluster without asking whether it answers.
+//
+// Separate from New for the caller that must keep going when it does not. The
+// clients dial on use, so an orchestrator built while the API server was down
+// starts working the moment it comes back — and until then every call fails
+// with the real reason, which is what a control plane that has lost its
+// cluster should be reporting.
+func Connect(cfg Config, log *slog.Logger) (*Orchestrator, error) {
 	restCfg, err := restConfig(cfg)
 	if err != nil {
 		return nil, err
@@ -108,9 +126,6 @@ func New(ctx context.Context, cfg Config, log *slog.Logger) (*Orchestrator, erro
 			slog.String("error", err.Error()))
 	}
 
-	if err := o.Ping(ctx); err != nil {
-		return nil, err
-	}
 	return o, nil
 }
 
@@ -157,13 +172,29 @@ func restConfig(cfg Config) (*rest.Config, error) {
 }
 
 // Ping verifies the cluster answers.
-func (o *Orchestrator) Ping(_ context.Context) error {
-	v, err := o.client.Discovery().ServerVersion()
-	if err != nil {
-		return fmt.Errorf("k8s: unreachable: %w", err)
+//
+// The discovery call takes no context, so it is raced against the caller's: a
+// health check with a deadline must be able to give up on an API server that
+// accepts the connection and then says nothing.
+func (o *Orchestrator) Ping(ctx context.Context) error {
+	done := make(chan error, 1)
+	go func() {
+		v, err := o.client.Discovery().ServerVersion()
+		if err == nil {
+			o.log.Debug("cluster reachable", slog.String("version", v.String()))
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("k8s: unreachable: %w", err)
+		}
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("k8s: unreachable: %w", ctx.Err())
 	}
-	o.log.Debug("cluster reachable", slog.String("version", v.String()))
-	return nil
 }
 
 // WithIngressNamespace names where the ingress controller runs, turning on

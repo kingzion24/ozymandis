@@ -187,6 +187,7 @@ func run() error {
 		// is set.
 		Authenticated: cfg.AccountsEnabled() || !cfg.Unauthenticated(),
 		Version:       version,
+		DatabasePing:  pool.Ping,
 		AppDomain:     cfg.AppDomain,
 		CertResolver:  cfg.CertResolver,
 		Logger:        log,
@@ -331,31 +332,56 @@ func mount(
 	return root, nil
 }
 
-// newOrchestrator connects to a cluster, or falls back to an in-memory stub.
+// newOrchestrator connects to a cluster, and starts without one if it must.
 //
-// Falling back rather than exiting is deliberate: a self-hoster should be able
-// to start the dashboard, see a clear "cluster unreachable" state, and fix
-// their kubeconfig from there — rather than face a process that refuses to
-// boot and a log line they have to find.
+// Not exiting is deliberate: a self-hoster should be able to start the
+// dashboard, see a clear "cluster unreachable" state, and fix their kubeconfig
+// from there — rather than face a process that refuses to boot and a log line
+// they have to find.
+//
+// What it never does is pretend. There is no in-memory stand-in on this path:
+// an install that cannot reach its cluster refuses the work and fails its
+// health check, so nothing — a person, an upgrade script, a deploy pipeline —
+// reads it as healthy.
 func newOrchestrator(
 	ctx context.Context, cfg config.Config, log *slog.Logger,
 ) (orchestrator.Orchestrator, error) {
-	orch, err := k8s.New(ctx, k8s.Config{
+	orch, err := k8s.Connect(k8s.Config{
 		InCluster:        cfg.KubeInCluster,
 		Kubeconfig:       cfg.Kubeconfig,
 		IngressNamespace: cfg.IngressNamespace,
 	}, log)
-	if err == nil {
-		log.Info("connected to cluster")
+	if err != nil {
+		// No usable cluster configuration at all. Everything that needs a
+		// cluster refuses, and the health check says why.
+		log.Warn("no cluster connection could be configured — the dashboard "+
+			"will start, and every deploy will be refused until this is fixed",
+			slog.String("error", err.Error()),
+		)
+		return orchestrator.NewUnavailable(err), nil
+	}
+
+	// Bounded: an API server that accepts the connection and never answers
+	// must not hold startup, and the dashboard, hostage.
+	pingCtx, cancel := context.WithTimeout(ctx, clusterPingTimeout)
+	defer cancel()
+	if err := orch.Ping(pingCtx); err != nil {
+		// Kept, not replaced. This is the real client and it dials on use, so
+		// it recovers by itself when the cluster does; until then deploys fail
+		// with this same error and /healthz answers 503.
+		log.Warn("cluster unreachable at startup — deploys will fail until it "+
+			"answers; no restart is needed once it does",
+			slog.String("error", err.Error()),
+		)
 		return orch, nil
 	}
 
-	log.Warn("cluster unreachable — starting with an in-memory orchestrator; "+
-		"deploys will not reach a cluster until this is fixed",
-		slog.String("error", err.Error()),
-	)
-	return orchestrator.NewNoop(), nil
+	log.Info("connected to cluster")
+	return orch, nil
 }
+
+// clusterPingTimeout bounds the reachability check made at startup.
+const clusterPingTimeout = 10 * time.Second
 
 // newIdentity picks which of the providers resolves an owner.
 //

@@ -254,6 +254,11 @@ type Options struct {
 	// worse answer than no form.
 	Accounts Accounts
 
+	// DatabasePing reports whether the database answers, for the health check.
+	// Nil leaves the database out of it, which is what a test server with no
+	// database wants.
+	DatabasePing func(context.Context) error
+
 	// Mailer delivers sign-in links. Defaults to the logging transport, which
 	// is the break-glass path when mail breaks after accounts are switched on.
 	Mailer notify.Mailer
@@ -328,6 +333,7 @@ type Server struct {
 	backups Backups
 
 	accounts      Accounts
+	dbPing        func(context.Context) error
 	mailer        notify.Mailer
 	baseURL       string
 	sessionTTL    time.Duration
@@ -400,6 +406,7 @@ func New(opts Options) (*Server, error) {
 		logs:          opts.Logs,
 		backups:       opts.Backups,
 		accounts:      opts.Accounts,
+		dbPing:        opts.DatabasePing,
 		mailer:        opts.Mailer,
 		baseURL:       strings.TrimRight(opts.BaseURL, "/"),
 		sessionTTL:    opts.SessionTTL,
@@ -774,20 +781,47 @@ func detailTab(r *http.Request) string {
 	return ""
 }
 
+// health answers 200 only when both things the control plane cannot work
+// without are answering: the cluster and the database.
+//
+// Everything that decides whether an install is fit to keep — the installer,
+// the upgrader's rollback, the release pipeline — reads this status code, so a
+// dependency missing from it is a failure those cannot see. The database was
+// one: a binary on a schema it could not query still answered ok.
+//
+// The body names which side is down and nothing more. This is outside the
+// sign-in, and a raw client error carries addresses and certificate details
+// that are nobody's business from there; the overview page has the detail.
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), healthTimeout)
+	defer cancel()
+
 	body := map[string]any{"status": "ok", "version": s.ver}
 	code := http.StatusOK
 
-	if err := s.orch.Ping(r.Context()); err != nil {
+	if err := s.orch.Ping(ctx); err != nil {
+		s.log.Warn("health: cluster", slog.String("error", err.Error()))
 		body["status"] = "degraded"
-		body["cluster"] = err.Error()
+		body["cluster"] = "unreachable"
 		code = http.StatusServiceUnavailable
+	}
+	if s.dbPing != nil {
+		if err := s.dbPing(ctx); err != nil {
+			s.log.Warn("health: database", slog.String("error", err.Error()))
+			body["status"] = "degraded"
+			body["database"] = "unreachable"
+			code = http.StatusServiceUnavailable
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(body)
 }
+
+// healthTimeout bounds the whole check, so a dependency that hangs is reported
+// as down rather than leaving the probe hanging with it.
+const healthTimeout = 5 * time.Second
 
 func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()

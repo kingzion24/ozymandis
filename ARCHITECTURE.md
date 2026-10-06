@@ -48,11 +48,15 @@ order, and the order is not incidental:
 2. **Migrate** — embedded SQL in `internal/store/migrations`, applied before
    anything opens a pool.
 3. **Connect** the pgx pool.
-4. **Connect the orchestrator.** `k8s.New` against a kubeconfig or in-cluster
-   credentials. *If the cluster is unreachable, startup does not fail* — it
-   falls back to `orchestrator.NewNoop()` and logs a warning. A self-hoster
+4. **Connect the orchestrator.** `k8s.Connect` against a kubeconfig or
+   in-cluster credentials. *If the cluster is unreachable, startup does not
+   fail* — the real client is kept, so it recovers by itself when the cluster
+   answers, and until then every deploy fails with the reason and `/healthz`
+   answers 503. With no usable kubeconfig at all it is
+   `orchestrator.NewUnavailable`, which refuses everything. A self-hoster
    should be able to reach the dashboard and fix their kubeconfig from there,
-   rather than face a process that refuses to boot.
+   rather than face a process that refuses to boot — but never one that
+   pretends: `orchestrator.NewNoop()` is for tests only.
 5. **Build the credential-shaped things eagerly**, so they fail at startup
    rather than at first use: the mailer, the `secret.Keeper`. A malformed
    secret key that only surfaced the first time somebody saved a secret would
@@ -752,7 +756,7 @@ design:
 
 | Situation | Behaviour | Why |
 |---|---|---|
-| Cluster unreachable at startup | boot with a no-op orchestrator, warn | fix the kubeconfig from the dashboard, not from a log line you have to find |
+| Cluster unreachable at startup | boot, refuse cluster work, `/healthz` 503 | fix the kubeconfig from the dashboard, not from a log line you have to find |
 | No secret key | the surface is not mounted at all | a credential that cannot be sealed is not held |
 | No registry / no builder | Git source listed unavailable | "not set up" ≠ "broken" |
 | Build fails | nothing applied; previous image keeps serving | redeploying the old image under a row that says it built the new commit is a lie the history would keep telling |
