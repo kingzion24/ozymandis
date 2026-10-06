@@ -559,8 +559,10 @@ func (o *Orchestrator) BuildState(
 		switch c.Type {
 		case batchv1.JobComplete:
 			state.Done = true
+			state.FinishedAt = c.LastTransitionTime.Time
 		case batchv1.JobFailed:
 			state.Done, state.Failed = true, true
+			state.FinishedAt = c.LastTransitionTime.Time
 			state.Reason = o.buildFailureReason(ctx, jobName, c)
 		}
 	}

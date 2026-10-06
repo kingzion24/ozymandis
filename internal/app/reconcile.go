@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/jackc/pgx/v5"
 	"log/slog"
 	"time"
 
@@ -25,6 +26,11 @@ const ReconcileInterval = time.Minute
 // before the Job is created, so a reconcile landing in that window would see no
 // Job, conclude the build had died, and fail a build that was about to start.
 const buildGrace = 2 * time.Minute
+
+// settleGrace is how long a finished Job is left to the goroutine that ran it
+// before the reconciler records the result itself. Longer than the thirty
+// seconds that goroutine may spend waiting for the Job to be deleted.
+const settleGrace = 90 * time.Second
 
 // ReconcileBuilds settles builds that claim to be running.
 //
@@ -67,6 +73,13 @@ func (s *Service) ReconcileBuilds(ctx context.Context) error {
 		if state.Found && !state.Done {
 			continue
 		}
+		// A Job that has only just finished still has an owner: the goroutine
+		// that ran it tails the log, waits for the Job to be deleted and then
+		// writes the result. Settling inside that window failed builds that
+		// had succeeded.
+		if state.Found && time.Since(state.FinishedAt) < settleGrace {
+			continue
+		}
 
 		s.settleBuild(ctx, row, state)
 		settled++
@@ -105,9 +118,14 @@ func (s *Service) settleBuild(
 			"running it is gone — this usually means Ozymandis was restarted mid-build"
 	}
 
-	if _, err := s.q.FinishBuild(ctx, dbgen.FinishBuildParams{
+	switch _, err := s.q.FinishBuild(ctx, dbgen.FinishBuildParams{
 		ID: row.ID, Status: status, Message: message,
-	}); err != nil {
+	}); {
+	case errors.Is(err, pgx.ErrNoRows):
+		// Recorded by the goroutine that ran it, between the list and now. Its
+		// answer is the real one, and its deployment is its own to finish.
+		return
+	case err != nil:
 		s.log.Error("settle build", slog.String("error", err.Error()))
 		return
 	}

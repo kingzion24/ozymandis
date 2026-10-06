@@ -82,7 +82,7 @@ SET status      = $1,
     image       = $3,
     commit_sha  = $4,
     finished_at = now()
-WHERE id = $5
+WHERE id = $5 AND status = 'running'
 RETURNING id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name
 `
 
@@ -94,6 +94,12 @@ type FinishBuildParams struct {
 	ID        uuid.UUID
 }
 
+// Only a build still running can be finished. Two things write this — the
+// goroutine that ran the build and the reconciler settling one whose process
+// went away — and without the guard the second overwrote the first: a build
+// the reconciler had failed, along with its deployment, was rewritten to
+// succeeded a moment later and left a succeeded build under a failed deploy.
+// Whoever arrives second gets no row and knows it lost.
 func (q *Queries) FinishBuild(ctx context.Context, arg FinishBuildParams) (Build, error) {
 	row := q.db.QueryRow(ctx, finishBuild,
 		arg.Status,

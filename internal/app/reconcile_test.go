@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"errors"
+	"github.com/jackc/pgx/v5"
 	"testing"
+	"time"
 
 	"github.com/kingzion24/ozymandis/internal/orchestrator"
 	"github.com/kingzion24/ozymandis/internal/store/dbgen"
@@ -252,5 +254,91 @@ func TestSettlingIsIdempotent(t *testing.T) {
 	}
 	if got.Status != BuildFailed {
 		t.Errorf("status = %q after two passes", got.Status)
+	}
+}
+
+// A Job that finished a moment ago still belongs to the goroutine that ran it:
+// that goroutine tails the log, waits for the Job to be deleted, and only then
+// writes the result. A reconcile landing in between used to fail a build that
+// had just succeeded.
+func TestABuildThatJustFinishedIsLeftToItsOwner(t *testing.T) {
+	ctx := context.Background()
+	builder := &stubBuilder{state: orchestrator.BuildState{
+		Found: true, Done: true, FinishedAt: time.Now(),
+	}}
+	s, _, pool := testService(t, Options{Builder: builder, Images: stubImages{}})
+	ownerID := owner(t, s, pool, "owner-reconcile-fresh")
+
+	a, err := s.Create(ctx, ownerID, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	row := abandonedBuild(t, s, ownerID, a)
+
+	if err := s.ReconcileBuilds(ctx); err != nil {
+		t.Fatalf("ReconcileBuilds: %v", err)
+	}
+
+	got, err := s.q.GetBuild(ctx, dbgen.GetBuildParams{OwnerID: ownerID, ID: row.ID})
+	if err != nil {
+		t.Fatalf("GetBuild: %v", err)
+	}
+	if got.Status != BuildRunning {
+		t.Fatalf("build status = %q — settled while its owner was still recording it",
+			got.Status)
+	}
+}
+
+// Two things finish a build, and the second must not overwrite the first. The
+// reconciler settling a build its owner has already recorded as succeeded used
+// to fail the deployment under it.
+func TestSettlingDoesNotOverwriteARecordedResult(t *testing.T) {
+	ctx := context.Background()
+	builder := &stubBuilder{} // Found: false — the Job has been cleaned up.
+	s, _, pool := testService(t, Options{Builder: builder, Images: stubImages{}})
+	ownerID := owner(t, s, pool, "owner-reconcile-raced")
+
+	a, err := s.Create(ctx, ownerID, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	row := abandonedBuild(t, s, ownerID, a)
+
+	// The owner records its result after the reconciler has listed the build
+	// and before it settles it.
+	if _, err := s.q.FinishBuild(ctx, dbgen.FinishBuildParams{
+		ID: row.ID, Status: BuildSucceeded, Image: "registry.test/web:abc",
+	}); err != nil {
+		t.Fatalf("FinishBuild as the owner: %v", err)
+	}
+	s.settleBuild(ctx, row, orchestrator.BuildState{})
+
+	got, err := s.q.GetBuild(ctx, dbgen.GetBuildParams{OwnerID: ownerID, ID: row.ID})
+	if err != nil {
+		t.Fatalf("GetBuild: %v", err)
+	}
+	if got.Status != BuildSucceeded {
+		t.Errorf("build status = %q, want the owner's %q to stand", got.Status, BuildSucceeded)
+	}
+	deps, err := s.Deployments(ctx, ownerID, a.ID, 10)
+	if err != nil {
+		t.Fatalf("Deployments: %v", err)
+	}
+	for _, d := range deps {
+		if d.ID == row.DeploymentID && d.Status == DeployFailed {
+			t.Error("the deployment was failed by a reconciler that had lost the race")
+		}
+	}
+
+	// And the other order: a result arriving after the build was settled gets
+	// no row, so its writer knows not to act on it.
+	if _, err := s.q.FinishBuild(ctx, dbgen.FinishBuildParams{
+		ID: row.ID, Status: BuildFailed, Message: "late",
+	}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("a second FinishBuild: err = %v, want pgx.ErrNoRows", err)
 	}
 }

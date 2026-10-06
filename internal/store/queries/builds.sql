@@ -15,13 +15,19 @@ SET log = log || @chunk::text
 WHERE id = @id;
 
 -- name: FinishBuild :one
+-- Only a build still running can be finished. Two things write this — the
+-- goroutine that ran the build and the reconciler settling one whose process
+-- went away — and without the guard the second overwrote the first: a build
+-- the reconciler had failed, along with its deployment, was rewritten to
+-- succeeded a moment later and left a succeeded build under a failed deploy.
+-- Whoever arrives second gets no row and knows it lost.
 UPDATE builds
 SET status      = @status,
     message     = @message,
     image       = @image,
     commit_sha  = @commit_sha,
     finished_at = now()
-WHERE id = @id
+WHERE id = @id AND status = 'running'
 RETURNING *;
 
 -- name: GetBuildForDeployment :one

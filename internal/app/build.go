@@ -181,10 +181,20 @@ func (s *Service) runBuild(
 	if buildErr != nil {
 		status, message, pushed = BuildFailed, buildErr.Error(), ""
 	}
-	if _, err := s.q.FinishBuild(ctx, dbgen.FinishBuildParams{
+	switch _, err := s.q.FinishBuild(ctx, dbgen.FinishBuildParams{
 		ID: row.ID, Status: status, Message: message,
 		Image: pushed, CommitSha: result.CommitSHA,
-	}); err != nil {
+	}); {
+	case errors.Is(err, pgx.ErrNoRows):
+		// The reconciler settled this build as failed before the result got
+		// here, and failed its deployment with it. That record stands: an
+		// image applied now would be running under a deployment that says it
+		// never shipped.
+		if buildErr == nil {
+			return "", errors.New("app: the build finished after it had been " +
+				"recorded as failed — deploy again to use it")
+		}
+	case err != nil:
 		// Logged rather than returned: the build itself is what the caller
 		// asked about, and losing the record of a build that worked should not
 		// turn it into a build that failed.

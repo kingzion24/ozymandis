@@ -965,6 +965,11 @@ type BuildState struct {
 	Done   bool
 	Failed bool
 	Reason string
+
+	// FinishedAt is when a Done Job reached that state, zero when unknown. The
+	// reconciler waits on it: a Job that completed a moment ago still has a
+	// goroutine about to record the result.
+	FinishedAt time.Time
 }
 
 // Why an app's HTTP log is empty.
