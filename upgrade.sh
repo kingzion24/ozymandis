@@ -28,11 +28,16 @@ CLI_BIN="${INSTALL_DIR}/oz"
 # CLI is installed after it.
 CLI_STAGED="${INSTALL_DIR}/oz.staged"
 ENV_FILE="/etc/ozymandis/ozymandis.env"
+# Database dumps taken before each upgrade. Root-only: a dump holds every
+# sealed secret and every password hash.
+BACKUP_DIR="/var/lib/ozymandis/backups"
+BACKUPS_KEPT=3
 
 VERSION=""
 
 say()  { printf '  %s\n' "$*"; }
 step() { printf '\n\033[1m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[33mwarning:\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
@@ -46,9 +51,9 @@ usage() {
 		  curl -sSL https://kingzion24.github.io/ozymandis/upgrade.sh | sudo sh
 
 		Replaces the binary and restarts the service. It does not touch K3s,
-		Postgres, the environment file, or the unit. If the new version does not
-		come up healthy the previous binary is put back, so a bad release costs
-		a restart rather than an outage.
+		Postgres, the environment file, or the unit. The database is dumped to
+		${BACKUP_DIR} first. If the new version does not come up healthy the
+		previous binary is put back.
 
 		Flags (when piped, pass them after 'sh -s --'):
 		  --version vX.Y.Z    upgrade or downgrade to a specific release
@@ -64,6 +69,62 @@ parse_flags() {
 			*) die "unknown flag '$1'" ;;
 		esac
 	done
+}
+
+# backup_database dumps the control plane's database before the new binary is
+# allowed to migrate it.
+#
+# The rollback below restores a binary and nothing else. Migrations run at
+# startup and only go forwards, so a release that migrates and then turns out
+# bad leaves the previous binary on a schema it was not written for, and until
+# now there was nothing to go back to. This is that something.
+#
+# Best effort, and loud when it does not happen. An install on a managed
+# database may have no pg_dump here, or one too old for the server; refusing to
+# upgrade over that would strand it on the version it has. But it must not pass
+# silently either, because the operator is about to rely on a rollback that has
+# just become half of one.
+backup_database() {
+	step "Backing up the database"
+
+	dsn=$(sed -n 's/^OZYMANDIS_DATABASE_URL=//p' "$ENV_FILE" | head -n1)
+	if [ -z "$dsn" ]; then
+		warn "no OZYMANDIS_DATABASE_URL in ${ENV_FILE} — upgrading WITHOUT a database backup"
+		return 0
+	fi
+	if ! need_cmd pg_dump; then
+		warn "pg_dump is not installed — upgrading WITHOUT a database backup"
+		return 0
+	fi
+
+	mkdir -p "$BACKUP_DIR"
+	chmod 0700 "$BACKUP_DIR"
+	out="${BACKUP_DIR}/pre-${VERSION}-$(date -u +%Y%m%dT%H%M%SZ).sql.gz"
+
+	# Written under a temporary name and moved into place, so a dump cut short
+	# never sits there looking like a backup. -w: never stop to ask for a
+	# password in a script nobody is watching. -Z: pg_dump's own gzip, so its
+	# exit status is the command's and not a pipeline's. --clean --if-exists so
+	# the dump replaces what is there when restored, rather than colliding
+	# with it.
+	umask 077
+	if pg_dump -w --clean --if-exists --dbname="$dsn" -Z 6 -f "${out}.part" 2>"${out}.err"; then
+		mv -f "${out}.part" "$out"
+		rm -f "${out}.err"
+		say "saved ${out}"
+	else
+		warn "the database backup failed — upgrading WITHOUT one:"
+		sed 's/^/    /' "${out}.err" >&2 || true
+		rm -f "${out}.part" "${out}.err"
+		return 0
+	fi
+
+	# Keep the newest few. Names sort by time within a version, and ls -t is
+	# the order that matters across versions.
+	# shellcheck disable=SC2012
+	ls -1t "$BACKUP_DIR"/pre-*.sql.gz 2>/dev/null \
+		| tail -n +$((BACKUPS_KEPT + 1)) \
+		| while IFS= read -r old; do rm -f "$old"; done
 }
 
 require_installed() {
@@ -183,6 +244,7 @@ main() {
 	fi
 
 	fetch
+	backup_database
 
 	# The outgoing binary is kept, not overwritten. It is the only copy that is
 	# known to have worked on this machine.

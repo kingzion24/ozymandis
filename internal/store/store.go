@@ -109,6 +109,7 @@ func Migrate(ctx context.Context, dsn string, log *slog.Logger) error {
 	}()
 
 	before, _ := goose.GetDBVersionContext(ctx, db)
+	warnIfSchemaIsNewer(before, log)
 	if err := goose.UpContext(ctx, db, migrationsDir); err != nil {
 		return fmt.Errorf("store: migrate: %w", err)
 	}
@@ -126,4 +127,28 @@ func Migrate(ctx context.Context, dsn string, log *slog.Logger) error {
 		)
 	}
 	return nil
+}
+
+// warnIfSchemaIsNewer says so when the database has been migrated past
+// anything this binary knows about.
+//
+// That is what a rollback leaves behind: the newer release migrated, the
+// previous binary was put back, and goose — finding nothing it has not already
+// applied — starts it without a word on a schema it was not written for.
+// Queries then fail one at a time at request time, which looks like anything
+// but its cause. Not refused, because most migrations only add and the older
+// binary runs fine on them; but it is the first thing to know when something
+// odd follows a rollback, so it is said at error level, once, at startup.
+func warnIfSchemaIsNewer(dbVersion int64, log *slog.Logger) {
+	known, err := goose.CollectMigrations(migrationsDir, 0, goose.MaxVersion)
+	if err != nil || len(known) == 0 {
+		return
+	}
+	newest := known[len(known)-1].Version
+	if dbVersion > newest {
+		log.Error("the database schema is newer than this binary — it was migrated "+
+			"by a later release, and this one may fail on tables it does not "+
+			"expect. Upgrade again, or restore the dump upgrade.sh took",
+			slog.Int64("database", dbVersion), slog.Int64("binary", newest))
+	}
 }

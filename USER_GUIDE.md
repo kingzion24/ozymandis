@@ -526,6 +526,21 @@ sudo cp -f /usr/local/bin/ozymandis.prev /usr/local/bin/ozymandis
 sudo systemctl restart ozymandis
 ```
 
+The binary is only half of a release: migrations run at startup and only go
+forwards. So the upgrader also dumps the database to
+`/var/lib/ozymandis/backups/` before the new version starts, and keeps the last
+three. If the previous binary misbehaves after a rollback — its startup log
+says when the schema is newer than it expects — restore the matching dump:
+
+```sh
+sudo systemctl stop ozymandis
+gunzip -c /var/lib/ozymandis/backups/pre-vX.Y.Z-<time>.sql.gz \
+  | sudo -u postgres psql -v ON_ERROR_STOP=1 --single-transaction ozymandis_command_center
+sudo systemctl start ozymandis
+```
+
+Anything created since that dump — apps, deploys, secrets — is not in it.
+
 Restarting the control plane does **not** interrupt your apps. They are ordinary
 Kubernetes Deployments and keep serving while Ozymandis is down; what stops is
 the dashboard, the API, and anything that needs them — deploys, log streaming,
