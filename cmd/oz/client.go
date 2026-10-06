@@ -170,6 +170,10 @@ type Status struct {
 	Ready     int32  `json:"ready"`
 	Available int32  `json:"available"`
 	Message   string `json:"message"`
+
+	// RolloutComplete is true once every replica is on the new version and
+	// available — the thing a deploy is waited on.
+	RolloutComplete bool `json:"rollout_complete"`
 }
 
 type App struct {

@@ -1,9 +1,15 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // capture runs f with Out and Err pointed at pipes and returns what each got.
@@ -236,5 +242,74 @@ func TestEmptyValuesAreLegible(t *testing.T) {
 
 	if !strings.Contains(stderr, "(unset)") {
 		t.Errorf("an empty value rendered as nothing at all:\n%s", stderr)
+	}
+}
+
+// --watch exists so a pipeline can trust the exit code. A superseded deploy is
+// finished and not failed, and reporting it as deployed told CI a commit was
+// live when nothing of it had been applied.
+func TestOnlyAnActiveDeploymentCountsAsDeployed(t *testing.T) {
+	for status, wantErr := range map[string]bool{
+		"active":     false,
+		"failed":     true,
+		"superseded": true,
+		"cancelled":  true,
+	} {
+		err := deployOutcome("web", Deployment{Status: status, Finished: true})
+		if (err != nil) != wantErr {
+			t.Errorf("status %q: err = %v, want an error: %v", status, err, wantErr)
+		}
+	}
+	if err := deployOutcome("web", Deployment{Status: "superseded"}); !errors.Is(err, errSuperseded) {
+		t.Errorf("a superseded deploy is not distinguishable from a failed one: %v", err)
+	}
+}
+
+// statusServer answers /status with each body in turn, repeating the last.
+func statusServer(t *testing.T, bodies ...string) *Env {
+	t.Helper()
+	var calls int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		body := bodies[min(calls, len(bodies)-1)]
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(ts.Close)
+
+	null, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open %s: %v", os.DevNull, err)
+	}
+	t.Cleanup(func() { null.Close() })
+	return &Env{
+		Client: NewClient(Context{Endpoint: ts.URL, Token: "t"}),
+		Out:    null, Err: null,
+	}
+}
+
+// "active" is the cluster accepting a version, not that version starting. The
+// watch has to see the rollout through, or a crash-looping image is reported as
+// deployed while the old pods keep serving.
+func TestWatchWaitsForTheRolloutToComplete(t *testing.T) {
+	env := statusServer(t,
+		`{"desired":2,"ready":1,"rollout_complete":false}`,
+		`{"desired":2,"ready":2,"rollout_complete":true}`,
+	)
+	if err := waitForRollout(context.Background(), env, "web", time.Millisecond, time.Second); err != nil {
+		t.Fatalf("a rollout that completed was reported as failed: %v", err)
+	}
+}
+
+func TestWatchFailsWhenTheNewVersionNeverTakesOver(t *testing.T) {
+	env := statusServer(t,
+		`{"desired":1,"ready":0,"message":"ImagePullBackOff","rollout_complete":false}`)
+
+	err := waitForRollout(context.Background(), env, "web", time.Millisecond, 20*time.Millisecond)
+	if err == nil {
+		t.Fatal("a rollout that never completed was reported as deployed")
+	}
+	if !strings.Contains(err.Error(), "ImagePullBackOff") {
+		t.Errorf("the error does not say why: %v", err)
 	}
 }

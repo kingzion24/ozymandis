@@ -231,12 +231,20 @@ func watchDeployment(ctx context.Context, env *Env, name string, started Deploym
 				continue
 			}
 
-			if dep.Status == "failed" {
+			if err := deployOutcome(name, dep); err != nil {
 				if dep.Message != "" {
 					fmt.Fprintf(env.Err, "\n%s\n", dep.Message)
 				}
 				// Non-zero, which is the property that makes this usable in CI.
-				return fmt.Errorf("oz: deploying %s failed", name)
+				return err
+			}
+
+			// "active" means the cluster accepted the new version, not that
+			// it started. An image that cannot be pulled, crashes on boot, or
+			// is refused at admission still gets this far, with the previous
+			// pods serving the whole time.
+			if err := waitForRollout(ctx, env, name, interval, rolloutTimeout); err != nil {
+				return err
 			}
 
 			fmt.Fprintf(env.Err, "Deployed %s.\n", name)
@@ -261,3 +269,75 @@ func findDeployment(deps []Deployment, id string) (Deployment, bool) {
 
 // writeAll is io.Writer plumbing used by the log commands.
 var _ = io.Discard
+
+// errSuperseded is a deploy that was overtaken before it shipped.
+var errSuperseded = errors.New("superseded")
+
+// deployOutcome is the verdict on a deployment that has finished.
+//
+// Only "active" is success. A superseded deployment has a finish time and is
+// not failed, so it used to fall through to "Deployed" and exit zero — telling
+// a pipeline that a commit was live when a newer deploy had retired it before
+// it applied anything.
+func deployOutcome(name string, dep Deployment) error {
+	switch dep.Status {
+	case "active":
+		return nil
+	case "failed":
+		return fmt.Errorf("oz: deploying %s failed", name)
+	case "superseded":
+		return fmt.Errorf("oz: deploying %s was %w by a newer deploy before it "+
+			"shipped — watch that one instead", name, errSuperseded)
+	default:
+		return fmt.Errorf("oz: deploying %s ended as %q", name, dep.Status)
+	}
+}
+
+// rolloutTimeout is how long --watch waits for the new version to take over
+// once the deploy has been applied. Generous for a slow readiness probe; a
+// rollout still incomplete after this is one that is not going to finish.
+const rolloutTimeout = 5 * time.Minute
+
+// waitForRollout blocks until every replica is on the new version and
+// available, and fails if that does not happen in time.
+//
+// A status that cannot be read is retried rather than treated as failure: the
+// question is whether the rollout completes, and one dropped request says
+// nothing about that.
+func waitForRollout(
+	ctx context.Context, env *Env, name string, interval, timeout time.Duration,
+) error {
+	deadline := time.Now().Add(timeout)
+	var last Status
+
+	for {
+		st, err := env.Client.Status(ctx, name)
+		if err == nil {
+			if st.RolloutComplete {
+				return nil
+			}
+			last = st
+		}
+		if time.Now().After(deadline) {
+			return rolloutStalled(name, last, timeout)
+		}
+
+		select {
+		case <-ctx.Done():
+			fmt.Fprintf(env.Err, "\nStopped watching. %s is still rolling out.\n", name)
+			return ctx.Err()
+		case <-time.After(interval):
+		}
+	}
+}
+
+// rolloutStalled is the error for a deploy that applied and never took over.
+func rolloutStalled(name string, st Status, after time.Duration) error {
+	detail := fmt.Sprintf("%d of %d ready", st.Ready, st.Desired)
+	if st.Message != "" {
+		detail += ": " + st.Message
+	}
+	return fmt.Errorf("oz: %s was applied but the new version did not take over "+
+		"within %s (%s) — the previous version may still be serving; see `oz logs %s`",
+		name, after, detail, name)
+}

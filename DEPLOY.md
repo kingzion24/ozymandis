@@ -91,7 +91,9 @@ Without it, `oz deploy` returns as soon as the deploy is accepted, which is not
 the same as it having worked. `--watch` waits for the rollout to genuinely
 complete — every replica on the new template, and available — rather than for
 one pod to report ready, which a rolling update satisfies while the old version
-is still serving.
+is still serving. It exits non-zero if the deploy fails, if a newer deploy
+supersedes it before it ships, or if the new version has not taken over five
+minutes after being applied.
 
 That distinction is why a deploy can look green and still leave old code
 running.
