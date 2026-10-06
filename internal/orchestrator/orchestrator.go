@@ -557,6 +557,42 @@ func (s AppSpec) FitsWithinLimits(limits ResourceLimits) error {
 	return nil
 }
 
+// EffectiveLimits returns the limits a container must carry for its requests
+// to be admitted, given the namespace's defaults.
+//
+// A request with no limit is not left without one: the namespace LimitRange
+// fills in its default limit, and when the request is larger than that default
+// the pod is refused at admission — request above limit — while the Deployment
+// that asked for it applies cleanly. The deploy goes green and no new pod ever
+// starts. Asking for more memory than the default is the whole reason the
+// request fields exist, so that case gets a limit equal to the request rather
+// than a default that contradicts it.
+//
+// An explicit limit is returned untouched, and so is an unset one whose request
+// fits under the default: the LimitRange's answer is the right one there.
+func (s AppSpec) EffectiveLimits(limits ResourceLimits) (cpu, memory string) {
+	limits = limits.OrDefaults()
+	return effectiveLimit(s.CPURequest, s.CPULimit, limits.DefaultCPU, ParseCPUQuantity),
+		effectiveLimit(s.MemoryRequest, s.MemoryLimit, limits.DefaultMemory, ParseMemoryQuantity)
+}
+
+func effectiveLimit(
+	request, limit, fallback string, parse func(string) (int64, error),
+) string {
+	if limit != "" || request == "" {
+		return limit
+	}
+	req, err := parse(request)
+	if err != nil {
+		return limit
+	}
+	def, err := parse(fallback)
+	if err != nil || req <= def {
+		return limit
+	}
+	return request
+}
+
 // Phase is a coarse lifecycle state, deliberately smaller than the set of
 // conditions Kubernetes reports.
 type Phase string

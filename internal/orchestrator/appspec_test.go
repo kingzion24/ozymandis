@@ -372,3 +372,42 @@ func TestFitsWithinLimitsAcceptsAtTheCeiling(t *testing.T) {
 		t.Fatalf("FitsWithinLimits rejected values exactly at the ceiling: %v", err)
 	}
 }
+
+// A request above the namespace's default limit, with no limit of its own, is
+// refused at admission once the LimitRange fills that default in — while the
+// Deployment applies cleanly and the deploy is recorded as live. The limit has
+// to follow the request up.
+func TestEffectiveLimitsFollowARequestAboveTheDefault(t *testing.T) {
+	for name, tc := range map[string]struct {
+		spec             AppSpec
+		wantCPU, wantMem string
+	}{
+		"nothing set": {AppSpec{}, "", ""},
+		"request under the default keeps the LimitRange's limit": {
+			AppSpec{CPURequest: "50m", MemoryRequest: "64Mi"}, "", "",
+		},
+		"request equal to the default": {
+			AppSpec{CPURequest: "100m", MemoryRequest: "128Mi"}, "", "",
+		},
+		"memory request above the default": {
+			AppSpec{MemoryRequest: "512Mi"}, "", "512Mi",
+		},
+		"cpu request above the default": {
+			AppSpec{CPURequest: "250m"}, "250m", "",
+		},
+		"an explicit limit is left alone": {
+			AppSpec{CPURequest: "250m", CPULimit: "1", MemoryRequest: "512Mi", MemoryLimit: "1Gi"},
+			"1", "1Gi",
+		},
+		"a limit with no request is left alone": {
+			AppSpec{MemoryLimit: "64Mi"}, "", "64Mi",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cpu, mem := tc.spec.EffectiveLimits(DefaultLimits)
+			if cpu != tc.wantCPU || mem != tc.wantMem {
+				t.Errorf("EffectiveLimits = %q, %q; want %q, %q", cpu, mem, tc.wantCPU, tc.wantMem)
+			}
+		})
+	}
+}

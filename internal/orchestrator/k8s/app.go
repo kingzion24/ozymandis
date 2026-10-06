@@ -263,7 +263,10 @@ func resourceRequirements(
 	if err != nil {
 		return nil, fmt.Errorf("k8s: requests for %s: %w", spec.Ref, err)
 	}
-	limits, err := resourceList(spec.CPULimit, spec.MemoryLimit)
+	// DefaultLimits, because that is the LimitRange every namespace here gets
+	// — see ensureLimitRange's caller.
+	cpuLimit, memoryLimit := spec.EffectiveLimits(orchestrator.DefaultLimits)
+	limits, err := resourceList(cpuLimit, memoryLimit)
 	if err != nil {
 		return nil, fmt.Errorf("k8s: limits for %s: %w", spec.Ref, err)
 	}
