@@ -318,8 +318,20 @@ func mount(
 		return nil, err
 	}
 
+	// Refuses a state-changing request that a browser says came from another
+	// origin. The session cookie's SameSite=Lax was the only defence before,
+	// and it does not cover the case this install creates for itself: an app
+	// deployed under the app domain is a different origin but the same *site*
+	// as the dashboard, so a page served by any tenant could post forms as
+	// whoever was signed in.
+	//
+	// Requests with neither Sec-Fetch-Site nor Origin pass — that is the oz
+	// CLI and every other non-browser client, which carry a bearer token and
+	// have no ambient cookie to abuse. The webhook mount is deliberately left
+	// outside: GitHub is another origin by definition.
+
 	root := http.NewServeMux()
-	root.Handle("/api/", apiSrv.Handler())
+	root.Handle("/api/", sameOriginOnly(apiSrv.Handler()))
 
 	// Outside the identity middleware entirely: GitHub carries no credential of
 	// ours, and the delivery's signature is the authentication. Mounted here
@@ -328,8 +340,13 @@ func mount(
 	// never fires.
 	root.Handle("/webhooks/", api.WebhookHandler(apps, log))
 
-	root.Handle("/", srv.Handler())
+	root.Handle("/", sameOriginOnly(srv.Handler()))
 	return root, nil
+}
+
+// sameOriginOnly refuses unsafe requests a browser reports as cross-origin.
+func sameOriginOnly(next http.Handler) http.Handler {
+	return http.NewCrossOriginProtection().Handler(next)
 }
 
 // newOrchestrator connects to a cluster, and starts without one if it must.

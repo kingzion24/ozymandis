@@ -39,8 +39,11 @@ func requestIsTLS(r *http.Request) bool {
 // browser drop the cookie on a plain-HTTP install, so sign-in appears to
 // succeed and then does nothing, with nothing on screen explaining why.
 //
-// SameSite=Lax is the CSRF defence, which is why no form in this codebase
-// carries a token: a cross-site POST does not get the cookie attached.
+// SameSite=Lax is half of the CSRF defence: a cross-site POST does not get the
+// cookie attached. The other half is the same-origin check the process mounts
+// in front of this router, because an app under the app domain is same-site
+// with the dashboard and Lax lets its requests through. Between them no form
+// here needs a token.
 func setSessionCookie(w http.ResponseWriter, r *http.Request, raw string, ttl time.Duration) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookie,
