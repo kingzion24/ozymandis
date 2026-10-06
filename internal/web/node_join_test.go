@@ -65,10 +65,14 @@ func joinServer(t *testing.T, j Joiner, role account.Role) http.Handler {
 	t.Helper()
 	const team = "join-team"
 	s, err := New(Options{
-		Orchestrator:    orchestrator.NewNoop(),
-		Apps:            newFakeApps(sampleApp(team, "probe")),
-		Identity:        identity.NewSingleOwner(identity.Owner{ID: team}),
-		Accounts:        &roledAccounts{fakeAccounts: &fakeAccounts{}, team: team, role: role},
+		Orchestrator: orchestrator.NewNoop(),
+		Apps:         newFakeApps(sampleApp(team, "probe")),
+		Identity:     identity.NewSingleOwner(identity.Owner{ID: team}),
+		Accounts: &roledAccounts{
+			fakeAccounts: &fakeAccounts{}, team: team, role: role,
+			// The owner in these tests is also the install's administrator.
+			superuser: role == account.RoleOwner,
+		},
 		Mailer:          &fakeMailer{},
 		BaseURL:         "https://ozymandis.test",
 		BootstrapTeamID: team,
@@ -118,6 +122,41 @@ func TestOnlyAnOwnerCanReachTheJoinCommand(t *testing.T) {
 	}
 }
 
+// Owning a team is not owning the install. Any account can end up the owner of
+// some team, and the join token adds a machine to the cluster every team runs
+// on — so a team owner who is not the administrator must not reach it.
+func TestATeamOwnerWhoIsNotTheSuperuserCannotReachTheJoinCommand(t *testing.T) {
+	const team = "join-team"
+	s, err := New(Options{
+		Orchestrator: orchestrator.NewNoop(),
+		Apps:         newFakeApps(sampleApp(team, "probe")),
+		Identity:     identity.NewSingleOwner(identity.Owner{ID: team}),
+		Accounts: &roledAccounts{
+			fakeAccounts: &fakeAccounts{}, team: team, role: account.RoleOwner,
+		},
+		Mailer:          &fakeMailer{},
+		BaseURL:         "https://ozymandis.test",
+		BootstrapTeamID: team,
+		Joiner:          &fakeJoiner{configured: true},
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	h := s.Handler()
+
+	rec := do(h, signedIn(http.MethodGet, "/cluster/nodes/add"))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("GET add page as a non-superuser team owner = %d, want 403", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), probeToken) {
+		t.Fatal("the join token was served to somebody who is not the administrator")
+	}
+	if code := do(h, signedIn(http.MethodPost, "/cluster/join")).Code; code != http.StatusForbidden {
+		t.Errorf("POST join as a non-superuser team owner = %d, want 403", code)
+	}
+}
+
 // The token is what the command exists to deliver, so it appears there and
 // nowhere else. Counted rather than eyeballed: a summary that started echoing
 // the stored token would still look fine on screen.
@@ -161,10 +200,12 @@ func TestWithNoSettingsThePageAsksForThem(t *testing.T) {
 func TestAnUnreachableClusterStillYieldsACommand(t *testing.T) {
 	const team = "join-team"
 	s, err := New(Options{
-		Orchestrator:    newFailingOrchestrator(),
-		Apps:            newFakeApps(sampleApp(team, "probe")),
-		Identity:        identity.NewSingleOwner(identity.Owner{ID: team}),
-		Accounts:        &roledAccounts{fakeAccounts: &fakeAccounts{}, team: team, role: account.RoleOwner},
+		Orchestrator: newFailingOrchestrator(),
+		Apps:         newFakeApps(sampleApp(team, "probe")),
+		Identity:     identity.NewSingleOwner(identity.Owner{ID: team}),
+		Accounts: &roledAccounts{
+			fakeAccounts: &fakeAccounts{}, team: team, role: account.RoleOwner, superuser: true,
+		},
 		Mailer:          &fakeMailer{},
 		BaseURL:         "https://ozymandis.test",
 		BootstrapTeamID: team,

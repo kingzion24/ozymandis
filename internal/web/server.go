@@ -664,14 +664,14 @@ func (s *Server) Handler() http.Handler {
 		// install that certainly has a cluster is the one that cannot add a
 		// node to it.
 		//
-		// Owner rather than admin because a node is cluster-scoped while every
-		// role here is team-scoped: a node one team adds runs every other
+		// The superuser rather than any team role, because a node is
+		// cluster-scoped while every role here is team-scoped: a node one team adds runs every other
 		// team's workloads and can read the secrets mounted into them. That is
 		// the same class of decision as appointing an admin, which is the line
 		// owner already draws.
 		if s.joiner != nil {
 			r.Group(func(r chi.Router) {
-				r.Use(s.requireRole(account.RoleOwner))
+				r.Use(s.requireSuperuser)
 
 				r.Get("/cluster/dns", s.dnsSettings)
 				r.Post("/cluster/dns", s.dnsSet)
@@ -708,7 +708,7 @@ func (s *Server) Handler() http.Handler {
 		// unavailable.
 		if s.registries != nil {
 			r.Group(func(r chi.Router) {
-				r.Use(s.requireRole(account.RoleOwner))
+				r.Use(s.requireSuperuser)
 
 				// Reached from an app's HTTP logs tab, gated here rather than
 				// there: it restarts the ingress controller for the whole
@@ -732,7 +732,7 @@ func (s *Server) Handler() http.Handler {
 		// feature because an unrelated one was unavailable.
 		if _, ok := s.nodeManager(); ok {
 			r.Group(func(r chi.Router) {
-				r.Use(s.requireRole(account.RoleOwner))
+				r.Use(s.requireSuperuser)
 
 				r.Get("/cluster/nodes/{name}", s.nodeDetail)
 				r.Get("/cluster/nodes/{name}/status", s.nodeDetailFragment)

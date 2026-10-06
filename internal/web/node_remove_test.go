@@ -70,10 +70,14 @@ func nodeServer(t *testing.T, orch orchestrator.Orchestrator, role account.Role)
 	t.Helper()
 	const team = "node-team"
 	s, err := New(Options{
-		Orchestrator:    orch,
-		Apps:            newFakeApps(sampleApp(team, "probe")),
-		Identity:        identity.NewSingleOwner(identity.Owner{ID: team}),
-		Accounts:        &roledAccounts{fakeAccounts: &fakeAccounts{}, team: team, role: role},
+		Orchestrator: orch,
+		Apps:         newFakeApps(sampleApp(team, "probe")),
+		Identity:     identity.NewSingleOwner(identity.Owner{ID: team}),
+		Accounts: &roledAccounts{
+			fakeAccounts: &fakeAccounts{}, team: team, role: role,
+			// The owner in these tests is also the install's administrator.
+			superuser: role == account.RoleOwner,
+		},
 		Mailer:          &fakeMailer{},
 		BaseURL:         "https://ozymandis.test",
 		BootstrapTeamID: team,

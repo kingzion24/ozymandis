@@ -34,6 +34,12 @@ type rolelessAccounts struct {
 	team string
 }
 
+// User answers as an ordinary account, so a superuser gate has somebody to
+// refuse rather than failing to find anyone at all.
+func (a *rolelessAccounts) User(_ context.Context, id uuid.UUID) (account.User, error) {
+	return account.User{ID: id, Username: "probe"}, nil
+}
+
 func (a *rolelessAccounts) ResolveSession(context.Context, string) (account.Session, error) {
 	return account.Session{
 		ID: uuid.New(), UserID: uuid.New(), ActiveTeamID: a.team, Role: account.Role(""),
@@ -176,6 +182,13 @@ type roledAccounts struct {
 	*fakeAccounts
 	team string
 	role account.Role
+	// superuser is whether the viewer is the install's administrator, which
+	// is a different question from their role in the team.
+	superuser bool
+}
+
+func (a *roledAccounts) User(_ context.Context, id uuid.UUID) (account.User, error) {
+	return account.User{ID: id, Username: "probe", IsSuperuser: a.superuser}, nil
 }
 
 func (a *roledAccounts) ResolveSession(context.Context, string) (account.Session, error) {

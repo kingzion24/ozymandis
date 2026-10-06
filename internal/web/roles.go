@@ -39,6 +39,36 @@ func (s *Server) requireRole(min account.Role) func(http.Handler) http.Handler {
 	}
 }
 
+// requireSuperuser gates what belongs to the install rather than to a team.
+//
+// Roles are per team, and a team is something any account can end up owning.
+// The join token, the registry credential, the DNS target and the nodes
+// themselves are shared by every team on the cluster, so "owner of the team
+// this request is acting as" was never the right question for them: it let the
+// owner of any team, however small, read the token that adds a machine to the
+// cluster. The right question is whether this is the install's administrator.
+//
+// An install with no account service has a single principal who is the whole
+// install, and passes — the same reading roleOf gives it.
+func (s *Server) requireSuperuser(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.accounts == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		viewer, ok := s.viewerFor(r)
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if !viewer.IsSuperuser {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // roleOf reports the role the request's own session carries in the team the
 // request is acting as.
 //
