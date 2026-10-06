@@ -1526,6 +1526,14 @@ templ podTable(pods []orchestrator.PodInfo, showNamespace bool) {
 							</td>
 						</tr>
 					}
+					if line := lastExitLine(p); line != "" {
+						// Shown whether or not the pod is healthy now. A
+						// container that was killed and restarted is Running,
+						// and this row is the only thing that says it was.
+						<tr>
+							<td class="!pt-0 text-muted-foreground" colspan="6">{ line }</td>
+						</tr>
+					}
 				}
 			</tbody>
 		</table>

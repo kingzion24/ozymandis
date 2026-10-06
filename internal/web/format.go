@@ -622,3 +622,26 @@ func editVariableHref(appName, key string) templ.SafeURL {
 	return templ.SafeURL("/apps/" + url.PathEscape(appName) +
 		"/variables?edit=" + url.QueryEscape(key) + "#set-variable")
 }
+
+// lastExitLine says how a pod's container last stopped, or "" when it never
+// has.
+//
+// Written for the person staring at a 502: a restart count says something
+// happened, and this says what. The out-of-memory kill gets its own sentence
+// because it is the one with a fix on another tab, and because the reason the
+// cluster gives it — OOMKilled, exit 137 — reads as jargon to exactly the
+// person who needs it.
+func lastExitLine(p orchestrator.PodInfo) string {
+	if p.LastExitReason == "" {
+		return ""
+	}
+	when := ""
+	if !p.LastExitAt.IsZero() {
+		when = ", " + relativeTime(p.LastExitAt)
+	}
+	if p.LastExitReason == "OOMKilled" {
+		return "Last restart: out of memory" + when + ". It reached its memory " +
+			"limit and was killed — raise the limit under Settings › Resources."
+	}
+	return fmt.Sprintf("Last restart: %s (exit %d)%s.", p.LastExitReason, p.LastExitCode, when)
+}

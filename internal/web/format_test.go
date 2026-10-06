@@ -1,6 +1,7 @@
 package web
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -230,5 +231,28 @@ func TestRedeployHint(t *testing.T) {
 		if got := redeployHint(c.in); got != c.want {
 			t.Errorf("%s: redeployHint() = %q, want %q", name, got, c.want)
 		}
+	}
+}
+
+// The out-of-memory kill is the restart with a fix on another tab, so it has to
+// say so in words rather than as "OOMKilled (exit 137)".
+func TestLastExitLineExplainsAnOutOfMemoryKill(t *testing.T) {
+	if got := lastExitLine(orchestrator.PodInfo{Restarts: 0}); got != "" {
+		t.Errorf("a pod that never restarted got a last-restart line: %q", got)
+	}
+
+	oom := lastExitLine(orchestrator.PodInfo{
+		LastExitReason: "OOMKilled", LastExitCode: 137,
+		LastExitAt: time.Now().Add(-2 * time.Hour),
+	})
+	for _, want := range []string{"out of memory", "2 hours ago", "Resources"} {
+		if !strings.Contains(oom, want) {
+			t.Errorf("the out-of-memory line %q does not mention %q", oom, want)
+		}
+	}
+
+	other := lastExitLine(orchestrator.PodInfo{LastExitReason: "Error", LastExitCode: 1})
+	if !strings.Contains(other, "Error") || !strings.Contains(other, "exit 1") {
+		t.Errorf("an ordinary crash is not described by its reason and code: %q", other)
 	}
 }

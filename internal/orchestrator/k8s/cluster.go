@@ -175,6 +175,15 @@ func (o *Orchestrator) Pods(
 			}
 			info.Restarts += cs.RestartCount
 
+			// The first container that has stopped before, for the same reason
+			// one Reason is kept below: a pod restarting in several containers
+			// is nearly always restarting for one cause.
+			if t := cs.LastTerminationState.Terminated; t != nil && info.LastExitReason == "" {
+				info.LastExitReason = t.Reason
+				info.LastExitCode = t.ExitCode
+				info.LastExitAt = t.FinishedAt.Time
+			}
+
 			// The first container that is not running explains the pod. A pod
 			// with several stuck containers is almost always stuck for one
 			// reason, and listing every copy of it buries the fact.

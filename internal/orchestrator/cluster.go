@@ -57,7 +57,18 @@ type PodInfo struct {
 	Ready     int32
 	Total     int32
 	Restarts  int32
-	CreatedAt time.Time
+
+	// LastExit is how a container last stopped, when it has restarted at all.
+	//
+	// A container that was killed and came back is Running, with nothing in
+	// its current state to say it ever stopped — only a restart count. This is
+	// the one place the cluster keeps the reason, and for a container killed
+	// for exceeding its memory limit it is the difference between "it
+	// restarted" and "it needs more memory".
+	LastExitReason string
+	LastExitCode   int32
+	LastExitAt     time.Time
+	CreatedAt      time.Time
 
 	// Terminating reports that this pod has been asked to go away and is
 	// working through its grace period.

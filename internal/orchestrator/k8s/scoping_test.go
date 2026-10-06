@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 
@@ -417,5 +418,58 @@ func TestPublicServiceKeepsTheFixedPort(t *testing.T) {
 	}
 	if got := svc.Spec.Ports[0].Port; got != servicePort {
 		t.Fatalf("service port = %d, want the fixed %d", got, servicePort)
+	}
+}
+
+// A container that was killed and restarted is Running, and nothing in its
+// current state says it ever stopped. The last termination is the only record
+// of why — and for an out-of-memory kill, the only thing that turns a restart
+// count into something a person can act on.
+func TestPodsCarryHowTheContainerLastStopped(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+	killedAt := metav1.NewTime(time.Now().Add(-10 * time.Minute).Truncate(time.Second))
+
+	if _, err := client.CoreV1().Pods("ozymandis-a").Create(ctx, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "web-abc", Namespace: "ozymandis-a",
+			Labels: map[string]string{
+				orchestrator.LabelManagedBy: orchestrator.ManagedByValue,
+				orchestrator.LabelApp:       "web",
+				orchestrator.LabelOwner:     "team-a",
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name: "web", Ready: true, RestartCount: 3,
+				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+				LastTerminationState: corev1.ContainerState{
+					Terminated: &corev1.ContainerStateTerminated{
+						Reason: "OOMKilled", ExitCode: 137, FinishedAt: killedAt,
+					},
+				},
+			}},
+		},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+
+	pods, err := o.Pods(ctx, orchestrator.PodListOptions{Owner: "team-a"})
+	if err != nil {
+		t.Fatalf("Pods: %v", err)
+	}
+	if len(pods) != 1 {
+		t.Fatalf("got %d pods, want 1", len(pods))
+	}
+	p := pods[0]
+	if p.Reason != "" {
+		t.Errorf("Reason = %q for a pod that is running now", p.Reason)
+	}
+	if p.LastExitReason != "OOMKilled" || p.LastExitCode != 137 {
+		t.Errorf("last exit = %q (%d), want OOMKilled (137)", p.LastExitReason, p.LastExitCode)
+	}
+	if !p.LastExitAt.Equal(killedAt.Time) {
+		t.Errorf("LastExitAt = %v, want %v", p.LastExitAt, killedAt.Time)
 	}
 }
