@@ -267,9 +267,8 @@ func (s *Service) BackupNow(
 		return orchestrator.TaskResult{}, err
 	}
 
-	res, err := backup.RunNow(ctx, runner, ba, dest, policy, target)
-	s.log.Info("manual backup finished", slog.String("app", name),
-		slog.Bool("succeeded", res.Succeeded))
+	res, err := backup.RunNow(detachTask(ctx), runner, ba, dest, policy, target)
+	s.logTaskOutcome(ctx, "manual backup", name, res, err)
 	return res, err
 }
 
@@ -301,10 +300,44 @@ func (s *Service) RestoreBackup(
 	s.log.Warn("restoring from a backup — this overwrites live data",
 		slog.String("app", name), slog.String("snapshot", snapshot))
 
-	res, err := backup.Restore(ctx, runner, ba, dest, target, snapshot)
-	s.log.Info("restore finished", slog.String("app", name),
-		slog.Bool("succeeded", res.Succeeded))
+	res, err := backup.Restore(detachTask(ctx), runner, ba, dest, target, snapshot)
+	s.logTaskOutcome(ctx, "restore", name, res, err)
 	return res, err
+}
+
+// detachTask returns a context that outlives the request it came from.
+//
+// A restore replaces live data in place, and running it under the request's
+// context tied its life to a browser tab: closing the tab, a proxy timing out,
+// or the connection dropping cancelled the wait, the cleanup deleted the Job,
+// and the volume or database was left partly replaced. Once started, a restore
+// or a backup runs until it finishes or reaches its own timeout — the task
+// carries one — whoever is or is not still waiting for the answer.
+func detachTask(ctx context.Context) context.Context {
+	return context.WithoutCancel(ctx)
+}
+
+// logTaskOutcome records how a backup or restore ended.
+//
+// The person who asked may have gone by the time it does, and then the log is
+// the only place the result exists — so a failure is logged with its output,
+// and one nobody was left to read is said to be exactly that.
+func (s *Service) logTaskOutcome(
+	ctx context.Context, what, name string, res orchestrator.TaskResult, err error,
+) {
+	attrs := []any{
+		slog.String("app", name),
+		slog.Bool("succeeded", res.Succeeded),
+		slog.Bool("caller_gone", ctx.Err() != nil),
+	}
+	if err == nil && res.Succeeded {
+		s.log.Info(what+" finished", attrs...)
+		return
+	}
+	if err != nil {
+		attrs = append(attrs, slog.String("error", err.Error()))
+	}
+	s.log.Error(what+" did not finish", append(attrs, slog.String("output", res.Output))...)
 }
 
 // backupContext gathers what every backup operation needs, and fails with one

@@ -340,6 +340,25 @@ func TestThePostgresRestoreScriptStopsOnTheFirstError(t *testing.T) {
 	if !strings.Contains(script, "ON_ERROR_STOP=1") {
 		t.Fatal("a restore that half failed would be reported as having worked")
 	}
+	// Stopping is not enough when the dump opens by dropping every table: what
+	// ran before the error has to be undone, or the database is left empty.
+	if !strings.Contains(script, "--single-transaction") {
+		t.Fatal("a restore that fails partway would leave the database half replaced")
+	}
+}
+
+// A restore reads a repository; it must never create one. Pointed at the wrong
+// bucket it would otherwise initialise an empty repository there and report a
+// missing snapshot instead of the real mistake.
+func TestRestoreNeverInitialisesARepository(t *testing.T) {
+	for _, target := range []Target{
+		{Kind: KindPostgres, Name: "db", Service: "db", Port: 5432},
+		{Kind: KindVolume, Name: "data"},
+	} {
+		if script := RestoreScript(target, "latest"); strings.Contains(script, "restic init") {
+			t.Errorf("the %s restore script can initialise a repository", target.Kind)
+		}
+	}
 }
 
 // --delete is what makes a volume restore a restore rather than a merge, and

@@ -176,6 +176,21 @@ echo "Done"
 restic snapshots --compact` + tags
 }
 
+// requireRepository is the preamble for a script that only reads.
+//
+// It does not initialise. A restore pointed at an empty bucket — a wrong
+// endpoint, a mistyped name — would otherwise create a fresh repository there
+// and then report that it holds no such snapshot, leaving an empty repository
+// behind as the only evidence of what was actually wrong.
+const requireRepository = `
+set -eu
+
+if ! restic cat config >/dev/null 2>&1; then
+  echo "There is no backup repository at $RESTIC_REPOSITORY, or it cannot be opened" >&2
+  exit 1
+fi
+`
+
 // RestoreScript is the shell a restore task runs.
 //
 // snapshot is a restic snapshot id, or "latest".
@@ -193,12 +208,18 @@ func RestoreScript(t Target, snapshot string) string {
 		// prints errors, carries on to the next statement, and exits zero — so
 		// a restore that dropped half the tables and failed to recreate them
 		// would be reported as having worked.
-		return preamble + `
+		//
+		// --single-transaction is the other half. ON_ERROR_STOP alone stops at
+		// the first error with everything before it already committed, which
+		// for a dump that begins by dropping every table is a database with
+		// nothing in it. In one transaction a restore that fails leaves the
+		// database exactly as it was.
+		return requireRepository + `
 set -o pipefail
 
 echo "Restoring ` + shellQuote(t.Name) + ` from snapshot ` + id + `"
 restic dump` + tags + ` ` + id + ` dump.sql \
-  | psql -v ON_ERROR_STOP=1 -h ` + shellQuote(t.Service) +
+  | psql -v ON_ERROR_STOP=1 --single-transaction -h ` + shellQuote(t.Service) +
 			fmt.Sprintf(" -p %d", t.Port) + ` -U "$PGUSER" -d "$PGDATABASE"
 
 echo "Restored"`
@@ -216,7 +237,7 @@ echo "Restored"`
 		// target here is the root of the task's own filesystem. The include
 		// narrows it to the mounted claim, so the deletion can only reach the
 		// volume being restored.
-		return preamble + `
+		return requireRepository + `
 echo "Restoring ` + shellQuote(t.Name) + ` from snapshot ` + id + `"
 restic restore` + tags + ` ` + id + ` --target / --include ` + dataMount + ` --delete
 
