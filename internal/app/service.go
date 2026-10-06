@@ -1034,6 +1034,23 @@ func (s *Service) beginDeployment(
 	return row.ID
 }
 
+// deployInFlight reports whether a deploy of the app is still running.
+//
+// A database error answers false, which records the scale as its own
+// deployment — the behaviour before this check existed, and the safer of the
+// two guesses for an operation that must not be refused over a history query.
+func (s *Service) deployInFlight(ctx context.Context, ownerID string, appID uuid.UUID) bool {
+	running, err := s.q.AppHasRunningDeployment(ctx, dbgen.AppHasRunningDeploymentParams{
+		OwnerID: ownerID, AppID: appID,
+	})
+	if err != nil {
+		s.log.Warn("could not check for a deploy in flight",
+			slog.String("error", err.Error()))
+		return false
+	}
+	return running
+}
+
 // ErrSuperseded means a newer deployment took over while this one was working.
 //
 // Not a failure, and deliberately not recorded as one: the deploy did what it
@@ -1121,7 +1138,18 @@ func (s *Service) Scale(ctx context.Context, ownerID, name string, replicas int3
 	}
 
 	updated := toApp(row)
-	id := s.beginDeployment(ctx, ownerID, updated, fmt.Sprintf("scale:%d", replicas))
+
+	// A scale is recorded as a deployment of its own, except while a deploy is
+	// already in flight. Opening one retires whatever is running, and for a
+	// build that meant twenty minutes of work thrown away on completion: its
+	// image was refused as belonging to a superseded deployment and never
+	// applied, with a green "scale" row left as the newest thing in the
+	// history. The replica count is already stored, and the deploy in flight
+	// re-reads the app before it applies, so it ships with the new count.
+	id := uuid.Nil
+	if !s.deployInFlight(ctx, ownerID, a.ID) {
+		id = s.beginDeployment(ctx, ownerID, updated, fmt.Sprintf("scale:%d", replicas))
+	}
 	err = s.apply(ctx, s.q, updated)
 	// Recorded whichever way it went. A deploy that failed and left no trace is
 	// one nobody can find afterwards.

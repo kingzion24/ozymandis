@@ -433,3 +433,47 @@ func TestADeploymentIsFinishedEvenWhenItsContextIsDead(t *testing.T) {
 		t.Fatalf("deployment status = %q, want %q", got, DeployFailed)
 	}
 }
+
+// Scaling while a build runs must not retire that build's deployment. It did,
+// and the build then finished into a deployment that was no longer current: its
+// image was refused and never applied, with a green "scale" row left on top.
+func TestScalingDoesNotSupersedeADeployInFlight(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{})
+	ownerID := owner(t, s, pool, "owner-scale-inflight")
+
+	a, err := s.Create(ctx, ownerID, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	inFlight := s.beginDeployment(ctx, ownerID, a, "redeploy")
+
+	scaled, err := s.Scale(ctx, ownerID, a.Name, 3)
+	if err != nil {
+		t.Fatalf("Scale: %v", err)
+	}
+	if scaled.Replicas != 3 {
+		t.Errorf("replicas = %d, want 3 — the scale itself must still take", scaled.Replicas)
+	}
+	if got := deploymentStatus(t, s, inFlight); got != DeployRunning {
+		t.Fatalf("the deploy in flight is %q after a scale, want it still running", got)
+	}
+	if !s.stillCurrent(ctx, ownerID, inFlight) {
+		t.Fatal("the deploy in flight is no longer current, so its image would be dropped")
+	}
+
+	// With nothing in flight a scale is still recorded as a deployment.
+	s.endDeployment(ctx, ownerID, inFlight, nil)
+	if _, err := s.Scale(ctx, ownerID, a.Name, 2); err != nil {
+		t.Fatalf("Scale again: %v", err)
+	}
+	deps, err := s.Deployments(ctx, ownerID, a.ID, 10)
+	if err != nil {
+		t.Fatalf("Deployments: %v", err)
+	}
+	if len(deps) == 0 || deps[0].Revision != "scale:2" {
+		t.Errorf("newest deployment = %+v, want the scale recorded", deps)
+	}
+}

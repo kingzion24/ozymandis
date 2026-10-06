@@ -11,6 +11,8 @@ import (
 )
 
 type Querier interface {
+	// Whether a deploy of this app is in flight — building, releasing or applying.
+	AppHasRunningDeployment(ctx context.Context, arg AppHasRunningDeploymentParams) (bool, error)
 	// Appended rather than replaced, so a build streaming its output does not have
 	// to hold the whole log in memory to write any of it.
 	AppendBuildLog(ctx context.Context, arg AppendBuildLogParams) error

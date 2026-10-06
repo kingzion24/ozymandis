@@ -82,6 +82,13 @@ SET image = $3
 WHERE owner_id = $1 AND id = $2
 RETURNING *;
 
+-- name: AppHasRunningDeployment :one
+-- Whether a deploy of this app is in flight — building, releasing or applying.
+SELECT EXISTS (
+    SELECT 1 FROM deployments
+    WHERE owner_id = @owner_id AND app_id = @app_id AND status = 'running'
+);
+
 -- name: FailStaleDeployments :many
 -- Deployments still claiming to run long after any deploy could be. Not
 -- owner-scoped, for the reason ListRunningBuilds is not: this is the platform

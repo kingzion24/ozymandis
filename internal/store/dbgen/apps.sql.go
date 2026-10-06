@@ -13,6 +13,26 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const appHasRunningDeployment = `-- name: AppHasRunningDeployment :one
+SELECT EXISTS (
+    SELECT 1 FROM deployments
+    WHERE owner_id = $1 AND app_id = $2 AND status = 'running'
+)
+`
+
+type AppHasRunningDeploymentParams struct {
+	OwnerID string
+	AppID   uuid.UUID
+}
+
+// Whether a deploy of this app is in flight — building, releasing or applying.
+func (q *Queries) AppHasRunningDeployment(ctx context.Context, arg AppHasRunningDeploymentParams) (bool, error) {
+	row := q.db.QueryRow(ctx, appHasRunningDeployment, arg.OwnerID, arg.AppID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const countApps = `-- name: CountApps :one
 SELECT count(*) FROM apps WHERE owner_id = $1
 `
