@@ -63,8 +63,9 @@ The script downloads the latest release, verifies its checksum **before**
 unpacking, installs K3s and Postgres, writes a systemd unit, and starts the
 service.
 
-It is safe to re-run. It replaces the binary and the unit and leaves every
-generated secret alone — re-running is the normal way to upgrade.
+It is safe to re-run. It replaces the binary and the unit and leaves your
+configuration file as it found it, adding only settings that are missing. To
+upgrade, use the upgrader instead — see [Upgrading](#upgrading-and-rolling-back).
 
 ### Flags
 
@@ -129,8 +130,8 @@ The ones you are most likely to touch:
 
 ## First login
 
-The installer prints a token when it finishes. Open the dashboard at whatever
-you set `OZYMANDIS_BASE_URL` to and sign in with it.
+The installer prints a username and a generated password when it finishes. Open
+the dashboard, sign in with them, and change the password on the team page.
 
 Then point the CLI at the same install:
 
@@ -508,18 +509,20 @@ should hang and time out, not connect.
 
 ## Upgrading and rolling back
 
-Upgrading is re-running the installer. It replaces the binary and the unit and
-keeps your configuration and secrets:
+Upgrading is its own, smaller script. It replaces the binary and restarts the
+service, and touches nothing else — not K3s, not Postgres, not your
+configuration:
 
 ```sh
-curl -sSL https://kingzion24.github.io/ozymandis/install.sh | sudo sh
+curl -sSL https://kingzion24.github.io/ozymandis/upgrade.sh | sudo sh
 ```
 
-The previous binary is kept beside the new one, so a bad upgrade is reversible
-without a download:
+If the new version does not come up healthy the previous binary is put back
+automatically. It is also kept beside the new one afterwards, so a release that
+turns out bad later is reversible without a download:
 
 ```sh
-sudo cp -f /usr/local/bin/ozymandis.bak /usr/local/bin/ozymandis
+sudo cp -f /usr/local/bin/ozymandis.prev /usr/local/bin/ozymandis
 sudo systemctl restart ozymandis
 ```
 

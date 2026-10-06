@@ -201,7 +201,10 @@ main() {
 	systemctl restart ozymandis
 
 	if healthy; then
-		rm -f "$PREV"
+		# Kept, not removed. Coming up healthy is ninety seconds of evidence,
+		# and a release that breaks an hour later is rolled back by hand from
+		# this file — the only copy of a binary known to have worked here.
+		say "previous binary kept at ${PREV}"
 
 		# The CLI is swapped only once the server is known healthy, and is
 		# deliberately outside the rollback.

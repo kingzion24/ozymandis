@@ -6,11 +6,11 @@
 #
 # Provisions K3s, Postgres, and Ozymandis itself as a systemd unit on a fresh
 # Debian or Ubuntu box. Safe to re-run: it replaces the binary and the unit and
-# leaves every generated secret alone.
+# leaves the configuration file as it found it, adding only what is missing.
 #
 # Flags (when piped, pass them after `sh -s --`):
 #   --version vX.Y.Z   install a specific release rather than the latest
-#   --port N           listen port, default 8080
+#   --port N           listen port, default 8080; a re-run keeps the current one
 #   --rotate-token     issue a new dashboard token instead of keeping the old one
 #   --skip-k3s         do not install K3s; use the kubeconfig already present
 #   --database-url URL use an existing Postgres instead of installing one
@@ -40,10 +40,16 @@ DB_NAME="ozymandis_command_center"
 
 VERSION=""
 PORT="8080"
+# Whether --port was passed. A re-run without it keeps the port the install is
+# already on rather than moving the dashboard back to the default.
+PORT_SET="no"
 ROTATE_TOKEN="no"
 SKIP_K3S="no"
 DATABASE_URL=""
 BINARY=""
+FRESH_INSTALL="no"
+SUPERUSER_NAME=""
+SUPERUSER_PASSWORD=""
 
 # ---------------------------------------------------------------- output ----
 
@@ -132,7 +138,7 @@ parse_flags() {
 		case "$1" in
 			--version)      VERSION="${2:-}"; shift 2 ;;
 			--binary)       BINARY="${2:-}"; shift 2 ;;
-			--port)         PORT="${2:-}"; shift 2 ;;
+			--port)         PORT="${2:-}"; PORT_SET="yes"; shift 2 ;;
 			--database-url) DATABASE_URL="${2:-}"; shift 2 ;;
 			--rotate-token) ROTATE_TOKEN="yes"; shift ;;
 			--skip-k3s)     SKIP_K3S="yes"; shift ;;
@@ -166,6 +172,30 @@ env_get() {
 	v=$(sed -n "s/^$1=//p" "$ENV_FILE" | head -n1)
 	[ -n "$v" ] || return 1
 	printf '%s' "$v"
+}
+
+# env_put sets KEY=value in a file, replacing the line if the key is already
+# there and appending it if not. Every other line passes through untouched.
+#
+# awk reading the pair from its environment rather than sed with the value
+# spliced into a pattern: a database URL and a base64 key are full of the
+# characters sed would read as syntax.
+env_put() {
+	ENV_K="$2" ENV_V="$3" awk '
+		BEGIN { k = ENVIRON["ENV_K"]; v = ENVIRON["ENV_V"] }
+		!done && index($0, k "=") == 1 { print k "=" v; done = 1; next }
+		{ print }
+		END { if (!done) print k "=" v }
+	' "$1" > "$1.put"
+	cat "$1.put" > "$1"
+	rm -f "$1.put"
+}
+
+# env_default adds KEY=value only when the file has no value for it.
+env_default() {
+	if ! sed -n "s/^$2=//p" "$1" | grep -q .; then
+		env_put "$1" "$2" "$3"
+	fi
 }
 
 rand_hex() { od -An -tx1 -N"${1:-24}" /dev/urandom | tr -d ' \n'; }
@@ -428,65 +458,91 @@ configure() {
 	[ -r "$K3S_KUBECONFIG" ] || die "${K3S_KUBECONFIG} is not readable"
 	install -o "$SVC_USER" -g "$SVC_USER" -m 0600 "$K3S_KUBECONFIG" "$KUBECONFIG_DST"
 
-	secret_key=$(env_get OZYMANDIS_SECRET_KEY || rand_b64 32)
-	if [ "$ROTATE_TOKEN" = "yes" ]; then
-		auth_token=$(rand_hex 24)
-	else
-		auth_token=$(env_get OZYMANDIS_AUTH_TOKEN || rand_hex 24)
-	fi
-	# Preserved across re-runs like every other value, so an operator who named
-	# their controller's resolver by hand does not lose it by upgrading.
-	cert_resolver=$(env_get OZYMANDIS_CERT_RESOLVER || printf '')
-	tz=$(env_get TZ || printf '')
-
 	umask 077
-	cat > "${ENV_FILE}.new" <<-EOF
-		# Written by the Ozymandis installer. Re-running preserves every value here
-		# except the port and the binary; edit freely and restart the service.
-		#
-		# OZYMANDIS_SECRET_KEY seals stored secrets. There is no recovery path if it
-		# is lost, so back this file up before you need it.
-		OZYMANDIS_DATABASE_URL=${DATABASE_URL}
-		OZYMANDIS_KUBECONFIG=${KUBECONFIG_DST}
-		OZYMANDIS_ADDR=:${PORT}
-		OZYMANDIS_AUTH_TOKEN=${auth_token}
-		OZYMANDIS_SECRET_KEY=${secret_key}
+	if [ -f "$ENV_FILE" ]; then
+		# An existing file is the operator's, not a template's. It is copied
+		# whole and only completed: rewriting it from the handful of values
+		# this script knows about used to drop every setting it did not — the
+		# app domain among them, and an install that loses that retires each
+		# app's hostname on its next deploy.
+		cp "$ENV_FILE" "${ENV_FILE}.new"
+		env_default "${ENV_FILE}.new" OZYMANDIS_DATABASE_URL "$DATABASE_URL"
+		env_default "${ENV_FILE}.new" OZYMANDIS_KUBECONFIG "$KUBECONFIG_DST"
+		env_default "${ENV_FILE}.new" OZYMANDIS_ADDR ":${PORT}"
+		env_default "${ENV_FILE}.new" OZYMANDIS_SECRET_KEY "$(rand_b64 32)"
+		env_default "${ENV_FILE}.new" OZYMANDIS_AUTH_TOKEN "$(rand_hex 24)"
+		if [ "$PORT_SET" = "yes" ]; then
+			env_put "${ENV_FILE}.new" OZYMANDIS_ADDR ":${PORT}"
+		fi
+		if [ "$ROTATE_TOKEN" = "yes" ]; then
+			env_put "${ENV_FILE}.new" OZYMANDIS_AUTH_TOKEN "$(rand_hex 24)"
+		fi
+	else
+		secret_key=$(rand_b64 32)
+		auth_token=$(rand_hex 24)
+		# Generated, never the binary's own fallback: a password every install
+		# shares is one anybody can look up.
+		SUPERUSER_NAME="admin"
+		SUPERUSER_PASSWORD=$(rand_hex 12)
+		FRESH_INSTALL="yes"
+		cat > "${ENV_FILE}.new" <<-EOF
+			# Written by the Ozymandis installer. Re-running leaves this file as it is
+			# and only adds what is missing; edit freely and restart the service.
+			#
+			# OZYMANDIS_SECRET_KEY seals stored secrets. There is no recovery path if it
+			# is lost, so back this file up before you need it.
+			OZYMANDIS_DATABASE_URL=${DATABASE_URL}
+			OZYMANDIS_KUBECONFIG=${KUBECONFIG_DST}
+			OZYMANDIS_ADDR=:${PORT}
+			OZYMANDIS_AUTH_TOKEN=${auth_token}
+			OZYMANDIS_SECRET_KEY=${secret_key}
 
-		# The ACME resolver the ingress controller obtains certificates from — a
-		# name from its own certificatesResolvers configuration, such as
-		# "letsencrypt". Every hostname is then issued for individually.
-		#
-		# Written EMPTY on a fresh install, deliberately. This script installs K3s
-		# with --disable traefik and installs no ingress controller of its own, so
-		# on a fresh machine there is no controller here yet and no resolver name
-		# that could be correct. Naming one that does not exist does not fail:
-		# hostnames are served the controller's own certificate, browsers refuse
-		# it, and nothing here or in the dashboard reports why. Empty serves plain
-		# http instead — visibly wrong rather than invisibly wrong. Set this once
-		# you have installed a controller, to the name of ITS resolver.
-		OZYMANDIS_CERT_RESOLVER=${cert_resolver}
+			# The administrator the first start creates. Read once: after that the
+			# password lives in the database and is changed from the team page, so
+			# editing it here does nothing.
+			OZYMANDIS_SUPERUSER_NAME=${SUPERUSER_NAME}
+			OZYMANDIS_SUPERUSER_PASSWORD=${SUPERUSER_PASSWORD}
 
-		# The zone the dashboard prints clock times in — log lines, cluster events,
-		# request logs. An IANA name such as "Africa/Nairobi" or "Europe/Lisbon".
-		#
-		# Empty means the machine's own zone, which on a server installed from an
-		# image is almost always UTC. That is not wrong so much as unreadable:
-		# instants are stored in UTC and should be, but a log you are reading
-		# because something broke half an hour ago is one you line up against the
-		# clock on the wall, not against a three-hour subtraction.
-		TZ=${tz}
+			# The ACME resolver the ingress controller obtains certificates from — a
+			# name from its own certificatesResolvers configuration, such as
+			# "letsencrypt". Every hostname is then issued for individually.
+			#
+			# Written EMPTY on a fresh install, deliberately. This script installs K3s
+			# with --disable traefik and installs no ingress controller of its own, so
+			# on a fresh machine there is no controller here yet and no resolver name
+			# that could be correct. Naming one that does not exist does not fail:
+			# hostnames are served the controller's own certificate, browsers refuse
+			# it, and nothing here or in the dashboard reports why. Empty serves plain
+			# http instead — visibly wrong rather than invisibly wrong. Set this once
+			# you have installed a controller, to the name of ITS resolver.
+			OZYMANDIS_CERT_RESOLVER=
 
-		# Set OZYMANDIS_BASE_URL to a public https URL to turn magic-link sign-in on,
-		# and OZYMANDIS_APP_DOMAIN to the domain apps get a hostname under.
-		#OZYMANDIS_BASE_URL=
-		#OZYMANDIS_APP_DOMAIN=
-	EOF
+			# The zone the dashboard prints clock times in — log lines, cluster events,
+			# request logs. An IANA name such as "Africa/Nairobi" or "Europe/Lisbon".
+			#
+			# Empty means the machine's own zone, which on a server installed from an
+			# image is almost always UTC. That is not wrong so much as unreadable:
+			# instants are stored in UTC and should be, but a log you are reading
+			# because something broke half an hour ago is one you line up against the
+			# clock on the wall, not against a three-hour subtraction.
+			TZ=
+
+			# Set OZYMANDIS_BASE_URL to a public https URL to turn magic-link sign-in on,
+			# and OZYMANDIS_APP_DOMAIN to the domain apps get a hostname under.
+			#OZYMANDIS_BASE_URL=
+			#OZYMANDIS_APP_DOMAIN=
+		EOF
+	fi
 	chown root:"$SVC_USER" "${ENV_FILE}.new"
 	chmod 0640 "${ENV_FILE}.new"
 	mv -f "${ENV_FILE}.new" "$ENV_FILE"
 
-	AUTH_TOKEN="$auth_token"
-	say "secrets preserved across re-runs"
+	# The port the service will actually listen on, which on a re-run is the
+	# one already in the file. The health check and the summary both use it.
+	addr=$(env_get OZYMANDIS_ADDR || printf ':%s' "$PORT")
+	PORT="${addr##*:}"
+
+	say "configuration preserved across re-runs"
 }
 
 install_unit() {
@@ -564,16 +620,30 @@ summary() {
 
 		  Ozymandis ${VERSION} is running.
 
-		    URL     http://${addr}:${PORT}
-		    Token   ${AUTH_TOKEN}
+		    URL       http://${addr}:${PORT}
+	EOF
+	if [ "$FRESH_INSTALL" = "yes" ]; then
+		cat <<-EOF
+		    Username  ${SUPERUSER_NAME}
+		    Password  ${SUPERUSER_PASSWORD}
 
-		  Paste the token when the dashboard asks for it.
+		  Sign in with these, then change the password on the team page. It is
+		  shown once here and kept in ${ENV_FILE}.
+		EOF
+	else
+		cat <<-EOF
+
+		  Sign in as you did before: accounts and passwords live in the
+		  database and were not touched.
+		EOF
+	fi
+	cat <<-EOF
 
 		    Config    ${ENV_FILE}
 		    Service   systemctl status ozymandis
 		    Logs      journalctl -u ozymandis -f
 
-		  This dashboard is served over plain HTTP, so the token crosses the
+		  This dashboard is served over plain HTTP, so the password crosses the
 		  network in the clear. Put it behind a domain and TLS before you rely
 		  on it, or reach it over an SSH tunnel in the meantime:
 
