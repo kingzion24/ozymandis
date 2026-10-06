@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"testing"
 	"time"
@@ -340,5 +341,95 @@ func TestSettlingDoesNotOverwriteARecordedResult(t *testing.T) {
 		ID: row.ID, Status: BuildFailed, Message: "late",
 	}); !errors.Is(err, pgx.ErrNoRows) {
 		t.Errorf("a second FinishBuild: err = %v, want pgx.ErrNoRows", err)
+	}
+}
+
+// deploymentStatus reads one deployment's status straight from the table.
+func deploymentStatus(t *testing.T, s *Service, id uuid.UUID) string {
+	t.Helper()
+	var status string
+	if err := s.pool.QueryRow(context.Background(),
+		`SELECT status FROM deployments WHERE id = $1`, id).Scan(&status); err != nil {
+		t.Fatalf("read deployment %s: %v", id, err)
+	}
+	return status
+}
+
+// A deploy interrupted after its build — or one that never had a build — has
+// no Job the build reconciler could ask about, so it sat on "running" until
+// the next deploy happened to supersede it.
+func TestADeploymentNothingIsDrivingIsFailed(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{})
+	ownerID := owner(t, s, pool, "owner-stale-deploy")
+
+	age := func(id uuid.UUID, by string) {
+		t.Helper()
+		if _, err := pool.Exec(ctx,
+			`UPDATE deployments SET started_at = now() - $2::interval WHERE id = $1`,
+			id, by); err != nil {
+			t.Fatalf("age the deployment: %v", err)
+		}
+	}
+	newApp := func(name string) App {
+		t.Helper()
+		a, err := s.Create(ctx, ownerID, CreateInput{
+			Name: name, Image: "nginx:alpine", Replicas: 1, Port: 80,
+		})
+		if err != nil {
+			t.Fatalf("Create %s: %v", name, err)
+		}
+		return a
+	}
+
+	// Abandoned hours ago.
+	stale := s.beginDeployment(ctx, ownerID, newApp("stale"), "redeploy")
+	age(stale, "3 hours")
+
+	// Started a moment ago: somebody is working on it.
+	fresh := s.beginDeployment(ctx, ownerID, newApp("fresh"), "redeploy")
+
+	// Old, but its build still claims to run. That is the build reconciler's
+	// to settle, because it can ask the cluster what became of the Job.
+	building := abandonedBuild(t, s, ownerID, newApp("building"))
+	age(building.DeploymentID, "3 hours")
+
+	if err := s.ReconcileDeployments(ctx); err != nil {
+		t.Fatalf("ReconcileDeployments: %v", err)
+	}
+
+	if got := deploymentStatus(t, s, stale); got != DeployFailed {
+		t.Errorf("the abandoned deployment is %q, want %q", got, DeployFailed)
+	}
+	if got := deploymentStatus(t, s, fresh); got != DeployRunning {
+		t.Errorf("a deployment that had just started is %q, want it left running", got)
+	}
+	if got := deploymentStatus(t, s, building.DeploymentID); got != DeployRunning {
+		t.Errorf("a deployment whose build is still running is %q, want it left to "+
+			"the build reconciler", got)
+	}
+}
+
+// The deploy being recorded often ended because its context did — the deploy
+// cap, or a client that hung up — and a write made on that dead context failed,
+// which is how a finished deploy stayed "running".
+func TestADeploymentIsFinishedEvenWhenItsContextIsDead(t *testing.T) {
+	s, _, pool := testService(t, Options{})
+	ownerID := owner(t, s, pool, "owner-dead-ctx")
+
+	a, err := s.Create(context.Background(), ownerID, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	id := s.beginDeployment(context.Background(), ownerID, a, "redeploy")
+
+	dead, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.endDeployment(dead, ownerID, id, context.DeadlineExceeded)
+
+	if got := deploymentStatus(t, s, id); got != DeployFailed {
+		t.Fatalf("deployment status = %q, want %q", got, DeployFailed)
 	}
 }

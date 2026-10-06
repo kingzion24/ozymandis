@@ -283,6 +283,57 @@ func (q *Queries) DeploymentIsCurrent(ctx context.Context, arg DeploymentIsCurre
 	return column_1, err
 }
 
+const failStaleDeployments = `-- name: FailStaleDeployments :many
+UPDATE deployments d
+SET status = 'failed', message = $1, finished_at = now()
+WHERE d.status = 'running'
+  AND d.started_at < $2
+  AND NOT EXISTS (
+      SELECT 1 FROM builds b
+      WHERE b.deployment_id = d.id AND b.status = 'running'
+  )
+RETURNING d.id, d.owner_id, d.app_id
+`
+
+type FailStaleDeploymentsParams struct {
+	Message       string
+	StartedBefore time.Time
+}
+
+type FailStaleDeploymentsRow struct {
+	ID      uuid.UUID
+	OwnerID string
+	AppID   uuid.UUID
+}
+
+// Deployments still claiming to run long after any deploy could be. Not
+// owner-scoped, for the reason ListRunningBuilds is not: this is the platform
+// settling its own records.
+//
+// A deploy is driven by a goroutine, and one that dies mid-flight — a restart
+// during the release command or the apply — leaves its row on 'running' with
+// nothing left to finish it. One with a build still running is left to the
+// build reconciler, which can ask the cluster what became of it.
+func (q *Queries) FailStaleDeployments(ctx context.Context, arg FailStaleDeploymentsParams) ([]FailStaleDeploymentsRow, error) {
+	rows, err := q.db.Query(ctx, failStaleDeployments, arg.Message, arg.StartedBefore)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []FailStaleDeploymentsRow{}
+	for rows.Next() {
+		var i FailStaleDeploymentsRow
+		if err := rows.Scan(&i.ID, &i.OwnerID, &i.AppID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const finishDeployment = `-- name: FinishDeployment :one
 UPDATE deployments
 SET status = $3, message = $4, finished_at = now()

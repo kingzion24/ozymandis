@@ -118,6 +118,15 @@ type Querier interface {
 	// back over a password somebody has since changed — that would make every
 	// restart a silent credential reset.
 	EnsureSuperuser(ctx context.Context, arg EnsureSuperuserParams) (User, error)
+	// Deployments still claiming to run long after any deploy could be. Not
+	// owner-scoped, for the reason ListRunningBuilds is not: this is the platform
+	// settling its own records.
+	//
+	// A deploy is driven by a goroutine, and one that dies mid-flight — a restart
+	// during the release command or the apply — leaves its row on 'running' with
+	// nothing left to finish it. One with a build still running is left to the
+	// build reconciler, which can ask the cluster what became of it.
+	FailStaleDeployments(ctx context.Context, arg FailStaleDeploymentsParams) ([]FailStaleDeploymentsRow, error)
 	// Only a build still running can be finished. Two things write this — the
 	// goroutine that ran the build and the reconciler settling one whose process
 	// went away — and without the guard the second overwrote the first: a build

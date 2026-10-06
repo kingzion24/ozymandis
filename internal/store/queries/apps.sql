@@ -82,6 +82,25 @@ SET image = $3
 WHERE owner_id = $1 AND id = $2
 RETURNING *;
 
+-- name: FailStaleDeployments :many
+-- Deployments still claiming to run long after any deploy could be. Not
+-- owner-scoped, for the reason ListRunningBuilds is not: this is the platform
+-- settling its own records.
+--
+-- A deploy is driven by a goroutine, and one that dies mid-flight — a restart
+-- during the release command or the apply — leaves its row on 'running' with
+-- nothing left to finish it. One with a build still running is left to the
+-- build reconciler, which can ask the cluster what became of it.
+UPDATE deployments d
+SET status = 'failed', message = @message, finished_at = now()
+WHERE d.status = 'running'
+  AND d.started_at < @started_before
+  AND NOT EXISTS (
+      SELECT 1 FROM builds b
+      WHERE b.deployment_id = d.id AND b.status = 'running'
+  )
+RETURNING d.id, d.owner_id, d.app_id;
+
 -- name: FinishDeployment :one
 -- Only a deployment that is still running can be finished.
 --

@@ -142,10 +142,6 @@ func (s *Service) settleBuild(
 // waiting a full interval to notice would leave every interrupted build
 // claiming to run for that long after the process came back.
 func (s *Service) RunReconciler(ctx context.Context) {
-	if s.builder == nil {
-		return
-	}
-
 	tick := time.NewTicker(ReconcileInterval)
 	defer tick.Stop()
 
@@ -153,10 +149,44 @@ func (s *Service) RunReconciler(ctx context.Context) {
 		if err := s.ReconcileBuilds(ctx); err != nil {
 			s.log.Warn("reconcile builds", slog.String("error", err.Error()))
 		}
+		// After the builds, so a deployment whose build was just settled has
+		// already been finished with the build's own reason.
+		if err := s.ReconcileDeployments(ctx); err != nil {
+			s.log.Warn("reconcile deployments", slog.String("error", err.Error()))
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
 		}
 	}
+}
+
+// staleDeployAfter is how long a deployment may claim to be running before the
+// reconciler concludes nothing is driving it. Past deployTimeout, which is the
+// longest a live deploy can take, with room for the row to be written.
+const staleDeployAfter = deployTimeout + 5*time.Minute
+
+// ReconcileDeployments fails deployments nothing is driving any more.
+//
+// The build reconciler only looks at builds, so a deploy interrupted after its
+// build — during the release command or the apply — or one with no build at
+// all, was left on 'running' until the next deploy happened to supersede it,
+// and `oz deploy --watch` polled it for ever. There is no Job to ask about
+// here, so age is the evidence: nothing can still be working on a deployment
+// older than the cap every deploy runs under.
+func (s *Service) ReconcileDeployments(ctx context.Context) error {
+	rows, err := s.q.FailStaleDeployments(ctx, dbgen.FailStaleDeploymentsParams{
+		Message: "the deploy stopped without finishing — this usually means " +
+			"Ozymandis was restarted while it was running. Deploy again",
+		StartedBefore: time.Now().Add(-staleDeployAfter),
+	})
+	if err != nil {
+		return fmt.Errorf("app: fail stale deployments: %w", err)
+	}
+	if len(rows) > 0 {
+		s.log.Info("failed deployments that were no longer running",
+			slog.Int("count", len(rows)))
+	}
+	return nil
 }

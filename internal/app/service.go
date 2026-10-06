@@ -1073,7 +1073,14 @@ func (s *Service) endDeployment(
 	if cause != nil {
 		status, message = DeployFailed, cause.Error()
 	}
-	switch _, err := s.q.FinishDeployment(ctx, dbgen.FinishDeploymentParams{
+	// Its own short deadline, cut loose from the caller's. The deploy this
+	// records may have ended precisely because that context did — the
+	// forty-minute cap, or a client that hung up mid-apply — and a write made
+	// on a dead context fails, leaving the row on 'running' for good.
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+
+	switch _, err := s.q.FinishDeployment(writeCtx, dbgen.FinishDeploymentParams{
 		OwnerID: ownerID, ID: id, Status: status, Message: message,
 	}); {
 	case errors.Is(err, pgx.ErrNoRows):
