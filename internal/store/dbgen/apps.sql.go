@@ -303,6 +303,30 @@ func (q *Queries) DeploymentIsCurrent(ctx context.Context, arg DeploymentIsCurre
 	return column_1, err
 }
 
+const failActiveDeployment = `-- name: FailActiveDeployment :execrows
+UPDATE deployments
+SET status = 'failed', message = $1
+WHERE owner_id = $2 AND id = $3 AND status = 'active'
+`
+
+type FailActiveDeploymentParams struct {
+	Message string
+	OwnerID string
+	ID      uuid.UUID
+}
+
+// Takes back an 'active' that turned out not to be true: the deploy was
+// applied and the new version never took over. Only while the row is still
+// active — a deployment something newer has since retired is that one's to
+// describe, not this one's.
+func (q *Queries) FailActiveDeployment(ctx context.Context, arg FailActiveDeploymentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failActiveDeployment, arg.Message, arg.OwnerID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const failStaleDeployments = `-- name: FailStaleDeployments :many
 UPDATE deployments d
 SET status = 'failed', message = $1, finished_at = now()

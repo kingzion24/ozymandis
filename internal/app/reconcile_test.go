@@ -5,6 +5,8 @@ import (
 	"errors"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -539,5 +541,101 @@ func TestAQueuedBuildThatWasSupersededIsNotBuilt(t *testing.T) {
 	cancel()
 	if _, err := s.buildIfNeeded(waiting, ownerID, a, uuid.Nil); !errors.Is(err, context.Canceled) {
 		t.Errorf("a cancelled wait for the slot: err = %v, want context.Canceled", err)
+	}
+}
+
+// stalledOrchestrator accepts every apply and, once stalled is set, never
+// finishes rolling one out — what the cluster does with an image that cannot be
+// pulled or crashes on boot.
+type stalledOrchestrator struct {
+	*orchestrator.Noop
+	stalled atomic.Bool
+}
+
+func (o *stalledOrchestrator) AppStatus(
+	ctx context.Context, ref orchestrator.Ref,
+) (orchestrator.AppStatus, error) {
+	if !o.stalled.Load() {
+		return o.Noop.AppStatus(ctx, ref)
+	}
+	return orchestrator.AppStatus{
+		Phase: orchestrator.PhaseRunning, Desired: 1, Ready: 0,
+		Message: "ImagePullBackOff",
+	}, nil
+}
+
+// "Active" is written when the cluster accepts a deploy, which is not the new
+// version starting. One that never rolls out must not stay green.
+func TestADeployThatNeverRollsOutIsMarkedFailed(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{})
+	ownerID := owner(t, s, pool, "owner-rollout-stalled")
+	s.rolloutTimeout, s.rolloutPoll = 150*time.Millisecond, 20*time.Millisecond
+	cluster := &stalledOrchestrator{Noop: orchestrator.NewNoop()}
+	s.orch = cluster
+
+	a, err := s.Create(ctx, ownerID, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// A deploy that rolls out stays active for as long as anyone looks.
+	good := s.beginDeployment(ctx, ownerID, a, "redeploy")
+	s.finishDeployment(ctx, ownerID, good, a, nil)
+	time.Sleep(300 * time.Millisecond)
+	if got := deploymentStatus(t, s, good); got != DeployActive {
+		t.Fatalf("a deploy that rolled out is %q, want %q", got, DeployActive)
+	}
+
+	// From here the cluster accepts applies and never completes them.
+	cluster.stalled.Store(true)
+	stalled := s.beginDeployment(ctx, ownerID, a, "redeploy")
+	s.finishDeployment(ctx, ownerID, stalled, a, nil)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for deploymentStatus(t, s, stalled) != DeployFailed {
+		if time.Now().After(deadline) {
+			t.Fatalf("the stalled deploy is still %q", deploymentStatus(t, s, stalled))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	var message string
+	if err := pool.QueryRow(ctx,
+		`SELECT message FROM deployments WHERE id = $1`, stalled).Scan(&message); err != nil {
+		t.Fatalf("read message: %v", err)
+	}
+	if !strings.Contains(message, "ImagePullBackOff") {
+		t.Errorf("the failure does not say what the cluster said: %q", message)
+	}
+}
+
+// A deployment that something newer has retired is that one's to describe. Its
+// own watch must not come back later and mark the retired row failed.
+func TestARolloutWatchLeavesASupersededDeploymentAlone(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{})
+	ownerID := owner(t, s, pool, "owner-rollout-superseded")
+	s.rolloutTimeout, s.rolloutPoll = 200*time.Millisecond, 20*time.Millisecond
+	cluster := &stalledOrchestrator{Noop: orchestrator.NewNoop()}
+	cluster.stalled.Store(true)
+	s.orch = cluster
+
+	a, err := s.Create(ctx, ownerID, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	first := s.beginDeployment(ctx, ownerID, a, "redeploy")
+	s.finishDeployment(ctx, ownerID, first, a, nil)
+	s.beginDeployment(ctx, ownerID, a, "redeploy") // retires the first
+
+	time.Sleep(500 * time.Millisecond)
+	if got := deploymentStatus(t, s, first); got != DeploySuperseded {
+		t.Errorf("the retired deployment is %q, want it left %q", got, DeploySuperseded)
 	}
 }

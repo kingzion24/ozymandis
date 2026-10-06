@@ -108,6 +108,15 @@ WHERE d.status = 'running'
   )
 RETURNING d.id, d.owner_id, d.app_id;
 
+-- name: FailActiveDeployment :execrows
+-- Takes back an 'active' that turned out not to be true: the deploy was
+-- applied and the new version never took over. Only while the row is still
+-- active — a deployment something newer has since retired is that one's to
+-- describe, not this one's.
+UPDATE deployments
+SET status = 'failed', message = @message
+WHERE owner_id = @owner_id AND id = @id AND status = 'active';
+
 -- name: FinishDeployment :one
 -- Only a deployment that is still running can be finished.
 --

@@ -270,7 +270,12 @@ type Service struct {
 	// deploy of the same app can stop it. Guarded by buildMu.
 	buildMu  sync.Mutex
 	building map[uuid.UUID]*buildClaim
-	images   Images
+
+	// How long a deploy is given to roll out once applied, and how often that
+	// is checked. Fields so a test does not have to wait five minutes.
+	rolloutTimeout time.Duration
+	rolloutPoll    time.Duration
+	images         Images
 
 	// resolver proves a custom domain points here. Nil leaves verification
 	// unavailable rather than failing oddly — an install with no DNS access
@@ -293,8 +298,10 @@ func NewService(
 		pool: pool, q: dbgen.New(pool), orch: orch, log: log, opts: opts,
 		keeper: opts.Keeper, resolver: opts.Resolver,
 		builder: opts.Builder, images: opts.Images,
-		buildSlot: make(chan struct{}, 1),
-		building:  make(map[uuid.UUID]*buildClaim),
+		buildSlot:      make(chan struct{}, 1),
+		building:       make(map[uuid.UUID]*buildClaim),
+		rolloutTimeout: 10 * time.Minute,
+		rolloutPoll:    5 * time.Second,
 	}
 }
 
@@ -1086,6 +1093,102 @@ func (s *Service) stillCurrent(ctx context.Context, ownerID string, id uuid.UUID
 	return ok
 }
 
+// finishDeployment records how a deploy went and, when it was applied, keeps
+// watching until the new version has actually taken over.
+func (s *Service) finishDeployment(
+	ctx context.Context, ownerID string, id uuid.UUID, a App, cause error,
+) {
+	s.endDeployment(ctx, ownerID, id, cause)
+	if cause == nil && id != uuid.Nil {
+		go s.confirmRollout(ownerID, id, a)
+	}
+}
+
+// confirmRollout takes back an "active" that turns out not to be true.
+//
+// A deployment is recorded active the moment the cluster accepts the new
+// version, which says nothing about whether that version starts. An image that
+// cannot be pulled, crashes on boot or is refused at admission was accepted
+// all the same: the old pods kept serving, or with storage attached nothing
+// did, and the history showed a green deploy either way.
+//
+// So the app's status is polled until the rollout completes. If it has not by
+// the deadline the deployment is marked failed, with what the cluster said.
+// The request that deployed is not held for this — it has its answer, that the
+// deploy was applied — and a restart simply loses the watch, which leaves the
+// row as it was before this existed.
+func (s *Service) confirmRollout(ownerID string, id uuid.UUID, a App) {
+	ctx, cancel := context.WithTimeout(context.Background(), s.rolloutTimeout)
+	defer cancel()
+
+	tick := time.NewTicker(s.rolloutPoll)
+	defer tick.Stop()
+
+	var last orchestrator.AppStatus
+	for {
+		// An unreadable status is not evidence either way, so it is skipped:
+		// the question is whether the rollout completes, and the cluster
+		// failing to answer once says nothing about that.
+		if st, err := s.orch.AppStatus(ctx, a.Ref()); err == nil {
+			if st.RolloutComplete {
+				return
+			}
+			last = st
+		}
+
+		select {
+		case <-tick.C:
+			// Something newer owns the app now, and its own watch with it.
+			if !s.stillCurrentActive(ownerID, id) {
+				return
+			}
+		case <-ctx.Done():
+			s.failRollout(ownerID, id, a, last)
+			return
+		}
+	}
+}
+
+// stillCurrentActive reports whether the deployment is still the active one.
+func (s *Service) stillCurrentActive(ownerID string, id uuid.UUID) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	d, err := s.q.GetDeployment(ctx, dbgen.GetDeploymentParams{OwnerID: ownerID, ID: id})
+	if err != nil {
+		// Gone with its app, or the database blinked. Keep watching only in
+		// the second case; a missing row has nothing left to mark.
+		return !errors.Is(err, pgx.ErrNoRows)
+	}
+	return d.Status == DeployActive
+}
+
+func (s *Service) failRollout(
+	ownerID string, id uuid.UUID, a App, last orchestrator.AppStatus,
+) {
+	message := fmt.Sprintf("applied, but the new version had not taken over after %s "+
+		"(%d of %d ready)", s.rolloutTimeout, last.Ready, last.Desired)
+	if last.Message != "" {
+		message += ": " + last.Message
+	}
+	message += " — the previous version may still be the one serving"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	n, err := s.q.FailActiveDeployment(ctx, dbgen.FailActiveDeploymentParams{
+		OwnerID: ownerID, ID: id, Message: message,
+	})
+	if err != nil {
+		s.log.Error("record a rollout that did not complete",
+			slog.String("app", a.Name), slog.String("error", err.Error()))
+		return
+	}
+	if n > 0 {
+		s.log.Warn("deploy applied but never rolled out",
+			slog.String("owner", ownerID), slog.String("app", a.Name),
+			slog.String("detail", message))
+	}
+}
+
 // endDeployment says how it went.
 //
 // Without this every row stays "running" for ever, and a history of finished
@@ -1164,7 +1267,7 @@ func (s *Service) Scale(ctx context.Context, ownerID, name string, replicas int3
 	err = s.apply(ctx, s.q, updated)
 	// Recorded whichever way it went. A deploy that failed and left no trace is
 	// one nobody can find afterwards.
-	s.endDeployment(ctx, ownerID, id, err)
+	s.finishDeployment(ctx, ownerID, id, updated, err)
 	if err != nil {
 		return App{}, err
 	}
@@ -1210,7 +1313,7 @@ func (s *Service) Redeploy(ctx context.Context, ownerID, name string) error {
 	s.recordRelease(ctx, ownerID, id, ReleaseSkipped, "")
 
 	err = s.apply(ctx, s.q, a)
-	s.endDeployment(ctx, ownerID, id, err)
+	s.finishDeployment(ctx, ownerID, id, a, err)
 	return err
 }
 
@@ -1321,7 +1424,7 @@ func (s *Service) deployInBackground(
 			return
 		}
 
-		s.endDeployment(ctx, ownerID, deployID, err)
+		s.finishDeployment(ctx, ownerID, deployID, built, err)
 
 		if err != nil {
 			s.log.Warn("deploy failed",

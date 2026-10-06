@@ -120,6 +120,11 @@ type Querier interface {
 	// back over a password somebody has since changed — that would make every
 	// restart a silent credential reset.
 	EnsureSuperuser(ctx context.Context, arg EnsureSuperuserParams) (User, error)
+	// Takes back an 'active' that turned out not to be true: the deploy was
+	// applied and the new version never took over. Only while the row is still
+	// active — a deployment something newer has since retired is that one's to
+	// describe, not this one's.
+	FailActiveDeployment(ctx context.Context, arg FailActiveDeploymentParams) (int64, error)
 	// Deployments still claiming to run long after any deploy could be. Not
 	// owner-scoped, for the reason ListRunningBuilds is not: this is the platform
 	// settling its own records.
