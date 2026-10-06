@@ -477,3 +477,67 @@ func TestScalingDoesNotSupersedeADeployInFlight(t *testing.T) {
 		t.Errorf("newest deployment = %+v, want the scale recorded", deps)
 	}
 }
+
+// Builds run one at a time, and a deploy overtaken while it waited its turn is
+// not built at all. Only the newest deploy of an app can be applied, so every
+// other build was up to half an hour of the node's memory spent on an image
+// nobody could use.
+func TestAQueuedBuildThatWasSupersededIsNotBuilt(t *testing.T) {
+	ctx := context.Background()
+	builder := &stubBuilder{}
+	s, _, pool := testService(t, Options{Builder: builder, Images: stubImages{}})
+	ownerID := owner(t, s, pool, "owner-build-queue")
+
+	a, err := s.Create(ctx, ownerID, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// Treated as a git app for the build path only; nothing here reaches a
+	// repository.
+	a.Source = SourceGit
+	a.Repo = Repo{URL: "https://example.test/x.git"}
+
+	// Another build holds the slot.
+	s.buildSlot <- struct{}{}
+
+	first := s.beginDeployment(ctx, ownerID, a, "redeploy")
+	result := make(chan error, 1)
+	go func() {
+		_, err := s.buildIfNeeded(ctx, ownerID, a, first)
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		t.Fatalf("the build did not wait for the slot: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// A newer deploy arrives while the first is still queued.
+	s.beginDeployment(ctx, ownerID, a, "redeploy")
+	<-s.buildSlot
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, ErrSuperseded) {
+			t.Fatalf("err = %v, want ErrSuperseded", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the queued build never returned after the slot was freed")
+	}
+	if builder.built != 0 {
+		t.Errorf("a superseded deploy was built anyway (%d builds)", builder.built)
+	}
+
+	// And a deploy that gives up while queued leaves the queue rather than
+	// holding its place in it.
+	s.buildSlot <- struct{}{}
+	defer func() { <-s.buildSlot }()
+	waiting, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := s.buildIfNeeded(waiting, ownerID, a, uuid.Nil); !errors.Is(err, context.Canceled) {
+		t.Errorf("a cancelled wait for the slot: err = %v, want context.Canceled", err)
+	}
+}

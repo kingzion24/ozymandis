@@ -181,7 +181,14 @@ func (s *Service) runBuild(
 	if buildErr != nil {
 		status, message, pushed = BuildFailed, buildErr.Error(), ""
 	}
-	switch _, err := s.q.FinishBuild(ctx, dbgen.FinishBuildParams{
+	// On a context of its own. A build that ended because its context did —
+	// stopped by a newer deploy, or out of time — is exactly the build whose
+	// result has to be written, and a write on that dead context fails and
+	// leaves the row claiming to run.
+	writeCtx, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancelWrite()
+
+	switch _, err := s.q.FinishBuild(writeCtx, dbgen.FinishBuildParams{
 		ID: row.ID, Status: status, Message: message,
 		Image: pushed, CommitSha: result.CommitSHA,
 	}); {

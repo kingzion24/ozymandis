@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -261,7 +262,15 @@ type Service struct {
 	opts Options
 
 	builder Builder
-	images  Images
+
+	// buildSlot is held for the length of a build, so they run one at a time.
+	buildSlot chan struct{}
+
+	// building is the build in flight for each app, by app id, so a newer
+	// deploy of the same app can stop it. Guarded by buildMu.
+	buildMu  sync.Mutex
+	building map[uuid.UUID]*buildClaim
+	images   Images
 
 	// resolver proves a custom domain points here. Nil leaves verification
 	// unavailable rather than failing oddly — an install with no DNS access
@@ -284,6 +293,8 @@ func NewService(
 		pool: pool, q: dbgen.New(pool), orch: orch, log: log, opts: opts,
 		keeper: opts.Keeper, resolver: opts.Resolver,
 		builder: opts.Builder, images: opts.Images,
+		buildSlot: make(chan struct{}, 1),
+		building:  make(map[uuid.UUID]*buildClaim),
 	}
 }
 
@@ -1203,6 +1214,38 @@ func (s *Service) Redeploy(ctx context.Context, ownerID, name string) error {
 	return err
 }
 
+// buildClaim is one app's build in flight.
+type buildClaim struct {
+	stop context.CancelFunc
+}
+
+// claimBuild registers a build as the one in flight for an app, stopping the
+// one it replaces, and returns the function that gives the claim up.
+//
+// Only the newest deploy of an app can ever be applied, so a build that has
+// been overtaken is work nobody can use. It used to run to completion anyway —
+// up to half an hour of the node's memory — and with builds queued one at a
+// time it would also have made its own replacement wait behind it.
+func (s *Service) claimBuild(appID uuid.UUID, stop context.CancelFunc) (release func()) {
+	claim := &buildClaim{stop: stop}
+
+	s.buildMu.Lock()
+	if prev := s.building[appID]; prev != nil {
+		prev.stop()
+	}
+	s.building[appID] = claim
+	s.buildMu.Unlock()
+
+	return func() {
+		s.buildMu.Lock()
+		// Only if it is still ours: a newer deploy may have taken the entry.
+		if s.building[appID] == claim {
+			delete(s.building, appID)
+		}
+		s.buildMu.Unlock()
+	}
+}
+
 // deployInBackground builds and applies without holding the request.
 //
 // The context is detached from the caller's. A build outlives the HTTP request
@@ -1224,7 +1267,21 @@ func (s *Service) deployInBackground(
 	go func() {
 		defer cancel()
 
-		built, err := s.buildIfNeeded(ctx, ownerID, a, deployID)
+		// The build gets a context of its own, registered under the app, so
+		// the next deploy of this app can stop it. Only the build: a release
+		// command or an apply that is already under way is never cut off from
+		// outside — interrupting a migration is worse than letting an
+		// overtaken one finish.
+		buildCtx, stopBuild := context.WithCancel(ctx)
+		release := s.claimBuild(a.ID, stopBuild)
+		built, err := s.buildIfNeeded(buildCtx, ownerID, a, deployID)
+		release()
+		if err != nil && buildCtx.Err() != nil && ctx.Err() == nil {
+			// Stopped by the deploy that replaced it, not by anything going
+			// wrong, and reported as that rather than as "context canceled".
+			err = ErrSuperseded
+		}
+		stopBuild()
 
 		// Checked before each remaining step, because from here on every one
 		// has an effect outside this goroutine: a release command runs a
@@ -1292,6 +1349,22 @@ func (s *Service) buildIfNeeded(
 ) (App, error) {
 	if a.Source != SourceGit {
 		return a, nil
+	}
+
+	// One build at a time. A build is the heaviest thing this install does,
+	// on the machine its apps run on, and three pushes in a minute used to
+	// start three of them at once.
+	select {
+	case s.buildSlot <- struct{}{}:
+		defer func() { <-s.buildSlot }()
+	case <-ctx.Done():
+		return a, ctx.Err()
+	}
+	// Asked again once the slot is ours: a deploy that was overtaken while it
+	// queued has nothing left to build for. Only the newest can be applied, so
+	// building the others was up to half an hour each of work nobody could use.
+	if !s.stillCurrent(ctx, ownerID, deployID) {
+		return a, ErrSuperseded
 	}
 
 	image, err := s.runBuild(ctx, ownerID, a, deployID, revisionFor(deployID))
