@@ -230,7 +230,7 @@ without digging through logs.
 | `OZYMANDIS_AUTH_TOKEN` | — | Bearer token. Unset, and with no accounts, means **no authentication** |
 | `OZYMANDIS_OWNER_ID` | `owner-local` | The team every resource belongs to on a fresh install |
 | `OZYMANDIS_SUPERUSER_NAME` | `batman` | The built-in administrator, seeded at every startup |
-| `OZYMANDIS_SUPERUSER_PASSWORD` | *(a published default)* | **Change this.** The default is a constant in this repository |
+| `OZYMANDIS_SUPERUSER_PASSWORD` | *(generated)* | Used once, to create the administrator. Unset, the first start generates one and logs it |
 | `OZYMANDIS_APP_DOMAIN` | — | Apps get `<name>.<this>`. Point `*.<this>` at the cluster |
 | `OZYMANDIS_CERT_RESOLVER` | `letsencrypt` | Name of an ACME resolver **the ingress controller already has**. Wrong name = the controller's own certificate, silently. Empty = plain HTTP |
 | `OZYMANDIS_BASE_URL` | — | Public URL the dashboard is reached at. Optional; sign-in no longer depends on it |

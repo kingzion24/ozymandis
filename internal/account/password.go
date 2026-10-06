@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/crypto/bcrypt"
 
@@ -164,6 +165,23 @@ func (s *Service) EnsureSuperuser(ctx context.Context, username, password string
 		return User{}, fmt.Errorf("account: ensure superuser: %w", err)
 	}
 	return toUser(row), nil
+}
+
+// UserExists reports whether anybody holds this username.
+//
+// Startup asks before seeding, because the two cases need different passwords:
+// an administrator who already exists keeps theirs, and one about to be created
+// with nothing configured must be given a generated one rather than a shared
+// default.
+func (s *Service) UserExists(ctx context.Context, username string) (bool, error) {
+	_, err := s.q.GetUserByUsername(ctx, normaliseUsername(username))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("account: look up %s: %w", username, err)
+	}
+	return true, nil
 }
 
 // ListUsers returns every person on the install, superusers first.

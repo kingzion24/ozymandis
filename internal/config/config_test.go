@@ -194,8 +194,9 @@ func TestAccountsAreOnWithoutABaseURL(t *testing.T) {
 	if c.SuperuserName() != DefaultSuperuserName {
 		t.Fatalf("SuperuserName = %q, want the built-in default", c.SuperuserName())
 	}
-	if !c.UsingDefaultSuperuserPassword() {
-		t.Fatal("the default password is not reported as in use, so nothing warns about it")
+	if c.SuperuserPassword() != "" {
+		t.Fatalf("SuperuserPassword = %q with nothing set — a built-in default is a "+
+			"password everybody has", c.SuperuserPassword())
 	}
 }
 
@@ -215,8 +216,8 @@ func TestSuperuserPasswordCanBeOverridden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if c.UsingDefaultSuperuserPassword() {
-		t.Fatal("an overridden password still reports as the built-in default")
+	if c.SuperuserPassword() != "a-chosen-password" {
+		t.Fatalf("SuperuserPassword = %q, want the configured one", c.SuperuserPassword())
 	}
 }
 

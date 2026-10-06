@@ -4,6 +4,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -369,14 +371,31 @@ func newOrchestrator(
 // superuser with no membership resolves to no owner and meets a dashboard they
 // cannot use, which looks exactly like a broken install.
 //
-// The warning is not decoration. The default password is a constant in a public
-// repository, so an install still running it can be signed into by anyone who
-// has read the source — and the only place that fact can reach the operator is
-// the log they are already watching at startup.
+// The password is only ever used to create the account. One that already
+// exists keeps whatever it has, so a restart cannot reset it; one being created
+// with nothing configured gets a generated password, logged once, because the
+// log at first start is the only channel a fresh install has to its operator.
 func seedSuperuser(
 	ctx context.Context, cfg config.Config, accounts *account.Service, log *slog.Logger,
 ) error {
-	user, err := accounts.EnsureSuperuser(ctx, cfg.SuperuserName(), cfg.SuperuserPassword())
+	name := cfg.SuperuserName()
+	exists, err := accounts.UserExists(ctx, name)
+	if err != nil {
+		return fmt.Errorf("seed the superuser: %w", err)
+	}
+
+	password, generated := cfg.SuperuserPassword(), false
+	if password == "" {
+		// Needed even when the account exists — EnsureSuperuser hashes what it
+		// is given before the database decides there is nothing to insert — but
+		// only reported when it is the one that was actually stored.
+		if password, err = randomPassword(); err != nil {
+			return fmt.Errorf("seed the superuser: %w", err)
+		}
+		generated = !exists
+	}
+
+	user, err := accounts.EnsureSuperuser(ctx, name, password)
 	if err != nil {
 		return fmt.Errorf("seed the superuser: %w", err)
 	}
@@ -384,15 +403,41 @@ func seedSuperuser(
 		return fmt.Errorf("give the superuser an owner to act as: %w", err)
 	}
 
-	if cfg.UsingDefaultSuperuserPassword() {
-		log.Warn("the superuser is using the built-in default password — "+
-			"anybody who has read the source can sign in. Change it on the team "+
-			"page, or set OZYMANDIS_SUPERUSER_PASSWORD",
+	switch {
+	case generated:
+		log.Warn("created the superuser with a generated password — sign in and "+
+			"change it on the team page; it is not shown again",
+			slog.String("username", user.Username), slog.String("password", password))
+	case superuserOnRetiredPassword(ctx, accounts, user.Username):
+		// Asked of the database, not of the configuration. What matters is the
+		// password the account has now, and that stopped following the
+		// environment the moment the account was created.
+		log.Error("the superuser still has the password this project used to ship "+
+			"as a default — it is public, so anybody can sign in. Change it on "+
+			"the team page now",
 			slog.String("username", user.Username))
-	} else {
+	default:
 		log.Info("superuser ready", slog.String("username", user.Username))
 	}
 	return nil
+}
+
+// superuserOnRetiredPassword reports whether the old published default still
+// signs the superuser in.
+func superuserOnRetiredPassword(
+	ctx context.Context, accounts *account.Service, username string,
+) bool {
+	_, err := accounts.Authenticate(ctx, username, config.RetiredSuperuserPassword)
+	return err == nil
+}
+
+// randomPassword is 24 hex characters from the system's random source.
+func randomPassword() (string, error) {
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate a password: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func newIdentity(

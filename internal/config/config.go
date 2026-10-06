@@ -255,7 +255,9 @@ func (c Config) accountFaults() []error {
 	// sign in with. A key set to something too short would be accepted here and
 	// then refused at seeding, which stops the process with an error about
 	// hashing rather than about the setting that caused it.
-	if err := account.ValidatePassword(c.SuperuserPassword()); err != nil {
+	if pw := c.SuperuserPassword(); pw == "" {
+		// Unset is allowed: the first start generates one.
+	} else if err := account.ValidatePassword(pw); err != nil {
 		errs = append(errs, fmt.Errorf("OZYMANDIS_SUPERUSER_PASSWORD: %w", err))
 	}
 	if err := account.ValidateUsername(c.SuperuserName()); err != nil {
@@ -299,15 +301,15 @@ func (c Config) Unauthenticated() bool { return c.AuthToken == "" }
 // a second way to reach it would be a second thing to get wrong.
 func (c Config) AccountsEnabled() bool { return true }
 
-// SuperuserPassword is the built-in administrator's password.
+// SuperuserPassword is the password the built-in administrator is created
+// with, or empty when none was configured.
 //
-// The default is a constant, so a fresh install has a working sign-in with no
-// configuration at all. That default is published in the source of a repository
-// intended to go public, so it is a way in for anybody reading it: set
-// OZYMANDIS_SUPERUSER_PASSWORD, or change the password from the dashboard,
-// which is what the startup log says in as many words.
+// There is no default. There used to be — a constant in this file — and a
+// constant in a public repository is a password everybody has. An install that
+// sets nothing gets one generated at the first start instead, printed once in
+// the startup log.
 func (c Config) SuperuserPassword() string {
-	return env("OZYMANDIS_SUPERUSER_PASSWORD", DefaultSuperuserPassword)
+	return env("OZYMANDIS_SUPERUSER_PASSWORD", "")
 }
 
 // SuperuserName is the built-in administrator's username.
@@ -315,16 +317,18 @@ func (c Config) SuperuserName() string {
 	return env("OZYMANDIS_SUPERUSER_NAME", DefaultSuperuserName)
 }
 
-// UsingDefaultSuperuserPassword reports whether the published default is live.
-func (c Config) UsingDefaultSuperuserPassword() bool {
-	return c.SuperuserPassword() == DefaultSuperuserPassword
-}
+// DefaultSuperuserName is the built-in administrator, who creates every other
+// account.
+const DefaultSuperuserName = "batman"
 
-// The built-in administrator, who creates every other account.
-const (
-	DefaultSuperuserName     = "batman"
-	DefaultSuperuserPassword = "tevinoni2642"
-)
+// RetiredSuperuserPassword is the default this file used to ship.
+//
+// Kept for one purpose: recognising an install whose administrator was created
+// with it and never changed it. Nothing is ever seeded with this value, and
+// removing the constant would not unpublish it — it is in the history of a
+// public repository — it would only stop the startup check from naming the
+// installs that are still open because of it.
+const RetiredSuperuserPassword = "tevinoni2642"
 
 func env(key, fallback string) string {
 	if v, ok := os.LookupEnv(key); ok && v != "" {

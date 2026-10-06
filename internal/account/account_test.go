@@ -363,3 +363,33 @@ const testPrefix = "at-"
 func uniqueName(base string) string {
 	return fmt.Sprintf("%s%s-%d", testPrefix, base, userSeq.Add(1))
 }
+
+// Startup decides whether to generate a password by asking whether the
+// administrator already exists, so a wrong answer either leaks a password that
+// was never stored or seeds nothing anybody can sign in with.
+func TestUserExistsFollowsTheSuperuserBeingSeeded(t *testing.T) {
+	s := testService(t)
+	ctx := context.Background()
+	name := uniqueName("rorschach")
+
+	if exists, err := s.UserExists(ctx, name); err != nil || exists {
+		t.Fatalf("UserExists before seeding = %v, %v; want false, nil", exists, err)
+	}
+	if _, err := s.EnsureSuperuser(ctx, name, "first-password-1"); err != nil {
+		t.Fatalf("EnsureSuperuser: %v", err)
+	}
+	if exists, err := s.UserExists(ctx, strings.ToUpper(name)); err != nil || !exists {
+		t.Fatalf("UserExists after seeding = %v, %v; want true, nil", exists, err)
+	}
+
+	// A second seed with a different password must not replace the first.
+	if _, err := s.EnsureSuperuser(ctx, name, "second-password-2"); err != nil {
+		t.Fatalf("EnsureSuperuser again: %v", err)
+	}
+	if _, err := s.Authenticate(ctx, name, "first-password-1"); err != nil {
+		t.Errorf("the original password stopped working after a re-seed: %v", err)
+	}
+	if _, err := s.Authenticate(ctx, name, "second-password-2"); err == nil {
+		t.Error("a re-seed replaced the password of an administrator who already existed")
+	}
+}
