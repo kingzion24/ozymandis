@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -34,7 +35,8 @@ func claimName(appName, volumeName string) string {
 //
 // Nothing here deletes. A claim the spec stopped mentioning has been detached,
 // not discarded, and destroying storage as a side effect of an edit is the one
-// mistake in this subsystem that cannot be undone.
+// mistake in this subsystem that cannot be undone. RemoveVolume is the delete,
+// and it is only ever called for a volume somebody named and confirmed.
 func (o *Orchestrator) applyVolumes(ctx context.Context, spec orchestrator.AppSpec) error {
 	for _, v := range spec.Volumes {
 		size, err := resource.ParseQuantity(fmt.Sprintf("%d", v.SizeBytes))
@@ -61,6 +63,29 @@ func (o *Orchestrator) applyVolumes(ctx context.Context, spec orchestrator.AppSp
 			return fmt.Errorf("k8s: apply volume %s/%s: %w", spec.Ref, v.Name, err)
 		}
 	}
+	return nil
+}
+
+// Compile-time check that this can remove a volume's storage.
+var _ orchestrator.VolumeRemover = (*Orchestrator)(nil)
+
+// RemoveVolume deletes the claim behind one of an app's volumes.
+//
+// Called after the workload has been applied without the mount. If a pod is
+// still letting go, the claim's own protection finalizer holds the delete
+// until it has, so this cannot pull storage out from under a running
+// container.
+func (o *Orchestrator) RemoveVolume(
+	ctx context.Context, ref orchestrator.Ref, volume string,
+) error {
+	name := claimName(ref.Name, volume)
+	err := o.client.CoreV1().PersistentVolumeClaims(ref.Namespace).
+		Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("k8s: delete volume %s/%s: %w", ref, volume, err)
+	}
+	o.log.Info("volume storage removed",
+		slog.String("app", ref.String()), slog.String("claim", name))
 	return nil
 }
 

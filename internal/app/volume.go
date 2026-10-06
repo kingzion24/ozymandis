@@ -194,10 +194,22 @@ func (s *Service) DeleteVolume(
 	}
 
 	// Applied after the row is gone, so the workload comes back without the
-	// mount. The claim itself is left in the namespace: the orchestrator never
-	// deletes storage, and it goes when the app does.
+	// mount.
 	if err := s.apply(ctx, s.q, a); err != nil {
 		return err
+	}
+
+	// And then the storage itself. The form this is reached from makes a
+	// person type the volume's name under a line saying it destroys what the
+	// volume holds, and until now it did not: the claim stayed, the disk stayed
+	// allocated, and attaching a volume of the same name later brought the
+	// "deleted" data back — or, at a smaller size, made every apply of the app
+	// fail, because a claim cannot shrink.
+	if remover, ok := s.orch.(orchestrator.VolumeRemover); ok {
+		if err := remover.RemoveVolume(ctx, a.Ref(), volumeName); err != nil {
+			return fmt.Errorf("app: %s is detached from %s, but its storage could "+
+				"not be removed: %w", volumeName, appName, err)
+		}
 	}
 
 	s.log.Info("volume deleted",

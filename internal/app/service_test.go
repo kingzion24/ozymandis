@@ -77,8 +77,18 @@ func withCNAMETarget(t *testing.T, pool *pgxpool.Pool) {
 type recordingOrchestrator struct {
 	*orchestrator.Noop
 
-	mu   sync.Mutex
-	last orchestrator.AppSpec
+	mu      sync.Mutex
+	last    orchestrator.AppSpec
+	removed []string // volumes whose storage was removed, as "app/volume"
+}
+
+func (r *recordingOrchestrator) RemoveVolume(
+	_ context.Context, ref orchestrator.Ref, volume string,
+) error {
+	r.mu.Lock()
+	r.removed = append(r.removed, ref.Name+"/"+volume)
+	r.mu.Unlock()
+	return nil
 }
 
 func (r *recordingOrchestrator) ApplyApp(ctx context.Context, spec orchestrator.AppSpec) error {
@@ -748,7 +758,7 @@ func TestVolumesGrowButNeverShrink(t *testing.T) {
 // the app; deleting the storage is a separate act.
 func TestDeletingAnAttachedVolumeIsRefused(t *testing.T) {
 	ctx := context.Background()
-	s, _, pool := testService(t, Options{})
+	s, orch, pool := testService(t, Options{})
 	id := owner(t, s, pool, "svc-vol-del")
 
 	if _, err := s.Create(ctx, id, CreateInput{
@@ -772,6 +782,12 @@ func TestDeletingAnAttachedVolumeIsRefused(t *testing.T) {
 	got, _ := s.Get(ctx, id, "web")
 	if len(got.Volumes) != 0 {
 		t.Fatalf("volumes = %+v, want none", got.Volumes)
+	}
+	// And the storage with it. Deleting a volume used to leave the claim, so
+	// the data it was said to destroy came back with the next volume of that
+	// name.
+	if len(orch.removed) != 1 || orch.removed[0] != "web/data" {
+		t.Errorf("storage removed = %v, want [web/data]", orch.removed)
 	}
 }
 

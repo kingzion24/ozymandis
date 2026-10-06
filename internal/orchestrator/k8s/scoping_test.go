@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"testing"
 	"time"
 
@@ -471,5 +472,46 @@ func TestPodsCarryHowTheContainerLastStopped(t *testing.T) {
 	}
 	if !p.LastExitAt.Equal(killedAt.Time) {
 		t.Errorf("LastExitAt = %v, want %v", p.LastExitAt, killedAt.Time)
+	}
+}
+
+// Applying a spec never destroys storage, and dropping a volume from one
+// leaves its claim alone. RemoveVolume is the delete — the only one — and it
+// removes exactly the claim it is asked for.
+func TestRemoveVolumeDeletesOnlyTheNamedClaim(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+	spec := specWithVolume()
+	spec.Volumes = append(spec.Volumes,
+		orchestrator.VolumeSpec{Name: "cache", MountPath: "/var/cache/app", SizeBytes: 1 << 30})
+	if err := o.ApplyApp(ctx, spec); err != nil {
+		t.Fatalf("ApplyApp: %v", err)
+	}
+	claims := client.CoreV1().PersistentVolumeClaims(spec.Namespace)
+
+	// Detached by an apply: both claims are still there.
+	detached := spec
+	detached.Volumes = spec.Volumes[1:]
+	if err := o.ApplyApp(ctx, detached); err != nil {
+		t.Fatalf("ApplyApp without the volume: %v", err)
+	}
+	if _, err := claims.Get(ctx, spec.Name+"-data", metav1.GetOptions{}); err != nil {
+		t.Fatalf("an apply removed a claim the spec merely stopped mentioning: %v", err)
+	}
+
+	if err := o.RemoveVolume(ctx, spec.Ref, "data"); err != nil {
+		t.Fatalf("RemoveVolume: %v", err)
+	}
+	if _, err := claims.Get(ctx, spec.Name+"-data", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("the claim is still there after RemoveVolume: err = %v", err)
+	}
+	if _, err := claims.Get(ctx, spec.Name+"-cache", metav1.GetOptions{}); err != nil {
+		t.Errorf("RemoveVolume took a claim it was not asked for: %v", err)
+	}
+
+	// Removing what is already gone is the retry of a delete that half
+	// finished, and must not be an error.
+	if err := o.RemoveVolume(ctx, spec.Ref, "data"); err != nil {
+		t.Errorf("RemoveVolume twice: %v", err)
 	}
 }

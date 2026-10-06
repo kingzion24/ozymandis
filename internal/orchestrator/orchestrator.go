@@ -665,6 +665,19 @@ type Orchestrator interface {
 	ClusterInspector
 }
 
+// VolumeRemover deletes the storage behind a volume.
+//
+// Optional and asserted for, like Runner. It is separate from ApplyApp on
+// purpose: applying a spec never destroys storage, however the spec changed,
+// because an edit must not be able to cost somebody their data. This is the
+// other half — the explicit, named, confirmed delete — and it is the only
+// thing that removes a claim short of deleting the whole app.
+type VolumeRemover interface {
+	// RemoveVolume deletes the claim for one of an app's volumes. Removing one
+	// that is already gone is not an error.
+	RemoveVolume(ctx context.Context, ref Ref, volume string) error
+}
+
 // NodeManager takes a machine out of service.
 //
 // Optional, and asserted for rather than required. Everything else here can be
