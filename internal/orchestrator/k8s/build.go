@@ -11,9 +11,12 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
+	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
+	networkingv1ac "k8s.io/client-go/applyconfigurations/networking/v1"
 
 	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
@@ -54,6 +57,14 @@ const (
 	// Dockerfile by detecting what the code is. Large, and only pulled on
 	// repositories that need it.
 	packImage = "paketobuildpacks/builder-jammy-base:latest"
+
+	// pushImage ships the finished image to the registry. It is the one build
+	// image that runs with the push credential, and it runs no repository code
+	// — it only copies an artifact the earlier steps produced — so it is the
+	// one image here whose trust actually matters. skopeo rather than a shell
+	// around docker: it copies an OCI archive or layout straight to a registry
+	// with no daemon and no build.
+	pushImage = "quay.io/skopeo/stable:v1.16.1"
 )
 
 // buildTimeout caps a single build.
@@ -179,6 +190,54 @@ func (o *Orchestrator) ensureBuildNamespace(ctx context.Context) error {
 		Create(ctx, sa, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("k8s: create build service account: %w", err)
+	}
+
+	if err := o.ensureBuildNetworkPolicy(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+// buildNetworkPolicyName is the isolation policy for the build namespace.
+const buildNetworkPolicyName = "ozymandis-build-isolation"
+
+// ensureBuildNetworkPolicy fences the build namespace off from the rest of the
+// cluster.
+//
+// A build runs whatever a repository's Dockerfile or buildpack tells it to, so
+// a build pod is the one place arbitrary code runs with no app in front of it.
+// Left unpolicied — which it was — that code could open a connection to any
+// other tenant's pod or Service, or to the control plane's own in-cluster
+// address, straight past every app's front-door checks. This closes that:
+//
+//   - no ingress at all. Nothing legitimately connects *to* a build; leaving
+//     the rule list empty under an Ingress policy type denies all inbound.
+//
+//   - egress to DNS and the internet only, with the cluster ranges carved out.
+//     A build must reach the git host, the base-image registry and the push
+//     registry, all of which it reaches as ordinary internet; it never needs to
+//     reach another pod in this cluster. The push registry being reached over
+//     the internet is also why this is not, on its own, containment for a build
+//     that reads the push credential — that exfiltration leaves over the same
+//     path a build legitimately uses, and is closed by taking the credential
+//     out of the repo-code containers, not here.
+//
+// Unconditional, unlike the per-app policy: it depends on no ingress namespace,
+// and the build namespace has no public workload to make unreachable.
+func (o *Orchestrator) ensureBuildNetworkPolicy(ctx context.Context) error {
+	policy := networkingv1ac.NetworkPolicy(buildNetworkPolicyName, BuildNamespace).
+		WithLabels(map[string]string{
+			orchestrator.LabelManagedBy: orchestrator.ManagedByValue,
+		}).
+		WithSpec(networkingv1ac.NetworkPolicySpec().
+			WithPodSelector(metav1ac.LabelSelector()).
+			WithPolicyTypes(networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress).
+			// No ingress rules: deny every inbound connection.
+			WithEgress(dnsEgressRule(), internetEgressRule()))
+
+	if _, err := o.client.NetworkingV1().NetworkPolicies(BuildNamespace).
+		Apply(ctx, policy, applyOpts()); err != nil {
+		return fmt.Errorf("k8s: apply build network policy: %w", err)
 	}
 	return nil
 }
@@ -367,7 +426,7 @@ func (o *Orchestrator) streamBuildLog(
 ) orchestrator.BuildResult {
 	var result orchestrator.BuildResult
 
-	for _, c := range []string{cloneContainer, dockerfileContainer, buildpackContainer} {
+	for _, c := range []string{cloneContainer, dockerfileContainer, buildpackContainer, pushContainer} {
 		stream, err := o.openContainerLog(ctx, pod, c)
 		if err != nil {
 			// Genuinely nothing to read: the pod finished without reaching
