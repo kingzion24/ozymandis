@@ -178,7 +178,31 @@ func Load() (Config, error) {
 	if err := c.validate(); err != nil {
 		return Config{}, err
 	}
+
+	// The dashboard's own hostname is reserved automatically, on top of
+	// anything the operator listed. A tenant that could claim it would be
+	// handed an Ingress for the control plane's own origin — and a page served
+	// there is same-origin to the dashboard, so it receives the session cookie
+	// and can imitate the sign-in form. This is not something an operator
+	// should have to remember to list, so it is not left to them.
+	if host := baseURLHost(c.BaseURL); host != "" {
+		c.ReservedDomains = append(c.ReservedDomains, host)
+	}
 	return c, nil
+}
+
+// baseURLHost is the hostname a dashboard URL is served at, without any port,
+// or "" when none is configured. The URL is already known to parse — validate
+// checked it — so a failure here can only mean it was empty.
+func baseURLHost(baseURL string) string {
+	if baseURL == "" {
+		return ""
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Hostname())
 }
 
 func (c Config) validate() error {

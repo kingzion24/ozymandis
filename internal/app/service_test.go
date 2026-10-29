@@ -58,6 +58,12 @@ func (okResolver) LookupHost(context.Context, string) ([]string, error) {
 	return []string{"203.0.113.10"}, nil
 }
 
+// No TXT challenge is needed here: every host already answers with the CNAME
+// target above, which proves control on its own.
+func (okResolver) LookupTXT(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
 const testCNAMETarget = "edge.example.com"
 
 // withCNAMETarget records the install's ExternalDNS target, without which a
