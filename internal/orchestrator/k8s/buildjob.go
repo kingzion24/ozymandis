@@ -14,11 +14,24 @@ import (
 	"github.com/kingzion24/ozymandis/internal/orchestrator"
 )
 
-// The three steps of a build, named so their logs can be told apart.
+// The steps of a build, named so their logs can be told apart.
 const (
 	cloneContainer      = "clone"
 	dockerfileContainer = "dockerfile"
 	buildpackContainer  = "buildpack"
+	pushContainer       = "push"
+)
+
+// The image artifacts a build step writes to the shared volume, to be pushed
+// afterwards. Writing the image to disk rather than pushing it from the build
+// step is the whole point of the split: the step that runs a repository's own
+// code never holds the push credential, so there is nothing there for that code
+// to read and use against another tenant's images. See pushStep.
+const (
+	// dockerfileArtifact is the OCI archive BuildKit writes.
+	dockerfileArtifact = "/workspace/image.oci"
+	// buildpackLayoutDir is the OCI layout the buildpack lifecycle writes.
+	buildpackLayoutDir = "/workspace/layout"
 )
 
 // commitMarker prefixes the one line of the clone's output that is data rather
@@ -60,19 +73,7 @@ const (
 // buildpack step's group so all three can write the shared volume.
 const buildUID = 1000
 
-// insecureOutput is the BuildKit output option for a plain-HTTP registry.
-//
-// Appended to the output rather than set as a daemon-wide flag, so it applies
-// to this push and not to every registry the build happens to touch — a base
-// image pulled from a public registry still gets TLS.
-func insecureOutput(req orchestrator.BuildRequest) string {
-	if !req.Insecure {
-		return ""
-	}
-	return ",registry.insecure=true"
-}
-
-// insecureHost names the one registry the lifecycle may reach over HTTP.
+// insecureHost names the one registry a build may reach over plain HTTP.
 func insecureHost(req orchestrator.BuildRequest) string {
 	if !req.Insecure {
 		return ""
@@ -81,51 +82,22 @@ func insecureHost(req orchestrator.BuildRequest) string {
 	return host
 }
 
-// resolveUIDScript asks the built image what user it actually runs as.
-//
-// Kubernetes refuses runAsNonRoot unless it can prove the user is not root,
-// and it cannot prove that from a name — an image ending "USER node" builds,
-// pushes and pulls perfectly and then fails to start. The name-to-uid mapping
-// lives in the image's own /etc/passwd, so the only thing that can resolve it
-// is the image.
-//
-// So it resolves itself: a throwaway build FROM the image runs "id -u", which
-// runs as whatever USER the image set, and the answer is copied out to a
-// scratch stage so only that one number crosses back. No layers are pushed and
-// nothing is kept.
-//
-// Best effort by design. A distroless image has no shell and this finds
-// nothing, which is not a failure — the deploy then behaves exactly as it did
-// before, and the pod says why.
-const resolveUIDScript = `
-mkdir -p /tmp/uidprobe
-# Written to /tmp, not to /. The whole reason this probe exists is that the
-# image runs as a non-root user, and that user cannot write to the root
-# directory — so the obvious path is the one guaranteed to fail.
-printf 'FROM %s AS app\nRUN id -u > /tmp/uid\nFROM scratch\nCOPY --from=app /tmp/uid /uid\n' "$IMAGE" \
-  > /tmp/uidprobe/Dockerfile
-if buildctl-daemonless.sh build \
-  --frontend dockerfile.v0 \
-  --local context=/tmp/uidprobe \
-  --local dockerfile=/tmp/uidprobe \
-  --output type=local,dest=/tmp/uidout 2>/tmp/uidprobe.err; then
-  echo "` + uidMarker + `$(cat /tmp/uidout/uid | tr -d "[:space:]")"
-else
-  # Printed rather than swallowed. Hiding this made a broken probe look like
-  # an image that simply had no answer, which is the failure that cannot be
-  # told apart from success without reading it.
-  echo "Could not work out which user this image runs as:"
-  tail -5 /tmp/uidprobe.err
-fi`
-
 // buildJob describes one build.
 //
-// Three init containers rather than one container doing everything. Each step
-// gets its own image — clone, BuildKit, buildpacks — so none of them has to be
-// a custom image this project builds and publishes, which would make running
-// Ozymandis depend on Ozymandis having somewhere to push.
+// Four steps, each its own image — clone, BuildKit, buildpacks, push — so none
+// has to be a custom image this project builds and publishes, which would make
+// running Ozymandis depend on Ozymandis having somewhere to push.
+//
+// The first three run a repository's own code (its Dockerfile, its buildpack
+// detect and build) and hold NO registry credential: they write the finished
+// image to the shared volume and stop. Only the last step, which runs no
+// repository code, has the push credential, and all it does is ship the
+// artifact. This is the deploy-key rule applied to the registry credential too
+// — a secret a build step can read is a secret any Dockerfile can exfiltrate,
+// and the install-wide push credential read by one tenant's build is every
+// other tenant's images, so it lives only where repository code cannot reach.
 func buildJob(
-	name string, req orchestrator.BuildRequest, pullSecret, sshSecret string,
+	name string, req orchestrator.BuildRequest, pushSecret, sshSecret string,
 ) *batchv1.Job {
 	// Never retried. A build that failed will fail the same way, and a second
 	// attempt would double the log, double the wait, and end where it started.
@@ -186,10 +158,13 @@ func buildJob(
 							},
 						},
 						{
+							// Defined on the pod, but mounted into the push step
+							// alone — see pushStep. The clone, Dockerfile and
+							// buildpack steps never reference it.
 							Name: "registry",
 							VolumeSource: corev1.VolumeSource{
 								Secret: &corev1.SecretVolumeSource{
-									SecretName: pullSecret,
+									SecretName: pushSecret,
 									Items: []corev1.KeyToPath{{
 										Key: corev1.DockerConfigJsonKey, Path: "config.json",
 									}},
@@ -197,11 +172,16 @@ func buildJob(
 							},
 						},
 					}, sshVolumes(sshSecret)...),
+					// Clone, build and push run in order: init containers run one
+					// after another, and the push — the only step holding the
+					// credential — is the final, ordinary container, so it runs
+					// after every repository-code step has finished.
 					InitContainers: []corev1.Container{
 						bounded(cloneStep(req, sshSecret)),
 						bounded(dockerfileStep(req)),
+						bounded(buildpackStep(req)),
 					},
-					Containers: []corev1.Container{bounded(buildpackStep(req))},
+					Containers: []corev1.Container{bounded(pushStep(req))},
 				},
 			},
 		},
@@ -364,21 +344,18 @@ func dockerfileStep(req orchestrator.BuildRequest) corev1.Container {
 			{Name: "IMAGE", Value: req.Image},
 			{Name: "SUBDIR", Value: req.Subdir},
 			{Name: "BUILDKITD_FLAGS", Value: "--oci-worker-no-process-sandbox"},
-			{Name: "DOCKER_CONFIG", Value: "/registry"},
-			// An empty value leaves the output option off entirely, so the
-			// secure path carries no trace of the insecure one.
-			{Name: "INSECURE", Value: insecureOutput(req)},
-			// The host, separately, because a plain-HTTP registry has to be
-			// declared to the daemon as well: the output option covers the
-			// push, and pulling from one is daemon configuration.
+			{Name: "ARTIFACT", Value: dockerfileArtifact},
+			// The registry host, so a Dockerfile that pulls its base image FROM
+			// this install's own plain-HTTP registry can still reach it. The
+			// push is no longer this step's job, so there is no push credential
+			// here and no push output option.
 			{Name: "INSECURE_HOST", Value: insecureHost(req)},
 		},
 		Command: []string{"/bin/sh", "-euc"},
 		Args: []string{`
-# A plain-HTTP registry has to be declared to buildkitd, not just to the
-# output. Without this the push works — it carries its own option — and every
-# pull from that registry fails, which is a confusing pair of behaviours to
-# debug from the outside.
+# A plain-HTTP registry has to be declared to buildkitd so a base image pulled
+# FROM this install's own registry resolves. It is declared for pulls only; the
+# push happens later, in a separate step that holds the credential.
 if [ -n "$INSECURE_HOST" ]; then
   printf '[registry."%s"]\n  http = true\n' "$INSECURE_HOST" > /tmp/buildkitd.toml
   export BUILDKITD_FLAGS="$BUILDKITD_FLAGS --config /tmp/buildkitd.toml"
@@ -389,16 +366,18 @@ if [ ! -f Dockerfile ]; then
   echo "No Dockerfile here — falling back to buildpacks."
   exit 0
 fi
-echo "Building the Dockerfile and pushing $IMAGE"
+echo "Building the Dockerfile for $IMAGE"
+# Built to an OCI archive on the shared volume rather than pushed. This step
+# runs the repository's own Dockerfile, so it deliberately holds no credential;
+# the push step that does hold one runs no repository code.
 buildctl-daemonless.sh build \
   --frontend dockerfile.v0 \
   --local context=. \
   --local dockerfile=. \
-  --output type=image,name=$IMAGE,push=true$INSECURE \
+  --output type=oci,name=$IMAGE,dest=$ARTIFACT \
   --progress plain
 touch ` + dockerfileMarker + `
-echo "Pushed $IMAGE"
-` + resolveUIDScript + `
+echo "Built $IMAGE"
 `},
 		// This is BuildKit's own documented Kubernetes configuration for the
 		// rootless image, and the deviations from it were tried and reverted
@@ -426,9 +405,10 @@ echo "Pushed $IMAGE"
 			SeccompProfile:  &corev1.SeccompProfile{Type: unconfined},
 			AppArmorProfile: &corev1.AppArmorProfile{Type: corev1.AppArmorProfileTypeUnconfined},
 		},
+		// No registry mount: this step runs the repository's Dockerfile, and a
+		// credential it could read is one any RUN line could exfiltrate.
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: buildVolume, MountPath: "/workspace"},
-			{Name: "registry", MountPath: "/registry", ReadOnly: true},
 		},
 	}
 }
@@ -466,9 +446,14 @@ func itoa(i int64) string { return strconv.FormatInt(i, 10) }
 // the buildpacks that detect what the code is live in that image — a lifecycle
 // with no buildpacks detects nothing.
 //
-// It exits immediately when the Dockerfile step already pushed. Every
-// container in a pod runs, so "did the previous step handle this" is a
-// question this one has to ask rather than something the pod can express.
+// It exits immediately when the Dockerfile step already built. Every container
+// in a pod runs, so "did the previous step handle this" is a question this one
+// has to ask rather than something the pod can express.
+//
+// Like the Dockerfile step, it holds no credential and pushes nothing: the
+// lifecycle exports to a local OCI layout on the shared volume with -layout,
+// and the push step ships it afterwards. The lifecycle runs a repository's own
+// buildpacks, so the credential must not be within its reach.
 func buildpackStep(req orchestrator.BuildRequest) corev1.Container {
 
 	return corev1.Container{
@@ -477,16 +462,11 @@ func buildpackStep(req orchestrator.BuildRequest) corev1.Container {
 		Env: []corev1.EnvVar{
 			{Name: "IMAGE", Value: req.Image},
 			{Name: "SUBDIR", Value: req.Subdir},
-			// The lifecycle reads registry credentials from this, the same
-			// place BuildKit does, so one secret serves both.
-			{Name: "DOCKER_CONFIG", Value: "/registry"},
+			{Name: "LAYOUT_DIR", Value: buildpackLayoutDir},
 			// The platform API the lifecycle is asked to speak. Pinned rather
 			// than left to default, because the builder image and the
 			// lifecycle inside it move independently of this code.
 			{Name: "CNB_PLATFORM_API", Value: "0.13"},
-			// The lifecycle takes its insecure registries as a list rather
-			// than a flag on the output, so the same fact is spelled twice.
-			{Name: "CNB_INSECURE_REGISTRIES", Value: insecureHost(req)},
 		},
 		Command: []string{"/bin/sh", "-euc"},
 		Args: []string{`
@@ -498,7 +478,7 @@ echo "No Dockerfile — detecting what this is with buildpacks."
 # The lifecycle writes layers, a cache and a platform directory, and refuses
 # to guess where. They go on the shared volume rather than the image's own
 # filesystem, which is read-only to a non-root user.
-mkdir -p /workspace/layers /workspace/cache /workspace/platform/env
+mkdir -p /workspace/layers /workspace/cache /workspace/platform/env "$LAYOUT_DIR"
 
 # Tell git the checkout is trustworthy, through the platform directory.
 #
@@ -520,18 +500,83 @@ printf '%s' '1'              > /workspace/platform/env/GIT_CONFIG_COUNT
 printf '%s' 'safe.directory' > /workspace/platform/env/GIT_CONFIG_KEY_0
 printf '%s' '*'              > /workspace/platform/env/GIT_CONFIG_VALUE_0
 
+# -layout exports to a local OCI layout under -layout-dir instead of pushing to
+# a registry, so this step needs no credential. The image reference becomes a
+# layout path; the push step reads it back out of $LAYOUT_DIR.
 /cnb/lifecycle/creator \
   -app="/workspace/src/$SUBDIR" \
   -layers=/workspace/layers \
   -cache-dir=/workspace/cache \
   -platform=/workspace/platform \
+  -layout -layout-dir="$LAYOUT_DIR" \
   -uid=` + itoa(cnbUID) + ` -gid=` + itoa(cnbGID) + ` \
   -log-level=info \
   "$IMAGE"
-echo "Pushed $IMAGE"
-` + resolveUIDScript + `
+echo "Built $IMAGE"
 `},
 		SecurityContext: hardenedAs(cnbUID, cnbGID),
+		// No registry mount: the lifecycle runs repository buildpacks.
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: buildVolume, MountPath: "/workspace"},
+		},
+	}
+}
+
+// pushStep ships the built image to the registry.
+//
+// This is the only step that holds the push credential, and the only one that
+// runs no repository code — that pairing is the point. The clone, Dockerfile
+// and buildpack steps each run something the repository supplied, so a
+// credential within their reach is a credential a repository can take; this
+// step runs a fixed `skopeo copy` of an artifact those steps already produced,
+// so there is nothing repository-controlled executing beside the secret.
+//
+// It pushes whichever artifact exists: the OCI archive from the Dockerfile
+// step, or the OCI layout from the buildpack step. The credential is read from
+// /registry, exactly where the build steps used to read it — the move is which
+// container that mount appears in, not where in the filesystem it lands.
+func pushStep(req orchestrator.BuildRequest) corev1.Container {
+	tlsFlag := ""
+	if req.Insecure {
+		tlsFlag = " --dest-tls-verify=false"
+	}
+
+	return corev1.Container{
+		Name:  pushContainer,
+		Image: pushImage,
+		Env: []corev1.EnvVar{
+			{Name: "IMAGE", Value: req.Image},
+			{Name: "ARTIFACT", Value: dockerfileArtifact},
+			{Name: "LAYOUT_DIR", Value: buildpackLayoutDir},
+			{Name: "MARKER", Value: dockerfileMarker},
+			// skopeo reads its credential from this file.
+			{Name: "REGISTRY_AUTH_FILE", Value: "/registry/config.json"},
+		},
+		Command: []string{"/bin/sh", "-euc"},
+		Args: []string{`
+if [ -f "$MARKER" ]; then
+  echo "Pushing $IMAGE from the Dockerfile build"
+  SRC="oci-archive:$ARTIFACT"
+else
+  echo "Pushing $IMAGE from the buildpack build"
+  # The lifecycle wrote an OCI layout under $LAYOUT_DIR; skopeo reads the whole
+  # layout and pushes the single image it holds.
+  SRC="oci:$LAYOUT_DIR"
+fi
+skopeo copy` + tlsFlag + ` "$SRC" "docker://$IMAGE"
+echo "Pushed $IMAGE"
+
+# Best effort: report the uid the pushed image runs as, so the deploy can honour
+# runAsNonRoot. A numeric user is usable as-is; a named one is left for the
+# image to resolve at runtime, exactly as before this was discovered here.
+USER_FIELD="$(skopeo inspect --config` + tlsFlag + ` "docker://$IMAGE" 2>/dev/null \
+  | sed -n 's/.*"User"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+case "$USER_FIELD" in
+  ''|*[!0-9]*) : ;;                       # empty or not purely numeric: leave it
+  *) echo "` + uidMarker + `$USER_FIELD" ;;
+esac
+`},
+		SecurityContext: hardenedAs(buildUID, cnbGID),
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: buildVolume, MountPath: "/workspace"},
 			{Name: "registry", MountPath: "/registry", ReadOnly: true},

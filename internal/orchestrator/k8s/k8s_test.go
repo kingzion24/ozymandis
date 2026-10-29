@@ -617,11 +617,16 @@ func TestANamespaceIsIsolatedToItsOwnerAndTheEdge(t *testing.T) {
 		t.Fatal("no network policy was created")
 	}
 
-	// Ingress only. Denying egress would break every app that calls an LLM, a
-	// managed database, or a payment provider — with a timeout, not an error.
-	if len(p.Spec.PolicyTypes) != 1 || p.Spec.PolicyTypes[0] != networkingv1.PolicyTypeIngress {
-		t.Errorf("policyTypes = %v, want [Ingress] only", p.Spec.PolicyTypes)
+	// Ingress and egress both. Egress is restricted rather than denied — the
+	// internet stays reachable so an app calling an LLM, a managed database or a
+	// payment provider is untouched — but the in-cluster ranges are carved out
+	// so a pod cannot reach another tenant's Service or the API server directly.
+	if !hasPolicyType(p, networkingv1.PolicyTypeIngress) ||
+		!hasPolicyType(p, networkingv1.PolicyTypeEgress) {
+		t.Errorf("policyTypes = %v, want both Ingress and Egress", p.Spec.PolicyTypes)
 	}
+
+	assertAppEgress(t, p)
 
 	// Empty pod selector: everything in the namespace, including whatever is
 	// added later. A policy naming specific pods leaves the next one exposed.
@@ -655,6 +660,141 @@ func TestANamespaceIsIsolatedToItsOwnerAndTheEdge(t *testing.T) {
 	if !sawEdge {
 		t.Error("the ingress controller cannot reach the app — every public app would be offline")
 	}
+}
+
+func hasPolicyType(p *networkingv1.NetworkPolicy, want networkingv1.PolicyType) bool {
+	for _, t := range p.Spec.PolicyTypes {
+		if t == want {
+			return true
+		}
+	}
+	return false
+}
+
+// assertAppEgress checks the three things egress must allow and the one it must
+// not: DNS, the owner's own namespaces, and the internet with the cluster
+// ranges carved out — and, by that carve-out, no raw path to another tenant.
+func assertAppEgress(t *testing.T, p *networkingv1.NetworkPolicy) {
+	t.Helper()
+	var sawDNS, sawInternet bool
+	for _, rule := range p.Spec.Egress {
+		for _, peer := range rule.To {
+			if peer.PodSelector != nil &&
+				peer.PodSelector.MatchLabels["k8s-app"] == "kube-dns" {
+				sawDNS = true
+				if len(rule.Ports) != 2 {
+					t.Errorf("DNS egress opens %d ports, want 2 (UDP+TCP 53)", len(rule.Ports))
+				}
+			}
+			if peer.IPBlock != nil {
+				sawInternet = true
+				if peer.IPBlock.CIDR != "0.0.0.0/0" {
+					t.Errorf("internet egress CIDR = %q, want 0.0.0.0/0", peer.IPBlock.CIDR)
+				}
+				if len(peer.IPBlock.Except) != 2 {
+					t.Errorf("internet egress excepts %v, want the two cluster ranges",
+						peer.IPBlock.Except)
+				}
+			}
+		}
+	}
+	if !sawDNS {
+		t.Error("egress does not allow DNS — every outbound call becomes a silent timeout")
+	}
+	if !sawInternet {
+		t.Error("egress does not allow the internet — external APIs would break")
+	}
+}
+
+// The push credential must reach only the step that runs no repository code.
+//
+// A build step runs a repository's own Dockerfile or buildpacks, so any secret
+// mounted into it is one that code can read and send away — and the install's
+// push credential is every tenant's images. This asserts the structural rule
+// that keeps that from happening: the registry secret is mounted into the push
+// container and nowhere else, and the clone, Dockerfile and buildpack steps —
+// the ones running repository code — carry no registry mount at all.
+func TestOnlyThePushStepHoldsTheRegistryCredential(t *testing.T) {
+	req := orchestrator.BuildRequest{
+		Owner:   "owner-1",
+		Image:   "registry.example.com/owner-1-web:deadbeef",
+		RepoURL: "https://github.com/example/web",
+		Ref:     "main",
+	}
+	// A deploy key present too, so the test covers the fuller pod, not the
+	// bare one.
+	job := buildJob("build-x", req, "ozymandis-registry", "build-x-ssh")
+
+	spec := job.Spec.Template.Spec
+	repoCodeSteps := map[string]bool{
+		cloneContainer: true, dockerfileContainer: true, buildpackContainer: true,
+	}
+
+	var pushMountsRegistry bool
+	for _, c := range append(append([]corev1.Container{}, spec.InitContainers...), spec.Containers...) {
+		mountsRegistry := false
+		for _, m := range c.VolumeMounts {
+			if m.Name == "registry" {
+				mountsRegistry = true
+			}
+		}
+		switch {
+		case repoCodeSteps[c.Name] && mountsRegistry:
+			t.Errorf("the %q step runs repository code and mounts the registry "+
+				"credential — repository code could exfiltrate it", c.Name)
+		case c.Name == pushContainer && mountsRegistry:
+			pushMountsRegistry = true
+		}
+	}
+	if !pushMountsRegistry {
+		t.Error("the push step does not mount the registry credential, so it cannot push")
+	}
+
+	// And the push step is where it belongs in the order: the only ordinary
+	// container, running after every repository-code step (the init containers).
+	if len(spec.Containers) != 1 || spec.Containers[0].Name != pushContainer {
+		t.Errorf("containers = %v, want the push step alone as the final container",
+			containerNames(spec.Containers))
+	}
+	for _, c := range spec.InitContainers {
+		if c.Name == pushContainer {
+			t.Error("the push step is an init container — it would run before the build finished")
+		}
+	}
+}
+
+func containerNames(cs []corev1.Container) []string {
+	var out []string
+	for _, c := range cs {
+		out = append(out, c.Name)
+	}
+	return out
+}
+
+// The build namespace runs arbitrary repository code, so it is the one place
+// that most needs fencing off from the rest of the cluster — and it had no
+// policy at all.
+func TestTheBuildNamespaceIsIsolated(t *testing.T) {
+	o, client := testOrchestrator(t)
+	if err := o.ensureBuildNamespace(context.Background()); err != nil {
+		t.Fatalf("ensureBuildNamespace: %v", err)
+	}
+
+	p, err := client.NetworkingV1().NetworkPolicies(BuildNamespace).
+		Get(context.Background(), buildNetworkPolicyName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("the build namespace has no network policy: %v", err)
+	}
+
+	// No ingress rules under an Ingress policy type is a deny-all for inbound.
+	if !hasPolicyType(p, networkingv1.PolicyTypeIngress) || len(p.Spec.Ingress) != 0 {
+		t.Errorf("build ingress = %v (types %v), want deny-all",
+			p.Spec.Ingress, p.Spec.PolicyTypes)
+	}
+	if !hasPolicyType(p, networkingv1.PolicyTypeEgress) {
+		t.Fatalf("build policy has no egress type, so egress is unrestricted")
+	}
+	assertAppEgress(t, p)
 }
 
 // The gate. Ozymandis does not install the edge and cannot guess where it runs,
