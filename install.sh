@@ -527,6 +527,13 @@ configure() {
 			# clock on the wall, not against a three-hour subtraction.
 			TZ=
 
+			# The namespace your ingress controller runs in. Setting it is what turns
+			# on network isolation: each app's namespace then accepts traffic only from
+			# its own owner's namespaces and from the edge. Empty leaves every pod able
+			# to reach every other tenant's pods directly, so set it as soon as the
+			# controller from the closing notes is installed — "traefik", for instance.
+			OZYMANDIS_INGRESS_NAMESPACE=
+
 			# Set OZYMANDIS_BASE_URL to a public https URL to turn magic-link sign-in on,
 			# and OZYMANDIS_APP_DOMAIN to the domain apps get a hostname under.
 			#OZYMANDIS_BASE_URL=
@@ -658,7 +665,11 @@ summary() {
 		       a Let's Encrypt resolver over TLS-ALPN-01 is what this is built
 		       against.
 		    2. Set OZYMANDIS_CERT_RESOLVER in ${ENV_FILE} to that resolver's
-		       name, then: systemctl restart ozymandis
+		       name, and OZYMANDIS_INGRESS_NAMESPACE to the namespace the
+		       controller runs in, then: systemctl restart ozymandis
+
+		  Until OZYMANDIS_INGRESS_NAMESPACE is set, apps are not network-isolated
+		  from each other: any pod can reach any other app's pods directly.
 
 		  Leave OZYMANDIS_CERT_RESOLVER empty until step 1 is done. A name that
 		  matches no resolver is not an error anywhere — hostnames are served the

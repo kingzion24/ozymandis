@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/google/uuid"
@@ -73,7 +75,28 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 	if err := bcrypt.CompareHashAndPassword(row.PasswordHash, []byte(password)); err != nil {
 		return User{}, ErrBadCredentials
 	}
+	s.upgradeHash(ctx, row.ID, row.PasswordHash, password)
 	return toUser(row), nil
+}
+
+// upgradeHash re-hashes a password stored at a lower cost than passwordCost.
+//
+// The only moment the plaintext is in hand is a successful sign-in, so this is
+// where old hashes catch up. Failure is not the person's problem — they proved
+// who they are — so it is reported and the sign-in goes ahead.
+func (s *Service) upgradeHash(ctx context.Context, id uuid.UUID, stored []byte, password string) {
+	cost, err := bcrypt.Cost(stored)
+	if err != nil || cost >= passwordCost {
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), passwordCost)
+	if err == nil {
+		err = s.q.SetUserPassword(ctx, dbgen.SetUserPasswordParams{PasswordHash: hash, ID: id})
+	}
+	if err != nil {
+		s.log.Warn("could not upgrade a password hash",
+			slog.String("user", id.String()), slog.String("error", err.Error()))
+	}
 }
 
 // decoyHash is a valid bcrypt hash of a password nobody holds.
@@ -83,12 +106,25 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 var decoyHash []byte
 
 func init() {
-	h, err := bcrypt.GenerateFromPassword([]byte("ozymandis-decoy"), bcrypt.DefaultCost)
+	h, err := bcrypt.GenerateFromPassword([]byte("ozymandis-decoy"), passwordCost)
 	if err != nil {
 		panic("account: cannot generate decoy hash: " + err.Error())
 	}
 	decoyHash = h
+
+	start := time.Now()
+	bcrypt.CompareHashAndPassword(decoyHash, []byte("not-the-decoy"))
+	CompareTime = time.Since(start)
 }
+
+// CompareTime is how long one bcrypt comparison at passwordCost took on this
+// machine, measured at startup.
+//
+// The sign-in floor is derived from it. A fixed floor that a slow machine's
+// comparison overruns stops hiding anything: an unknown name, compared against
+// the decoy, then answers more slowly than a known one whose hash predates the
+// current cost.
+var CompareTime time.Duration
 
 // CreateUser adds a person who can sign in, and is superuser-only.
 //
@@ -281,12 +317,19 @@ func (s *Service) requireSuperuser(ctx context.Context, actor uuid.UUID) error {
 	return nil
 }
 
+// passwordCost is the bcrypt work factor for new hashes.
+//
+// Two above the library default of 10, which dates from hardware a decade
+// older. Hashes already stored keep the cost they were made with and still
+// verify; they are simply not upgraded until the password next changes.
+const passwordCost = 12
+
 // HashPassword validates a password and returns its bcrypt hash.
 func HashPassword(password string) ([]byte, error) {
 	if err := ValidatePassword(password); err != nil {
 		return nil, err
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), passwordCost)
 	if err != nil {
 		return nil, fmt.Errorf("account: hash password: %w", err)
 	}

@@ -78,8 +78,11 @@ func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 // without pretending the two paths do equal work.
 //
 // The floor is above the slow path, so the pad is always a wait rather than a
-// race the fast path can lose.
-const signInFloor = 250 * time.Millisecond
+// race the fast path can lose. That has to hold on the machine this runs on,
+// not the one it was written on: a bcrypt comparison takes four times as long
+// on a small VPS as on a laptop, so the floor is twice the comparison this
+// process measured at startup, and never less than 250ms.
+var signInFloor = max(250*time.Millisecond, 2*account.CompareTime)
 
 // Attempts allowed in a window, per address and per client.
 //
@@ -353,10 +356,10 @@ func (e signInError) Error() string { return string(e) }
 
 // clientIP is the address the rate limiter counts against.
 //
-// Best effort: behind a proxy chi's RealIP has already replaced RemoteAddr from
-// X-Forwarded-For, which a direct caller can also set. That is why the
-// per-address limit exists and is the tighter of the two — it is the one an
-// enumerator cannot dodge by rotating a header.
+// Behind a proxy this install trusts (OZYMANDIS_TRUSTED_PROXIES), the process
+// has already replaced RemoteAddr with the client the proxy reported. A caller
+// arriving directly is counted under the address it connected from, whatever
+// X-Forwarded-For it sends.
 func clientIP(r *http.Request) string {
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		return host

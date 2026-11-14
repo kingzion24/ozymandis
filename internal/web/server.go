@@ -424,7 +424,7 @@ func New(opts Options) (*Server, error) {
 // forget, and the forgotten one is the security bug.
 func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
-	r.Use(chimw.RequestID, chimw.RealIP, chimw.Recoverer)
+	r.Use(chimw.RequestID, chimw.Recoverer)
 
 	// A trailing slash is the same page. /apps used to answer it because it was
 	// a mounted subtree; the groups below are flat, so it is stated here instead
@@ -523,15 +523,6 @@ func (s *Server) Handler() http.Handler {
 			r.Post("/projects/{slug}/arrange", s.canvasArrange)
 			r.Post("/apps/{name}/position", s.canvasPosition)
 			r.Get("/apps", s.appList)
-			r.Post("/apps", s.appCreate)
-			r.Get("/apps/new", s.appNew)
-			if s.stacks != nil {
-				// Member, like creating an app. A stack is several apps and
-				// nothing a person could not do one at a time from the same
-				// page, so a stricter gate here would only be theatre.
-				r.Get("/templates", s.templateList)
-				r.Post("/templates", s.templateDeploy)
-			}
 			r.Get("/apps/{name}", s.appDetail)
 			r.Get("/apps/{name}/variables", s.appDetail)
 			r.Get("/apps/{name}/metrics", s.appDetail)
@@ -561,6 +552,12 @@ func (s *Server) Handler() http.Handler {
 			// actually use, and every one of those is gated on its own route.
 			if s.accounts != nil {
 				r.Get("/team", s.teamPage)
+
+				// Member, so anybody can change their own password — the thing
+				// to do when you think it is known, and not something that
+				// should wait for an admin. Changing someone else's is refused
+				// by SetPassword unless the actor is a superuser.
+				r.Post("/team/users/{id}/password", s.teamSetPassword)
 
 				// Access tokens sit at member, not owner, and act on the viewer's
 				// own credentials only. A token can never carry more authority
@@ -598,6 +595,18 @@ func (s *Server) Handler() http.Handler {
 			r.Use(s.requireRole(account.RoleAdmin))
 
 			r.Post("/apps/{name}/delete", s.appDelete)
+
+			// Creating an app is admin, matching the API. A new app is created
+			// with its variables, and setting a variable is admin everywhere
+			// else because the value is usually a credential — so creation at
+			// member was a way to set one around that gate. A stack is several
+			// apps, so it follows.
+			r.Get("/apps/new", s.appNew)
+			r.Post("/apps", s.appCreate)
+			if s.stacks != nil {
+				r.Get("/templates", s.templateList)
+				r.Post("/templates", s.templateDeploy)
+			}
 
 			// Storage sits with the admin actions rather than the member ones:
 			// attaching changes how the app deploys, and deleting destroys what
@@ -650,7 +659,6 @@ func (s *Server) Handler() http.Handler {
 			if s.accounts != nil {
 				r.Post("/team/users", s.teamCreateUser)
 				r.Post("/team/users/{id}/delete", s.teamDeleteUser)
-				r.Post("/team/users/{id}/password", s.teamSetPassword)
 				r.Post("/team/members/{id}/remove", s.teamRemoveMember)
 			}
 		})
@@ -1100,7 +1108,14 @@ func (s *Server) clusterEvents(w http.ResponseWriter, r *http.Request) {
 	// still bounded: Kubernetes discards events after an hour or so anyway, and
 	// reading without a limit would make a busy cluster's churn this page's
 	// problem.
-	events, err := s.orch.Events(ctx, eventReadLimit)
+	// The viewer's own team's events. The whole cluster's only for a
+	// superuser, or on an install with no accounts, where the one owner is
+	// everybody: an event names another team's pods, images and failures.
+	owner := orchestrator.OwnerID(identity.MustFromContext(ctx).ID)
+	if viewer, ok := s.viewerFor(r); s.accounts == nil || (ok && viewer.IsSuperuser) {
+		owner = ""
+	}
+	events, err := s.orch.Events(ctx, owner, eventReadLimit)
 	if err != nil {
 		data.OK = false
 		data.Error = err.Error()

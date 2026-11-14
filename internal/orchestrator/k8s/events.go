@@ -20,19 +20,19 @@ import (
 // FailedScheduling that explains why nothing is running would otherwise be
 // buried under them.
 func (o *Orchestrator) Events(
-	ctx context.Context, limit int,
+	ctx context.Context, owner orchestrator.OwnerID, limit int,
 ) ([]orchestrator.EventInfo, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
 
-	list, err := o.client.CoreV1().Events("").List(ctx, metav1.ListOptions{})
+	items, err := o.eventsFor(ctx, owner)
 	if err != nil {
-		return nil, fmt.Errorf("k8s: list events: %w", err)
+		return nil, err
 	}
 
-	out := make([]orchestrator.EventInfo, 0, len(list.Items))
-	for _, e := range list.Items {
+	out := make([]orchestrator.EventInfo, 0, len(items))
+	for _, e := range items {
 		out = append(out, orchestrator.EventInfo{
 			Namespace: e.Namespace,
 			Type:      e.Type,
@@ -150,4 +150,39 @@ func shortAccessMode(m corev1.PersistentVolumeAccessMode) string {
 		return "RWOP"
 	}
 	return string(m)
+}
+
+// eventsFor reads the events in the namespaces owner owns, or every event when
+// owner is empty.
+//
+// Per namespace rather than one cluster-wide list filtered afterwards. An event
+// carries no owner label of its own — only the namespace it was recorded in
+// does — and reading everything to throw most of it away would put every
+// team's events through this process for each page view.
+func (o *Orchestrator) eventsFor(
+	ctx context.Context, owner orchestrator.OwnerID,
+) ([]corev1.Event, error) {
+	if owner == "" {
+		list, err := o.client.CoreV1().Events("").List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("k8s: list events: %w", err)
+		}
+		return list.Items, nil
+	}
+
+	namespaces, err := o.client.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
+		LabelSelector: ownedBy(owner),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("k8s: list namespaces for events: %w", err)
+	}
+	var items []corev1.Event
+	for _, ns := range namespaces.Items {
+		list, err := o.client.CoreV1().Events(ns.Name).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("k8s: list events in %q: %w", ns.Name, err)
+		}
+		items = append(items, list.Items...)
+	}
+	return items, nil
 }

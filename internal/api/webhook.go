@@ -37,7 +37,7 @@ const maxWebhookBody = 5 << 20 // 5 MiB
 // details on this path.
 func WebhookHandler(hooks Webhooks, log *slog.Logger) http.Handler {
 	r := chi.NewRouter()
-	r.Use(chimw.RequestID, chimw.RealIP, chimw.Recoverer)
+	r.Use(chimw.RequestID, chimw.Recoverer)
 
 	h := &webhookServer{hooks: hooks, log: log}
 

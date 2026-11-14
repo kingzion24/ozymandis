@@ -22,7 +22,7 @@ type inspectorStub struct {
 	err     error
 }
 
-func (s inspectorStub) Events(context.Context, int) ([]orchestrator.EventInfo, error) {
+func (s inspectorStub) Events(context.Context, orchestrator.OwnerID, int) ([]orchestrator.EventInfo, error) {
 	return s.events, s.err
 }
 
