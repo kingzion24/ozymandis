@@ -47,7 +47,7 @@ func TestEventsHoistWarnings(t *testing.T) {
 		}
 	}
 
-	got, err := o.Events(ctx, 50)
+	got, err := o.Events(ctx, "", 50)
 	if err != nil {
 		t.Fatalf("Events: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestEventsRespectLimit(t *testing.T) {
 		}
 	}
 
-	got, err := o.Events(ctx, 5)
+	got, err := o.Events(ctx, "", 5)
 	if err != nil {
 		t.Fatalf("Events: %v", err)
 	}
@@ -193,5 +193,43 @@ func TestShortAccessMode(t *testing.T) {
 		if got := shortAccessMode(in); got != want {
 			t.Errorf("shortAccessMode(%v) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestEventsScopedToOwner(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+
+	for ns, owner := range map[string]string{"ns-mine": "team-a", "ns-theirs": "team-b"} {
+		if _, err := client.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: ns, Labels: map[string]string{
+				orchestrator.LabelManagedBy: orchestrator.ManagedByValue,
+				orchestrator.LabelOwner:     owner,
+			}},
+		}, metav1.CreateOptions{}); err != nil {
+			t.Fatalf("seed namespace: %v", err)
+		}
+		if _, err := client.CoreV1().Events(ns).Create(ctx, &corev1.Event{
+			ObjectMeta: metav1.ObjectMeta{Name: "e-" + ns, Namespace: ns},
+			Type:       "Warning", Reason: "BackOff", Message: "from " + ns,
+		}, metav1.CreateOptions{}); err != nil {
+			t.Fatalf("seed event: %v", err)
+		}
+	}
+
+	got, err := o.Events(ctx, "team-a", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Namespace != "ns-mine" {
+		t.Fatalf("team-a saw %+v, want only its own namespace's event", got)
+	}
+
+	all, err := o.Events(ctx, "", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("an empty owner saw %d events, want both", len(all))
 	}
 }

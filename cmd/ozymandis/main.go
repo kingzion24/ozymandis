@@ -331,7 +331,7 @@ func mount(
 	// outside: GitHub is another origin by definition.
 
 	root := http.NewServeMux()
-	root.Handle("/api/", sameOriginOnly(apiSrv.Handler()))
+	root.Handle("/api/", securityHeaders(sameOriginOnly(apiSrv.Handler())))
 
 	// Outside the identity middleware entirely: GitHub carries no credential of
 	// ours, and the delivery's signature is the authentication. Mounted here
@@ -340,8 +340,21 @@ func mount(
 	// never fires.
 	root.Handle("/webhooks/", api.WebhookHandler(apps, log))
 
-	root.Handle("/", sameOriginOnly(srv.Handler()))
-	return root, nil
+	root.Handle("/", securityHeaders(sameOriginOnly(srv.Handler())))
+
+	// In front of all three mounts, so the dashboard's sign-in limiter, the
+	// API and the webhook log agree on who a request came from — and none of
+	// them takes a caller's own word for it.
+	trusted, err := parseTrustedProxies(cfg.TrustedProxies)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.EdgeSecret == "" {
+		log.Info("forwarded client addresses are believed from any trusted address — "+
+			"set OZYMANDIS_EDGE_SECRET so that only the edge proxy is believed",
+			slog.Int("trusted_ranges", len(trusted)))
+	}
+	return realIP(trusted, cfg.EdgeSecret)(root), nil
 }
 
 // sameOriginOnly refuses unsafe requests a browser reports as cross-origin.
@@ -363,6 +376,15 @@ func sameOriginOnly(next http.Handler) http.Handler {
 func newOrchestrator(
 	ctx context.Context, cfg config.Config, log *slog.Logger,
 ) (orchestrator.Orchestrator, error) {
+	// Said once at startup as well as per namespace: an operator reading the
+	// first screen of the log should not have to find out from a line about
+	// some app that tenants can reach each other's pods.
+	if cfg.IngressNamespace == "" {
+		log.Warn("apps are NOT network-isolated from each other — any pod can reach "+
+			"any other app's pods directly",
+			slog.String("fix", "set OZYMANDIS_INGRESS_NAMESPACE to where your ingress controller runs"))
+	}
+
 	orch, err := k8s.Connect(k8s.Config{
 		InCluster:        cfg.KubeInCluster,
 		Kubeconfig:       cfg.Kubeconfig,

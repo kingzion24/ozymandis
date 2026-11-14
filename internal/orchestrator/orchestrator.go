@@ -725,8 +725,13 @@ type ClusterInspector interface {
 	// Pods lists running pods.
 	Pods(ctx context.Context, opts PodListOptions) ([]PodInfo, error)
 
-	// Events lists recent cluster events, newest first, capped at limit.
-	Events(ctx context.Context, limit int) ([]EventInfo, error)
+	// Events lists recent events, newest first, capped at limit.
+	//
+	// Scoped to the namespaces owner owns. An empty owner is the whole
+	// cluster, which only a caller entitled to see every team should ask for:
+	// an event names pods, images and the reasons they failed, and another
+	// team's are not this caller's to read.
+	Events(ctx context.Context, owner OwnerID, limit int) ([]EventInfo, error)
 
 	// Logs reads a container's output.
 	//

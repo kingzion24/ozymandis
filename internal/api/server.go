@@ -166,7 +166,7 @@ func New(opts Options) (*Server, error) {
 // Handler returns the router, mounted at /api/v1.
 func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
-	r.Use(chimw.RequestID, chimw.RealIP, chimw.Recoverer)
+	r.Use(chimw.RequestID, chimw.Recoverer)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Authentication first, and with no redirect anywhere in it. The
@@ -197,10 +197,13 @@ func (s *Server) Handler() http.Handler {
 			}
 		})
 
-		// Writes. Admin, matching the dashboard exactly: the same actions are
-		// behind the same role there, and an API that let a member do what the
-		// dashboard refuses them would be a way around the gate rather than a
-		// second way to reach it.
+		// Writes. Admin, with one difference from the dashboard that is
+		// deliberate rather than drift: the dashboard lets a member scale and
+		// redeploy — changes a redeploy can undo — and this API does not yet.
+		// Creating an app is admin in both, because a new app carries its
+		// variables. An API that let a member do what the dashboard refuses
+		// them would be a way around the gate rather than a second way to
+		// reach it.
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireRole(account.RoleAdmin))
 

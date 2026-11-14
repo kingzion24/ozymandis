@@ -24,7 +24,7 @@ const PollInterval = 5 * time.Minute
 // The same image the build's clone step uses, named here rather than imported
 // from the k8s package: this layer must not depend on a specific orchestrator,
 // and an image name is a string.
-const pollImage = "alpine/git:latest"
+const pollImage = "alpine/git:2.47.2"
 
 // pollTimeout caps one pass.
 //

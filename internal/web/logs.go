@@ -320,7 +320,12 @@ func writeLogEvent(w io.Writer, line orchestrator.LogLine) {
 	} else {
 		fmt.Fprintf(w, "id: %d\n", line.At.UnixNano())
 	}
-	for _, part := range strings.Split(line.Text, "\n") {
+	// Split on every line ending the event-stream format recognises, not only
+	// \n. A lone \r also ends a line there, so an app writing one could close
+	// the data field and start an id:, event: or data: of its own — another
+	// line, at another time, in its own log viewer.
+	text := strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(line.Text)
+	for _, part := range strings.Split(text, "\n") {
 		fmt.Fprintf(w, "data: %s\n", part)
 	}
 	fmt.Fprint(w, "\n")

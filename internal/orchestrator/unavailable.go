@@ -53,8 +53,10 @@ func (u *Unavailable) ClusterSummary(context.Context) (ClusterSummary, error) {
 	return ClusterSummary{}, u.err()
 }
 
-func (u *Unavailable) Nodes(context.Context) ([]NodeInfo, error)        { return nil, u.err() }
-func (u *Unavailable) Events(context.Context, int) ([]EventInfo, error) { return nil, u.err() }
+func (u *Unavailable) Nodes(context.Context) ([]NodeInfo, error) { return nil, u.err() }
+func (u *Unavailable) Events(context.Context, OwnerID, int) ([]EventInfo, error) {
+	return nil, u.err()
+}
 func (u *Unavailable) Logs(context.Context, LogOptions) ([]LogLine, error) {
 	return nil, u.err()
 }

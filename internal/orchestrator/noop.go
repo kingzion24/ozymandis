@@ -113,7 +113,7 @@ func (n *Noop) ClusterSummary(context.Context) (ClusterSummary, error) {
 func (n *Noop) Nodes(context.Context) ([]NodeInfo, error) { return nil, nil }
 
 // Events returns nothing: there is no cluster to emit any.
-func (n *Noop) Events(context.Context, int) ([]EventInfo, error) { return nil, nil }
+func (n *Noop) Events(context.Context, OwnerID, int) ([]EventInfo, error) { return nil, nil }
 
 // Logs returns nothing. There is no container to have written any, and
 // inventing lines would make an empty install look like a running one.

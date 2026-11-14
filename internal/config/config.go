@@ -88,6 +88,25 @@ type Config struct {
 	// is always reserved whether or not it appears here.
 	ReservedDomains []string
 
+	// TrustedProxies are the addresses or CIDRs whose X-Forwarded-For is
+	// believed — the ingress controller or load balancer in front of the
+	// dashboard. Empty means this machine and the private ranges, which covers
+	// an edge running on the same host or in the same cluster.
+	//
+	// It matters because the client address is what sign-in attempts are
+	// counted against and what a session records: taken from a header anybody
+	// can send, it is whatever the sender would like it to be.
+	TrustedProxies []string
+
+	// EdgeSecret, when set, is a value the edge proxy must send in the
+	// X-Ozymandis-Edge header before its X-Forwarded-For is believed.
+	//
+	// It exists because an address cannot tell the edge apart from a tenant:
+	// in-cluster, the ingress controller and every app's pods share one pod
+	// range, and every one of them can open a connection to this process on
+	// the node. A header only the edge is configured to add can.
+	EdgeSecret string
+
 	// CertResolver names the ACME resolver the ingress controller obtains
 	// every hostname's certificate from — a Traefik certificatesResolvers
 	// entry, defaulting to "letsencrypt".
@@ -159,6 +178,8 @@ func Load() (Config, error) {
 		SecretKey:       strings.TrimSpace(env("OZYMANDIS_SECRET_KEY", "")),
 		AppDomain:       env("OZYMANDIS_APP_DOMAIN", ""),
 		ReservedDomains: envList("OZYMANDIS_RESERVED_DOMAINS"),
+		TrustedProxies:  envList("OZYMANDIS_TRUSTED_PROXIES"),
+		EdgeSecret:      strings.TrimSpace(env("OZYMANDIS_EDGE_SECRET", "")),
 
 		CertResolver:     strings.TrimSpace(envAllowingEmpty("OZYMANDIS_CERT_RESOLVER", "letsencrypt")),
 		IngressNamespace: strings.TrimSpace(env("OZYMANDIS_INGRESS_NAMESPACE", "")),

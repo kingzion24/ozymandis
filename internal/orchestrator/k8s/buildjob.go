@@ -217,7 +217,10 @@ func cloneStep(req orchestrator.BuildRequest, sshSecret string) corev1.Container
 # umask covers what the clone creates; the chmod covers what git sets modes on
 # itself.
 umask 002
-echo "Cloning $REPO_URL at $REPO_REF"
+# Printed without any user:password@ part. This line is stored in the build log,
+# which every member of the team can read, and a token in a clone URL is the
+# commonest way one ends up there.
+echo "Cloning $(printf '%s' "$REPO_URL" | sed -E 's#^([a-z+]+://)[^/@]*@#\1#') at $REPO_REF"
 git clone --depth 1 --branch "$REPO_REF" --single-branch "$REPO_URL" /workspace/src
 chmod -R g+w /workspace/src
 echo "` + commitMarker + `$(git -C /workspace/src rev-parse HEAD)"

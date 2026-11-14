@@ -286,6 +286,11 @@ func TestMemberCanDeployButNotDelete(t *testing.T) {
 	if code := rt.postAs(t, del, rt.member).Code; code != http.StatusForbidden {
 		t.Errorf("POST %s as a member = %d, want 403", del, code)
 	}
+	// Creating is admin too: a new app is created with its variables, and a
+	// member who could create one could set a variable around that gate.
+	if code := rt.postAs(t, "/apps", rt.member).Code; code != http.StatusForbidden {
+		t.Errorf("POST /apps as a member = %d, want 403", code)
+	}
 	// The refusal is not cosmetic: the app is still there afterwards.
 	if !rt.appExists(t, rt.appName) {
 		t.Fatal("the member deleted the app the gate said they could not")
