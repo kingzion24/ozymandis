@@ -13,6 +13,7 @@ import (
 type fakeResolver struct {
 	cname map[string]string
 	addrs map[string][]string
+	txt   map[string][]string
 }
 
 func (f fakeResolver) LookupCNAME(_ context.Context, host string) (string, error) {
@@ -27,6 +28,13 @@ func (f fakeResolver) LookupHost(_ context.Context, host string) ([]string, erro
 		return a, nil
 	}
 	return nil, errors.New("no host")
+}
+
+func (f fakeResolver) LookupTXT(_ context.Context, host string) ([]string, error) {
+	if t, ok := f.txt[host]; ok {
+		return t, nil
+	}
+	return nil, errors.New("no txt")
 }
 
 // A claim routes nothing until it is proven.
@@ -171,10 +179,10 @@ func TestADomainPointingElsewhereIsRefused(t *testing.T) {
 	}
 }
 
-// An apex cannot carry a CNAME, so matching addresses has to count. Refusing
-// a correctly flattened apex would be telling somebody their working setup is
-// broken.
-func TestAnApexVerifiesByAddress(t *testing.T) {
+// An apex cannot carry a CNAME, so it proves control with the TXT challenge and
+// is required to resolve here as well, so a proven name also routes. Refusing a
+// correctly set-up apex would be telling somebody their working setup is broken.
+func TestAnApexVerifiesByChallengeAndAddress(t *testing.T) {
 	ctx := context.Background()
 	pool := testPool(t)
 	a := seedApp(t, pool, "test-custom-apex", "web", "ns-test-custom-apex")
@@ -191,9 +199,73 @@ func TestAnApexVerifiesByAddress(t *testing.T) {
 			"apex.test":        {"198.51.100.1"},
 			"edge.domain.test": {"198.51.100.1"},
 		},
+		txt: map[string][]string{
+			ChallengeHost("apex.test"): {ChallengeValue(c.ID)},
+		},
 	}
 	if err := Verify(ctx, q, res, a.OwnerID, c.ID); err != nil {
-		t.Fatalf("a flattened apex was refused: %v", err)
+		t.Fatalf("a correctly set-up apex was refused: %v", err)
+	}
+}
+
+// The heart of the fix: a name that resolves to the platform's addresses but
+// carries neither a CNAME to the target nor the TXT challenge is NOT proven.
+// This is the shape of the dangerous claim — an operator's own dashboard or
+// registry hostname, or a domain a former tenant left pointed here — which the
+// old address-only check happily "verified" for whoever asked.
+func TestResolvingHereWithoutProofIsRefused(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	a := seedApp(t, pool, "test-custom-noproof", "web", "ns-test-custom-noproof")
+	q := dbgen.New(pool)
+
+	// The attacker claims a host that already resolves to the platform — as the
+	// dashboard and registry hostnames do — but cannot set a record on a zone
+	// they do not control.
+	c, err := AddCustom(ctx, q, a.OwnerID, a.ID,
+		"dashboard.platform.test", "edge.domain.test", "apps.domain.test", nil)
+	if err != nil {
+		t.Fatalf("AddCustom: %v", err)
+	}
+
+	res := fakeResolver{
+		addrs: map[string][]string{
+			"dashboard.platform.test": {"198.51.100.1"},
+			"edge.domain.test":        {"198.51.100.1"},
+		},
+		// No CNAME, and no TXT challenge: the attacker controls neither record.
+	}
+	if err := Verify(ctx, q, res, a.OwnerID, c.ID); !errors.Is(err, ErrNotVerified) {
+		t.Fatalf("Verify = %v, want ErrNotVerified — a name that merely points "+
+			"here was accepted without proof of control", err)
+	}
+}
+
+// A wrong challenge value is no better than none: the record has to carry this
+// claim's id, not just exist.
+func TestAWrongChallengeValueIsRefused(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	a := seedApp(t, pool, "test-custom-badchal", "web", "ns-test-custom-badchal")
+	q := dbgen.New(pool)
+
+	c, err := AddCustom(ctx, q, a.OwnerID, a.ID,
+		"apex2.test", "edge.domain.test", "apps.domain.test", nil)
+	if err != nil {
+		t.Fatalf("AddCustom: %v", err)
+	}
+
+	res := fakeResolver{
+		addrs: map[string][]string{
+			"apex2.test":       {"198.51.100.1"},
+			"edge.domain.test": {"198.51.100.1"},
+		},
+		txt: map[string][]string{
+			ChallengeHost("apex2.test"): {"some-other-claims-id"},
+		},
+	}
+	if err := Verify(ctx, q, res, a.OwnerID, c.ID); !errors.Is(err, ErrNotVerified) {
+		t.Fatalf("Verify = %v, want ErrNotVerified for a mismatched challenge", err)
 	}
 }
 

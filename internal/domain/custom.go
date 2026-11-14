@@ -29,6 +29,7 @@ var ErrDomainNotFound = errors.New("domain: no such domain")
 type Resolver interface {
 	LookupCNAME(ctx context.Context, host string) (string, error)
 	LookupHost(ctx context.Context, host string) ([]string, error)
+	LookupTXT(ctx context.Context, host string) ([]string, error)
 }
 
 // NetResolver is the standard library's resolver.
@@ -40,6 +41,10 @@ func (n NetResolver) LookupCNAME(ctx context.Context, host string) (string, erro
 
 func (n NetResolver) LookupHost(ctx context.Context, host string) ([]string, error) {
 	return n.resolver().LookupHost(ctx, host)
+}
+
+func (n NetResolver) LookupTXT(ctx context.Context, host string) ([]string, error) {
+	return n.resolver().LookupTXT(ctx, host)
 }
 
 func (n NetResolver) resolver() *net.Resolver {
@@ -107,12 +112,37 @@ func AddCustom(
 	return toCustom(row), nil
 }
 
-// Verify proves a claim by resolving it.
+// challengeLabel prefixes the hostname whose TXT record proves a claim.
 //
-// The check is that the name resolves to the target, by CNAME or by resolving
-// to the same addresses. Requiring a literal CNAME record would fail for an
-// apex domain, which cannot have one — and telling somebody their correctly
-// configured apex is wrong is worse than accepting the address match.
+// The proof lives at _ozymandis-challenge.<host> rather than on <host> itself
+// so it never collides with the records that route the name, and an underscore
+// label cannot be a real host, so nothing is ever served from it.
+const challengeLabel = "_ozymandis-challenge."
+
+// ChallengeHost is the record name whose TXT value proves control of host.
+// Exported so the dashboard can show the operator exactly what to create.
+func ChallengeHost(host string) string { return challengeLabel + normalize(host) }
+
+// ChallengeValue is the TXT value that proves a claim: the claim's own id,
+// which is unguessable and unique to this claim, so a record carrying it could
+// only have been placed by whoever this claim was shown to.
+func ChallengeValue(id uuid.UUID) string { return id.String() }
+
+// Verify proves a claim by checking the claimant controls the name's DNS.
+//
+// Resolving to the platform is not proof: an operator's own dashboard and
+// registry hostnames resolve here, and so does a domain a former tenant pointed
+// here and never released — accepting either let any tenant "verify" a name it
+// did not own and have an Ingress written for it. What proves control is a
+// record only the zone's owner could create:
+//
+//   - a CNAME to the platform target. A CNAME on <host> can only be set by
+//     whoever controls <host>'s DNS, and it is also what routes a subdomain
+//     here, so the common case proves itself and needs nothing extra.
+//
+//   - for an apex, which cannot carry a CNAME, a TXT record at
+//     _ozymandis-challenge.<host> holding the claim id, and the apex resolving
+//     here so a proven claim also routes.
 func Verify(
 	ctx context.Context, q *dbgen.Queries, res Resolver, ownerID string, id uuid.UUID,
 ) error {
@@ -127,7 +157,7 @@ func Verify(
 		return ErrNoTarget
 	}
 
-	if !pointsAt(ctx, res, row.Host, row.VerifyTarget) {
+	if !proven(ctx, res, row.Host, row.VerifyTarget, ChallengeValue(row.ID)) {
 		return ErrNotVerified
 	}
 
@@ -141,17 +171,46 @@ func Verify(
 	return nil
 }
 
-// pointsAt reports whether host resolves to target.
-func pointsAt(ctx context.Context, res Resolver, host, target string) bool {
+// proven reports whether the claimant controls host, not merely that host
+// happens to point at the platform.
+func proven(ctx context.Context, res Resolver, host, target, challenge string) bool {
+	// The subdomain case: a CNAME to the target is itself proof of control, and
+	// is the record that routes the name.
 	if cname, err := res.LookupCNAME(ctx, host); err == nil {
 		if normalize(cname) == normalize(target) {
 			return true
 		}
 	}
 
-	// An apex domain cannot carry a CNAME, so the fallback is that both names
-	// answer with the same addresses. A flattened ALIAS record looks exactly
-	// like this and is the correct way to point an apex at a platform.
+	// The apex case: an apex cannot carry a CNAME, so control is proven by the
+	// TXT challenge, and the address match the CNAME would otherwise have given
+	// is still required so that a proven name also actually routes here.
+	if !hasChallenge(ctx, res, host, challenge) {
+		return false
+	}
+	return addressesOverlap(ctx, res, host, target)
+}
+
+// hasChallenge reports whether the claim's TXT challenge is published.
+func hasChallenge(ctx context.Context, res Resolver, host, challenge string) bool {
+	records, err := res.LookupTXT(ctx, ChallengeHost(host))
+	if err != nil {
+		return false
+	}
+	for _, r := range records {
+		// A long TXT value arrives split across 255-byte strings that the
+		// resolver joins; either way the comparison is on the trimmed whole.
+		if strings.TrimSpace(r) == challenge {
+			return true
+		}
+	}
+	return false
+}
+
+// addressesOverlap reports whether host and target answer with a common
+// address. A flattened ALIAS record looks exactly like this and is the correct
+// way to point an apex at a platform.
+func addressesOverlap(ctx context.Context, res Resolver, host, target string) bool {
 	want, err := res.LookupHost(ctx, target)
 	if err != nil || len(want) == 0 {
 		return false

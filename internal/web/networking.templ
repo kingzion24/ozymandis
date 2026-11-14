@@ -93,6 +93,14 @@ templ customDomains(d NetworkingData) {
 										<span class="block text-muted-foreground">
 											CNAME &rarr; <code class="mono">{ c.Target }</code>
 										</span>
+										// An apex cannot carry a CNAME, so it proves control with
+										// this TXT record instead — a value only whoever this claim
+										// was shown to could publish, which is what stops a name that
+										// merely points here from being claimed by someone else.
+										<span class="block text-muted-foreground">
+											or TXT <code class="mono">{ "_ozymandis-challenge." + c.Host }</code>
+											&rarr; <code class="mono">{ c.ID.String() }</code>
+										</span>
 									}
 								</span>
 								if c.Verified && d.Net.CertTLS {
@@ -139,11 +147,14 @@ templ customDomains(d NetworkingData) {
 					At your DNS provider, point the name at
 					<code class="mono">{ d.Net.Target }</code> with a CNAME. An apex domain
 					cannot carry one — use whatever your provider calls a flattened ALIAS
-					instead, and verification will accept it.
+					instead, and also add the TXT record shown on the claim to prove you
+					control the name.
 				</p>
 				<p class="mt-2 text-[12.5px] text-muted-foreground">
-					Nothing is routed until the record resolves. Until then the domain is a
-					claim, and anyone who proves they control it can take it.
+					Nothing is routed until the record resolves and ownership is proven.
+					A CNAME to the target proves control on its own; an apex proves it with
+					the TXT record. A name that merely points here is not enough — otherwise
+					anyone could claim one that already does.
 				</p>
 				if !d.Net.CertTLS {
 					// Said before somebody points DNS here and finds out from a

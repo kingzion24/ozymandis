@@ -10,6 +10,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 	networkingv1ac "k8s.io/client-go/applyconfigurations/networking/v1"
@@ -22,6 +23,21 @@ const limitRangeName = "ozymandis-defaults"
 
 // networkPolicyName is the isolation policy created in every app namespace.
 const networkPolicyName = "ozymandis-isolation"
+
+// The in-cluster address ranges egress is kept out of, so a workload reaches
+// the internet and its own owner's pods but not another tenant's Service, the
+// API server, or a neighbour's pod by raw address.
+//
+// These are the K3s defaults, and they match this cluster. An install that
+// changed `--cluster-cidr` / `--service-cidr` would change these to match;
+// they are constants rather than config because getting them wrong fails open
+// — too wide a range blocks legitimate egress, too narrow leaks the thing this
+// exists to contain — and that is a decision to make deliberately in a diff,
+// not from an environment variable nobody will revisit.
+const (
+	clusterPodCIDR     = "10.42.0.0/16"
+	clusterServiceCIDR = "10.43.0.0/16"
+)
 
 // EnsureNamespace creates or converges an owner's namespace.
 //
@@ -156,10 +172,21 @@ func applyOpts() metav1.ApplyOptions {
 //     all. Traefik routes to a Service in another namespace, and to the policy
 //     that is ordinary cross-namespace traffic.
 //
-// Egress is deliberately untouched. An app legitimately calls out to the whole
-// internet — an LLM API, a managed database, a payment provider — and a default
-// deny there would break every one of those with a timeout rather than an
-// error, which is the least debuggable failure this could produce.
+// Egress is restricted, not left open. An app still reaches the whole internet
+// — an LLM API, a managed database, a payment provider — so that whole class of
+// outbound call keeps working with no change. What it may no longer do is open
+// a connection to another tenant's Service or pod, or to the Kubernetes API, by
+// raw in-cluster address: those ranges are carved out of the internet rule.
+// Without that, the ingress rule was a front-door lock on a building whose back
+// wall was open — a pod could reach any other pod's port directly, and app auth
+// never saw the request. Three things stay reachable on purpose: DNS (or
+// nothing resolves), the owner's own namespaces (an app calling its own API or
+// worker), and everything outside the cluster.
+//
+// One range this cannot carve out from here is the node's own address, where
+// the control plane may be listening. That belongs to a host-level control —
+// binding Ozymandis to the loopback or the private network and a firewall rule
+// — because a node IP is not knowable, or stable, from inside a namespace spec.
 //
 // Skipped entirely when the install has not said where its ingress controller
 // lives, because the alternative is applying a policy that silently makes every
@@ -186,7 +213,7 @@ func (o *Orchestrator) ensureNetworkPolicy(
 			// a policy that named specific pods would leave anything added
 			// later unprotected by default.
 			WithPodSelector(metav1ac.LabelSelector()).
-			WithPolicyTypes(networkingv1.PolicyTypeIngress).
+			WithPolicyTypes(networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress).
 			WithIngress(networkingv1ac.NetworkPolicyIngressRule().
 				// Two peers in ONE rule is OR, not AND. As separate rules the
 				// meaning would be the same, but as separate `from` entries in
@@ -206,11 +233,58 @@ func (o *Orchestrator) ensureNetworkPolicy(
 								// controller this install does not own.
 								"kubernetes.io/metadata.name": o.ingressNamespace,
 							})),
-				)))
+				)).
+			WithEgress(
+				dnsEgressRule(),
+				// The owner's own namespaces, so an app can still reach its own
+				// backend or worker — the egress counterpart of the ingress
+				// rule above, and what keeps a same-owner Service call working
+				// once the internet rule carves the cluster ranges out.
+				networkingv1ac.NetworkPolicyEgressRule().
+					WithTo(networkingv1ac.NetworkPolicyPeer().
+						WithNamespaceSelector(metav1ac.LabelSelector().
+							WithMatchLabels(map[string]string{
+								orchestrator.LabelOwner: string(spec.Owner),
+							}))),
+				internetEgressRule(),
+			))
 
 	if _, err := o.client.NetworkingV1().NetworkPolicies(spec.Name).
 		Apply(ctx, policy, applyOpts()); err != nil {
 		return fmt.Errorf("k8s: apply network policy in %q: %w", spec.Name, err)
 	}
 	return nil
+}
+
+// dnsEgressRule allows name resolution, which every other egress rule depends
+// on: a policy that forgets it turns every outbound call into a silent timeout
+// rather than a refusal. It names the cluster DNS pods by their standard label
+// rather than an address, so it holds whatever ClusterIP kube-dns was given.
+func dnsEgressRule() *networkingv1ac.NetworkPolicyEgressRuleApplyConfiguration {
+	return networkingv1ac.NetworkPolicyEgressRule().
+		WithTo(networkingv1ac.NetworkPolicyPeer().
+			WithNamespaceSelector(metav1ac.LabelSelector().
+				WithMatchLabels(map[string]string{
+					"kubernetes.io/metadata.name": "kube-system",
+				})).
+			WithPodSelector(metav1ac.LabelSelector().
+				WithMatchLabels(map[string]string{"k8s-app": "kube-dns"}))).
+		WithPorts(
+			networkingv1ac.NetworkPolicyPort().
+				WithProtocol(corev1.ProtocolUDP).WithPort(intstr.FromInt32(53)),
+			networkingv1ac.NetworkPolicyPort().
+				WithProtocol(corev1.ProtocolTCP).WithPort(intstr.FromInt32(53)),
+		)
+}
+
+// internetEgressRule allows everything outside the cluster and nothing inside
+// it: 0.0.0.0/0 with the pod and Service ranges carved out. That carve-out is
+// the whole point — it is what stops a pod dialling another tenant's Service or
+// the API server directly, while leaving genuine outbound calls untouched.
+func internetEgressRule() *networkingv1ac.NetworkPolicyEgressRuleApplyConfiguration {
+	return networkingv1ac.NetworkPolicyEgressRule().
+		WithTo(networkingv1ac.NetworkPolicyPeer().
+			WithIPBlock(networkingv1ac.IPBlock().
+				WithCIDR("0.0.0.0/0").
+				WithExcept(clusterPodCIDR, clusterServiceCIDR)))
 }
