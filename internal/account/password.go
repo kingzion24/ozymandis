@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"testing"
 	"time"
 	"unicode"
 
@@ -317,12 +318,30 @@ func (s *Service) requireSuperuser(ctx context.Context, actor uuid.UUID) error {
 	return nil
 }
 
-// passwordCost is the bcrypt work factor for new hashes.
+// productionPasswordCost is the bcrypt work factor for new hashes.
 //
 // Two above the library default of 10, which dates from hardware a decade
-// older. Hashes already stored keep the cost they were made with and still
-// verify; they are simply not upgraded until the password next changes.
-const passwordCost = 12
+// older. Hashes stored at a lower cost still verify, and are re-hashed at this
+// one the next time their owner signs in.
+const productionPasswordCost = 12
+
+// passwordCost is the cost actually used: productionPasswordCost, except in a
+// test binary.
+//
+// Under the race detector a cost-12 hash takes seconds, and the sign-in floor
+// is derived from it, so every test that creates a user or signs one in paid
+// that several times over. The web package went from under two minutes to
+// past CI's ten-minute limit. What the tests check — uniform refusal, the
+// floor, re-hashing — does not depend on the cost being high, only on it being
+// the same everywhere, and a test binary is never what holds real passwords.
+var passwordCost = costFor(testing.Testing())
+
+func costFor(inTest bool) int {
+	if inTest {
+		return bcrypt.MinCost
+	}
+	return productionPasswordCost
+}
 
 // HashPassword validates a password and returns its bcrypt hash.
 func HashPassword(password string) ([]byte, error) {
