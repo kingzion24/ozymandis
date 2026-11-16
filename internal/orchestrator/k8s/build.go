@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -213,14 +214,23 @@ const buildNetworkPolicyName = "ozymandis-build-isolation"
 //   - no ingress at all. Nothing legitimately connects *to* a build; leaving
 //     the rule list empty under an Ingress policy type denies all inbound.
 //
-//   - egress to DNS and the internet only, with the cluster ranges carved out.
-//     A build must reach the git host, the base-image registry and the push
-//     registry, all of which it reaches as ordinary internet; it never needs to
-//     reach another pod in this cluster. The push registry being reached over
-//     the internet is also why this is not, on its own, containment for a build
-//     that reads the push credential — that exfiltration leaves over the same
-//     path a build legitimately uses, and is closed by taking the credential
-//     out of the repo-code containers, not here.
+//   - egress to DNS and the internet, with the cluster ranges carved out. A
+//     build must reach the git host and the base-image registry, which are
+//     ordinary internet, and it never needs another tenant's pod.
+//
+//   - egress to the ingress controller, when the install has named its
+//     namespace. The push registry is usually served through the edge, and an
+//     install that resolves the registry's hostname in-cluster — a CoreDNS
+//     rewrite to the controller's Service, so pushes do not hairpin out and
+//     back through the node — reaches it at an address inside the carved-out
+//     pod range. Without this rule every such push was refused at the push
+//     step, after the build had succeeded. It grants nothing the internet rule
+//     does not already reach from outside: the edge routes public hostnames.
+//
+// This is not, on its own, containment for a build that reads the push
+// credential — that exfiltration would leave over the same path a build
+// legitimately uses, and is closed by taking the credential out of the
+// repo-code containers, not here.
 //
 // Unconditional, unlike the per-app policy: it depends on no ingress namespace,
 // and the build namespace has no public workload to make unreachable.
@@ -233,13 +243,34 @@ func (o *Orchestrator) ensureBuildNetworkPolicy(ctx context.Context) error {
 			WithPodSelector(metav1ac.LabelSelector()).
 			WithPolicyTypes(networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress).
 			// No ingress rules: deny every inbound connection.
-			WithEgress(dnsEgressRule(), internetEgressRule()))
+			WithEgress(o.buildEgressRules()...))
 
 	if _, err := o.client.NetworkingV1().NetworkPolicies(BuildNamespace).
 		Apply(ctx, policy, applyOpts()); err != nil {
 		return fmt.Errorf("k8s: apply build network policy: %w", err)
 	}
 	return nil
+}
+
+// buildEgressRules is what a build may reach: DNS, the internet, and — when
+// this install has said where it is — the ingress controller.
+func (o *Orchestrator) buildEgressRules() []*networkingv1ac.NetworkPolicyEgressRuleApplyConfiguration {
+	rules := []*networkingv1ac.NetworkPolicyEgressRuleApplyConfiguration{
+		dnsEgressRule(), internetEgressRule(),
+	}
+	if o.ingressNamespace != "" {
+		rules = append(rules, networkingv1ac.NetworkPolicyEgressRule().
+			WithTo(networkingv1ac.NetworkPolicyPeer().
+				WithNamespaceSelector(metav1ac.LabelSelector().
+					WithMatchLabels(map[string]string{
+						"kubernetes.io/metadata.name": o.ingressNamespace,
+					}))))
+	} else {
+		o.log.Warn("no ingress namespace configured: a build can push only to a registry "+
+			"it reaches over the internet, not one resolved to an in-cluster address",
+			slog.String("fix", "set OZYMANDIS_INGRESS_NAMESPACE to where your ingress controller runs"))
+	}
+	return rules
 }
 
 // buildRegistrySecret is the name of the push credential in the build
@@ -426,7 +457,7 @@ func (o *Orchestrator) streamBuildLog(
 ) orchestrator.BuildResult {
 	var result orchestrator.BuildResult
 
-	for _, c := range []string{cloneContainer, dockerfileContainer, buildpackContainer, pushContainer} {
+	for _, c := range []string{fenceContainer, cloneContainer, dockerfileContainer, buildpackContainer, pushContainer} {
 		stream, err := o.openContainerLog(ctx, pod, c)
 		if err != nil {
 			// Genuinely nothing to read: the pod finished without reaching
