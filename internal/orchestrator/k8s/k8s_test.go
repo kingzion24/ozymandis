@@ -910,3 +910,46 @@ func TestNewReplicasThatAreNotUpAreNotComplete(t *testing.T) {
 		t.Error("reported complete with only one of two replicas available")
 	}
 }
+
+// A push to a registry served through the edge is a connection to the ingress
+// controller, and where the registry's hostname is resolved in-cluster that is
+// an address inside the carved-out pod range. Without a rule for it every such
+// push was refused after the build itself had succeeded.
+func TestBuildsMayReachTheEdge(t *testing.T) {
+	edgeRule := func(p *networkingv1.NetworkPolicy) bool {
+		for _, rule := range p.Spec.Egress {
+			for _, peer := range rule.To {
+				if peer.NamespaceSelector != nil &&
+					peer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] == "traefik" {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	build := func(o *Orchestrator, client *fake.Clientset) *networkingv1.NetworkPolicy {
+		t.Helper()
+		if err := o.ensureBuildNamespace(context.Background()); err != nil {
+			t.Fatalf("ensureBuildNamespace: %v", err)
+		}
+		p, err := client.NetworkingV1().NetworkPolicies(BuildNamespace).
+			Get(context.Background(), buildNetworkPolicyName, metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("no build policy: %v", err)
+		}
+		return p
+	}
+
+	o, client := testOrchestrator(t)
+	o.WithIngressNamespace("traefik")
+	p := build(o, client)
+	if !edgeRule(p) {
+		t.Error("with an ingress namespace set, builds cannot reach the edge — pushes through it are refused")
+	}
+	assertAppEgress(t, p)
+
+	o, client = testOrchestrator(t)
+	if edgeRule(build(o, client)) {
+		t.Error("with no ingress namespace set, the build policy names one anyway")
+	}
+}

@@ -70,3 +70,24 @@ func orchestrator128Mi() *resource.Quantity {
 	q := resource.MustParse(orchestrator.DefaultLimits.DefaultMemory)
 	return &q
 }
+
+// The network policy is not in force the moment a pod starts, so the step
+// that waits for it has to come before anything a repository controls.
+func TestTheFenceStepRunsFirst(t *testing.T) {
+	job := buildJob("build-x", buildReq(), "registry-secret", "")
+	steps := job.Spec.Template.Spec.InitContainers
+	if len(steps) == 0 || steps[0].Name != fenceContainer {
+		t.Fatalf("first build step = %v, want %q", names(steps), fenceContainer)
+	}
+	for _, m := range steps[0].VolumeMounts {
+		t.Errorf("the fence step mounts %q; it needs nothing", m.Name)
+	}
+}
+
+func names(cs []corev1.Container) []string {
+	out := make([]string, len(cs))
+	for i, c := range cs {
+		out[i] = c.Name
+	}
+	return out
+}

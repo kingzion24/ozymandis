@@ -16,6 +16,7 @@ import (
 
 // The steps of a build, named so their logs can be told apart.
 const (
+	fenceContainer      = "fence"
 	cloneContainer      = "clone"
 	dockerfileContainer = "dockerfile"
 	buildpackContainer  = "buildpack"
@@ -177,6 +178,7 @@ func buildJob(
 					// credential — is the final, ordinary container, so it runs
 					// after every repository-code step has finished.
 					InitContainers: []corev1.Container{
+						bounded(fenceStep()),
 						bounded(cloneStep(req, sshSecret)),
 						bounded(dockerfileStep(req)),
 						bounded(buildpackStep(req)),
@@ -185,6 +187,54 @@ func buildJob(
 				},
 			},
 		},
+	}
+}
+
+// fenceProbe is an in-cluster address the build namespace's policy refuses
+// once it is in force: the cluster DNS's metrics port. The policy allows those
+// pods on 53 alone, so this port answering means the policy has not reached
+// this pod yet. It is a Service name rather than an address so it holds
+// whatever ClusterIP kube-dns has, and a cluster with no such port refuses it
+// at once, which reads as fenced — the old behaviour, not a stuck build.
+const fenceProbe = "kube-dns.kube-system.svc.cluster.local 9153"
+
+// fenceWait is how long the fence step waits before carrying on regardless.
+const fenceWait = 120
+
+// fenceStep holds the build until the namespace's network policy applies.
+//
+// A NetworkPolicy is not in force when a pod starts. The policy controller
+// programs each new pod as it sees it, and until then the pod's egress is
+// open: measured on a K3s node, a fresh pod in the build namespace reached
+// other tenants' pods for anywhere from a second to over a minute. A
+// repository's Dockerfile runs a few seconds in, so its first RUN could land
+// inside that window. This step runs first and waits for the probe to be
+// refused.
+//
+// It carries on after fenceWait rather than failing the build, and says so in
+// the log. A cluster that enforces no policy at all never closes the window,
+// and refusing every build there would turn missing hardening into an outage.
+func fenceStep() corev1.Container {
+	return corev1.Container{
+		Name:    fenceContainer,
+		Image:   gitImage,
+		Command: []string{"/bin/sh", "-uc"},
+		Args: []string{`
+set -- ` + fenceProbe + `
+start=$(date +%s)
+i=0
+while nc -z -w 2 "$1" "$2" 2>/dev/null; do
+  i=$(( $(date +%s) - start ))
+  if [ "$i" -ge ` + strconv.Itoa(fenceWait) + ` ]; then
+    echo "The network policy for builds is not in force after ` + strconv.Itoa(fenceWait) + `s — building anyway, but this build is not fenced off from the cluster."
+    exit 0
+  fi
+  sleep 1
+done
+[ "$i" -gt 0 ] && echo "Waited ${i}s for the build's network policy to apply."
+exit 0
+`},
+		SecurityContext: hardened(buildUID),
 	}
 }
 
